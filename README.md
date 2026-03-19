@@ -261,7 +261,7 @@ vigil-rs is a Rust rewrite of Pebble with the following differences:
 |---|---|---|
 | Language | Go | Rust |
 | PID 1 / zombie reaper | ❌ | ✅ |
-| Custom stop signal | 🔶 PR #720 (unmerged) | ✅ |
+| Custom stop signal | 🔶 [PR 720](https://github.com/canonical/pebble/pull/720) (unmerged) | ✅ |
 | Check `delay` field | ❌ | ✅ (vigil extension) |
 | Memory footprint | ~20 MB | ~10 MB |
 | API compatibility | Pebble API | Pebble-compatible |
@@ -322,30 +322,30 @@ differs from Pebble, which ships a single binary that acts as both daemon and
 client depending on the subcommand used.
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Container / Host                                        │
-│                                                          │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │  vigild  (PID 1)                                 │   │
-│  │                                                  │   │
-│  │  ┌────────────┐   ┌────────────┐  ┌──────────┐  │   │
-│  │  │  Overlord  │   │  Service   │  │  Check   │  │   │
-│  │  │  (actor)   │──▶│  Actors    │  │  Actors  │  │   │
-│  │  └─────┬──────┘   └────────────┘  └──────────┘  │   │
-│  │        │                                         │   │
-│  │  ┌─────▼──────┐   ┌────────────┐  ┌──────────┐  │   │
-│  │  │  axum API  │   │  LogStore  │  │  TLS API │  │   │
-│  │  │  (HTTP/1.1)│   │ (broadcast)│  │ (opt.)   │  │   │
-│  │  └──┬─────────┘   └────────────┘  └────┬─────┘  │   │
-│  └─────┼───────────────────────────────────┼────────┘   │
-│        │ Unix socket                        │ TCP/TLS    │
-│        │ /run/vigil/vigild.sock             │ 0.0.0.0:8443│
-│        │                                   │            │
-│  ┌─────▼────────────┐          ┌───────────▼──────────┐ │
-│  │  vigil  (CLI)    │          │  vigil  (CLI) /       │ │
-│  │  --socket ...    │          │  curl / K8s operator  │ │
-│  └──────────────────┘          └──────────────────────┘ │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  Container / Host                                            │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────┐     │
+│  │  vigild  (PID 1)                                    │     │
+│  │                                                     │     │
+│  │  ┌────────────┐   ┌────────────┐   ┌────────────┐   │     │
+│  │  │  Overlord  │   │  Service   │   │   Check    │   │     │
+│  │  │  (actor)   │──▶│  Actors    │   │   Actors   │   │     │
+│  │  └─────┬──────┘   └────────────┘   └────────────┘   │     │
+│  │        │                                            │     │
+│  │  ┌─────▼──────┐   ┌────────────┐   ┌────────────┐   │     │
+│  │  │  axum API  │   │  LogStore  │   │  TLS API   │   │     │
+│  │  │  (HTTP/1.1)│   │ (broadcast)│   │  (opt.)    │   │     │
+│  │  └──┬─────────┘   └────────────┘   └─────┬──────┘   │     │
+│  └─────┼─────────────────────────────────────┼─────────┘     │
+│        │ Unix socket                          │ TCP/TLS      │
+│        │ /run/vigil/vigild.sock               │ 0.0.0.0:8443 │
+│        │                                      │              │
+│  ┌─────▼──────────────┐     ┌─────────────────▼──────────┐   │
+│  │  vigil  (CLI)      │     │  vigil  (CLI) /            │   │
+│  │  --socket ...      │     │  curl / K8s operator       │   │
+│  └────────────────────┘     └────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ### Why two binaries instead of one?
