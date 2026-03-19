@@ -48,10 +48,35 @@ jobs:
           path: CHANGELOG.md
 
   # ───────────────────────────────────────────────────────────────────────────
-  # 2. Build static binaries  (amd64 + arm64, musl)
+  # 2. Tests
+  # ───────────────────────────────────────────────────────────────────────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-test-
+
+      - name: Run tests
+        run: cargo test --workspace
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # 3. Build static binaries  (amd64 + arm64, musl)
   # ───────────────────────────────────────────────────────────────────────────
   build:
     name: Build (${{ matrix.arch }})
+    needs: test
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -89,19 +114,19 @@ jobs:
 
       - name: Build binaries (amd64)
         if: matrix.arch == 'amd64'
-        run: cargo build --release --target ${{ matrix.target }} --bin vigild --bin vigil --bin vigil-http-streamer
+        run: cargo build --release --target ${{ matrix.target }} --bin vigild --bin vigil --bin vigil-log-relay
 
       - name: Build binaries (arm64 via cross)
         if: matrix.arch == 'arm64'
-        run: cross build --release --target ${{ matrix.target }} --bin vigild --bin vigil --bin vigil-http-streamer
+        run: cross build --release --target ${{ matrix.target }} --bin vigild --bin vigil --bin vigil-log-relay
 
       - name: Stage artifacts
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/vigild               dist/vigild-${{ matrix.arch }}
           cp target/${{ matrix.target }}/release/vigil                dist/vigil-${{ matrix.arch }}
-          cp target/${{ matrix.target }}/release/vigil-http-streamer  dist/vigil-http-streamer-${{ matrix.arch }}
-          chmod +x dist/vigild-${{ matrix.arch }} dist/vigil-${{ matrix.arch }} dist/vigil-http-streamer-${{ matrix.arch }}
+          cp target/${{ matrix.target }}/release/vigil-log-relay  dist/vigil-log-relay-${{ matrix.arch }}
+          chmod +x dist/vigild-${{ matrix.arch }} dist/vigil-${{ matrix.arch }} dist/vigil-log-relay-${{ matrix.arch }}
           sha256sum dist/* > dist/SHA256SUMS-${{ matrix.arch }}
 
       - uses: actions/upload-artifact@v4
@@ -110,7 +135,7 @@ jobs:
           path: dist/
 
   # ───────────────────────────────────────────────────────────────────────────
-  # 3. Debian / Ubuntu .deb packages
+  # 4. Debian / Ubuntu .deb packages
   # ───────────────────────────────────────────────────────────────────────────
   package-deb:
     name: .deb — ${{ matrix.distro }} ${{ matrix.version }}
@@ -146,8 +171,8 @@ jobs:
           mkdir -p target/release
           cp dist-bin/vigild-amd64              target/release/vigild
           cp dist-bin/vigil-amd64               target/release/vigil
-          cp dist-bin/vigil-http-streamer-amd64 target/release/vigil-http-streamer
-          chmod +x target/release/vigild target/release/vigil target/release/vigil-http-streamer
+          cp dist-bin/vigil-log-relay-amd64 target/release/vigil-log-relay
+          chmod +x target/release/vigild target/release/vigil target/release/vigil-log-relay
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -168,10 +193,10 @@ jobs:
           cargo deb -p vigil --no-build \
             -o "dist/vigil_${{ env.PKG_VERSION }}_amd64_${{ matrix.distro }}${{ matrix.version }}.deb"
 
-      - name: Build vigil-http-streamer .deb
+      - name: Build vigil-log-relay .deb
         run: |
-          cargo deb -p vigil-http-streamer --no-build \
-            -o "dist/vigil-http-streamer_${{ env.PKG_VERSION }}_amd64_${{ matrix.distro }}${{ matrix.version }}.deb"
+          cargo deb -p vigil-log-relay --no-build \
+            -o "dist/vigil-log-relay_${{ env.PKG_VERSION }}_amd64_${{ matrix.distro }}${{ matrix.version }}.deb"
 
       - name: Verify packages
         run: |
@@ -186,7 +211,7 @@ jobs:
           path: dist/*.deb
 
   # ───────────────────────────────────────────────────────────────────────────
-  # 4. RPM packages  (RHEL 8 / 9 / 10)
+  # 5. RPM packages  (RHEL 8 / 9 / 10)
   # ───────────────────────────────────────────────────────────────────────────
   package-rpm:
     name: .rpm — RHEL ${{ matrix.rhel }}
@@ -220,8 +245,8 @@ jobs:
           mkdir -p target/release
           cp dist-bin/vigild-amd64              target/release/vigild
           cp dist-bin/vigil-amd64               target/release/vigil
-          cp dist-bin/vigil-http-streamer-amd64 target/release/vigil-http-streamer
-          chmod +x target/release/vigild target/release/vigil target/release/vigil-http-streamer
+          cp dist-bin/vigil-log-relay-amd64 target/release/vigil-log-relay
+          chmod +x target/release/vigild target/release/vigil target/release/vigil-log-relay
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -238,8 +263,8 @@ jobs:
       - name: Build vigil .rpm
         run: cargo generate-rpm -p crates/vigil --payload-compress ${{ matrix.compress }}
 
-      - name: Build vigil-http-streamer .rpm
-        run: cargo generate-rpm -p crates/vigil-http-streamer --payload-compress ${{ matrix.compress }}
+      - name: Build vigil-log-relay .rpm
+        run: cargo generate-rpm -p crates/vigil-log-relay --payload-compress ${{ matrix.compress }}
 
       - name: Collect RPMs
         run: |
@@ -267,7 +292,7 @@ jobs:
           path: dist-out/*.rpm
 
   # ───────────────────────────────────────────────────────────────────────────
-  # 5. Container image  (multi-arch: amd64 + arm64)
+  # 6. Container image  (multi-arch: amd64 + arm64)
   # ───────────────────────────────────────────────────────────────────────────
   container:
     name: Container image
@@ -296,7 +321,7 @@ jobs:
           for arch in amd64 arm64; do
             mv dist/$arch/vigild-$arch               dist/$arch/vigild
             mv dist/$arch/vigil-$arch                dist/$arch/vigil
-            mv dist/$arch/vigil-http-streamer-$arch  dist/$arch/vigil-http-streamer
+            mv dist/$arch/vigil-log-relay-$arch  dist/$arch/vigil-log-relay
           done
 
       - name: Make binaries executable
@@ -347,7 +372,7 @@ jobs:
           sbom:       true
 
   # ───────────────────────────────────────────────────────────────────────────
-  # 6. SBOM + Image signing
+  # 7. SBOM + Image signing
   # ───────────────────────────────────────────────────────────────────────────
   sbom:
     name: SBOM & signing
@@ -418,7 +443,7 @@ jobs:
             sbom-binaries.spdx.json
 
   # ───────────────────────────────────────────────────────────────────────────
-  # 7. GitHub Release
+  # 8. GitHub Release
   # ───────────────────────────────────────────────────────────────────────────
   release:
     name: GitHub Release
@@ -474,8 +499,8 @@ jobs:
             artifacts/vigild-arm64
             artifacts/vigil-amd64
             artifacts/vigil-arm64
-            artifacts/vigil-http-streamer-amd64
-            artifacts/vigil-http-streamer-arm64
+            artifacts/vigil-log-relay-amd64
+            artifacts/vigil-log-relay-arm64
             artifacts/*.deb
             artifacts/*.rpm
             artifacts/sbom-container.spdx.json
