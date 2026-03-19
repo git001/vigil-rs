@@ -76,34 +76,34 @@ data:
 
 ### Kubernetes readiness/liveness via vigild API
 
-vigild's REST API is Pebble-compatible. Use the `/v1/checks` endpoint to
-build Kubernetes probes:
+vigild exposes its REST API directly over HTTPS — use `httpGet` probes
+without requiring the `vigil` CLI to be present in the image:
 
 ```yaml
-# Readiness: at least one check is up
+# Liveness: vigild is responsive
+livenessProbe:
+  httpGet:
+    path: /v1/checks
+    port: 8443
+    scheme: HTTPS
+    insecureSkipTLSVerify: true   # vigild uses a self-signed cert by default
+  initialDelaySeconds: 10
+  periodSeconds: 30
+
+# Readiness: vigild is responsive and serving requests
 readinessProbe:
-  exec:
-    command:
-      - vigil
-      - --url
-      - https://localhost:8443
-      - --insecure
-      - checks
+  httpGet:
+    path: /v1/checks
+    port: 8443
+    scheme: HTTPS
+    insecureSkipTLSVerify: true   # vigild uses a self-signed cert by default
   initialDelaySeconds: 5
   periodSeconds: 10
 ```
 
-Or call the API directly with an exec probe:
-
-```yaml
-livenessProbe:
-  exec:
-    command:
-      - sh
-      - -c
-      - "vigil --url https://localhost:8443 --insecure checks | grep -q 'up'"
-  periodSeconds: 30
-```
+Requires `VIGIL_TLS_ADDR: "0.0.0.0:8443"` (or `--tls-addr`) to enable the
+HTTPS listener. The `/v1/checks` endpoint returns `200` when vigild is
+healthy and reachable.
 
 ### Kubernetes pod log collector
 
