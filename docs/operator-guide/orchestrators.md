@@ -112,7 +112,7 @@ self-contained Deployment that collects logs from other pods in a namespace
 via the Kubernetes API and forwards them to Filebeat — no DaemonSet, no
 cluster-level log agent required.
 
-vigild supervises both Filebeat and `vigil-http-streamer`, restarting either
+vigild supervises both Filebeat and `vigil-log-relay`, restarting either
 on failure. An HTTP `alive` check on `GET /healthz` detects a stalled watch loop.
 
 ```bash

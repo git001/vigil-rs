@@ -119,13 +119,16 @@ Default: `disabled`
 
 #### `after` / `before` / `requires`
 
-Startup ordering constraints. All referenced service names must exist in the
-merged plan.
+Startup ordering and dependency constraints. All referenced service names must
+exist in the merged plan.
 
 - `after: [a, b]` — this service starts after `a` and `b` reach `Active`
-- `before: [c]` — this service starts before `c` (i.e. `c` has `after: [this]`)
-- `requires: [a]` — if `a` is not `Active` when this service starts, this
-  service transitions to `Error`
+- `before: [c]` — syntactic sugar for `after` from the reverse direction:
+  `B before: [A]` is equivalent to `A after: [B]`. B must be running before A starts.
+- `requires: [a]` — implies `after` ordering **and** a runtime stop cascade:
+  if `a` leaves the running state (Inactive, Backoff, Error), this service is
+  stopped automatically. Use this for hard dependencies where the dependent
+  service cannot function without the required one.
 
 #### `stop-signal`
 
@@ -229,8 +232,12 @@ filebeat.inputs:
 
 #### `logs-push-format`
 
-Format for pushed log lines. Currently `ndjson` (default and only option):
-one JSON object per line, same schema as `GET /v1/logs/follow?format=ndjson`.
+> **Not yet implemented.** The field is accepted and parsed but has no effect.
+> `ndjson` is currently the only supported format and is always used regardless
+> of this setting.
+
+Format for pushed log lines. `ndjson` — one JSON object per line, same schema
+as `GET /v1/logs/follow?format=ndjson`.
 
 #### `override`
 
@@ -264,9 +271,12 @@ checks:
 
     # --- Check type (exactly one) ---
     http:
-      url: http://localhost:8080/healthz
+      url: https://localhost:8080/healthz
       headers:
         Authorization: "Bearer secret"
+        Content-Type: "application/json"
+      insecure: false                        # skip TLS verification (default: false)
+      ca: /etc/vigil/certs/internal-ca.pem  # custom CA for TLS verification (optional)
 
     # tcp:
     #   host: localhost                # default: localhost
@@ -317,13 +327,26 @@ Number of consecutive failures required before the check is declared `Down` and
 
 ```yaml
 http:
-  url: http://localhost:8080/healthz
+  url: https://localhost:8080/healthz
   headers:
-    X-Health-Token: secret
+    Authorization: "Bearer secret"
+    Content-Type: "application/json"
+  insecure: true                          # skip TLS certificate verification
+  ca: /etc/vigil/certs/internal-ca.pem   # PEM CA cert (or chain) to verify the server
 ```
 
 The check passes if the HTTP response status is 2xx. The `url` field supports
-`http://` and `https://` (TLS verification is skipped for localhost).
+`http://` and `https://`.
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `url` | — | HTTP or HTTPS URL to request |
+| `headers` | `{}` | Extra request headers (repeatable key/value map) |
+| `insecure` | `false` | Skip TLS certificate verification (self-signed certs) |
+| `ca` | — | PEM file with CA certificate(s) to verify the server's TLS. Supports chain files with multiple concatenated PEM blocks. |
+
+`insecure` and `ca` are mutually exclusive in intent — `ca` verifies with a
+custom root, `insecure` skips verification entirely.
 
 #### TCP check
 
@@ -391,9 +414,7 @@ services:
   myapp:
     command: /usr/local/bin/myapp
     startup: enabled
-    after:
-      - postgres
-    requires:
+    requires:               # implies after: ordering + stop cascade if postgres dies
       - postgres
     environment:
       DATABASE_URL: postgres://postgres@localhost/myapp

@@ -41,12 +41,15 @@ socket for programmatic control.
 ```
 vigil-rs/
 ├── crates/
-│   ├── vigil-types/   # Shared types (plan, API, identity, signal) — no async
-│   ├── vigild/        # Daemon binary — axum HTTP server, overlord, service actors
-│   └── vigil/         # CLI binary — hyper Unix-socket client
+│   ├── vigil-types/      # Shared types (plan, API, identity, signal) — no async
+│   ├── vigild/           # Daemon binary — axum HTTP server, overlord, service actors
+│   ├── vigil/            # CLI binary — hyper Unix-socket client
+│   └── vigil-log-relay/  # Standalone log forwarder — K8s pods / HTTP / Unix socket → TCP sink
 └── examples/
-    ├── full-container/  # vigild + h2o (single service)
-    └── hug/             # vigild + HAProxy + controller (multi-service)
+    ├── full-container/        # vigild + h2o (single service)
+    ├── hug/                   # vigild + HAProxy + controller (multi-service)
+    ├── kubernetes-pod-logs/   # vigil-log-relay + Filebeat on Kubernetes
+    └── ...                    # filebeat, fluentbit, vector, php-caddy, quarkus, …
 ```
 
 ---
@@ -56,7 +59,14 @@ vigil-rs/
 ### Build
 
 ```bash
+# Core binaries (daemon + CLI)
 cargo build --release --bin vigild --bin vigil
+
+# Include the log forwarder
+cargo build --release --bin vigild --bin vigil --bin vigil-log-relay
+
+# All workspace binaries
+cargo build --release
 ```
 
 ### Run the daemon
@@ -201,6 +211,8 @@ See the [examples/](examples/) directory for complete, buildable examples.
 | Manages multiple processes | ❌ (single process only) | ✅ |
 | Restart on failure | ❌ | ✅ with backoff |
 | Health checks | ❌ | ✅ HTTP / TCP / exec |
+| HTTP check headers | ❌ | ✅ arbitrary key/value map |
+| HTTP check TLS (`insecure` / `ca`) | ❌ | ✅ skip verification or custom CA |
 | Runtime API | ❌ | ✅ Unix-socket REST |
 | Configuration | None (CLI args) | YAML layers |
 | Signal forwarding | ✅ | ✅ |
@@ -222,6 +234,8 @@ automatic restarts, and programmatic control.
 | Language | C | Rust |
 | Configuration | Directory-based (`/etc/s6-overlay/s6-rc.d/`) | YAML layers |
 | Health checks | ❌ (external tooling) | ✅ built-in |
+| HTTP check headers | ❌ | ✅ arbitrary key/value map |
+| HTTP check TLS (`insecure` / `ca`) | ❌ | ✅ skip verification or custom CA |
 | Runtime API | ❌ | ✅ REST over Unix socket |
 | Log routing | ✅ (dedicated log daemon) | stdout/stderr → log store |
 | Dependency ordering | ✅ (`dependencies.d/`) | ✅ (`after:`) |
@@ -245,6 +259,8 @@ from outside the container.
 | Language | Python | Rust |
 | Configuration | INI file | YAML layers |
 | Health checks | ❌ | ✅ |
+| HTTP check headers | ❌ | ✅ arbitrary key/value map |
+| HTTP check TLS (`insecure` / `ca`) | ❌ | ✅ skip verification or custom CA |
 | REST API | XML-RPC | JSON over Unix socket |
 | Memory footprint | ~30 MB (Python) | ~10 MB |
 | PID 1 safe | ❌ (not designed for it) | ✅ |
@@ -263,6 +279,8 @@ vigil-rs is a Rust rewrite of Pebble with the following differences:
 | PID 1 / zombie reaper | ❌ | ✅ |
 | Custom stop signal | 🔶 [PR 720](https://github.com/canonical/pebble/pull/720) (unmerged) | ✅ |
 | Check `delay` field | ❌ | ✅ (vigil extension) |
+| HTTP check headers | ✅ | ✅ arbitrary key/value map |
+| HTTP check TLS (`insecure` / `ca`) | ❌ | ✅ skip verification or custom CA |
 | Memory footprint | ~20 MB | ~10 MB |
 | API compatibility | Pebble API | Pebble-compatible |
 | OpenAPI / Swagger UI | ❌ | ✅ |

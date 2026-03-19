@@ -423,9 +423,9 @@ podman run --rm vigil-filebeat
 # {"@timestamp":"...","collector":"filebeat","message":"INFO req=1...","service":"myapp",...}
 ```
 
-#### vigil-http-streamer — generic HTTP→TCP ndjson streamer
+#### vigil-log-relay — generic HTTP→TCP ndjson streamer
 
-`vigil-http-streamer` is a standalone binary that reads ndjson from an HTTP
+`vigil-log-relay` is a standalone binary that reads ndjson from an HTTP
 source and forwards it to a TCP sink (Filebeat, Fluent Bit, Logstash, …).
 Three source modes are available:
 
@@ -440,9 +440,9 @@ Three source modes are available:
 ```yaml
 # layers/001-services.yaml
 services:
-  http-streamer:
+  vigil-log-relay:
     command: >
-      vigil-http-streamer
+      vigil-log-relay
       --source-socket /tmp/vigild.sock
       --source-path /v1/logs/follow?format=ndjson
       --tcp-sink-host 127.0.0.1
@@ -453,7 +453,7 @@ services:
     logs-forward: disabled
 
 checks:
-  http-streamer-alive:
+  vigil-log-relay-healthz:
     level: alive
     period: 30s
     timeout: 5s
@@ -480,7 +480,7 @@ Key parameters:
 [`examples/kubernetes-pod-logs/`](../../examples/kubernetes-pod-logs/) — a
 self-contained pod that collects logs from *other* pods in a namespace via
 the Kubernetes API and forwards them to Filebeat. Both Filebeat and
-`vigil-http-streamer` are supervised by vigild with automatic restart and
+`vigil-log-relay` are supervised by vigild with automatic restart and
 exponential backoff.
 
 A `pod-log-collector-alive` HTTP check polls `GET /healthz` on the streamer,
