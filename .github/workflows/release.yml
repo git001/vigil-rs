@@ -355,6 +355,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       # ── Sign container image with cosign (keyless, OIDC) ────────────────────
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
