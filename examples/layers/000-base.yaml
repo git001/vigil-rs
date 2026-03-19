@@ -1,0 +1,65 @@
+summary: Base infrastructure — PostgreSQL + Redis
+
+# Layer 000 is the lowest priority layer.  It defines the infrastructure
+# services that every other layer can depend on.  All services here use
+# Override: merge (the default) so higher layers can patch individual fields
+# without replacing the whole definition.
+
+services:
+
+  postgres:
+    summary: PostgreSQL 16 database server
+    command: postgres -D /var/lib/postgresql/data -c listen_addresses=localhost
+    startup: enabled
+    user: postgres
+    group: postgres
+    working-dir: /var/lib/postgresql
+    environment:
+      PGDATA: /var/lib/postgresql/data
+      POSTGRES_DB: app
+    # Postgres handles SIGTERM as "fast shutdown" — finish in-flight transactions
+    # then exit.  No need to escalate to SIGKILL too quickly.
+    stop-signal: SIGTERM
+    kill-delay: 10s
+    # If postgres crashes, restart it but back off quickly to avoid flapping.
+    on-failure: restart
+    backoff-delay: 1s
+    backoff-factor: 2.0
+    backoff-limit: 30s
+
+  redis:
+    summary: Redis 7 in-memory store
+    command: redis-server /etc/redis/redis.conf --daemonize no
+    startup: enabled
+    user: redis
+    group: redis
+    environment:
+      REDIS_LOGLEVEL: notice
+    # Redis uses SIGTERM for graceful BGSAVE + shutdown.
+    stop-signal: SIGTERM
+    kill-delay: 5s
+    on-failure: restart
+    backoff-delay: 500ms
+    backoff-factor: 2.0
+    backoff-limit: 30s
+
+checks:
+
+  postgres-ready:
+    level: ready
+    startup: enabled
+    period: 5s
+    timeout: 3s
+    threshold: 3
+    exec:
+      command: pg_isready -h localhost -U postgres -d app
+
+  redis-ready:
+    level: ready
+    startup: enabled
+    period: 5s
+    timeout: 2s
+    threshold: 3
+    tcp:
+      host: localhost
+      port: 6379

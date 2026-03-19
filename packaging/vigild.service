@@ -1,0 +1,26 @@
+[Unit]
+Description=vigild — Rust service supervisor daemon
+Documentation=https://github.com/git001/vigil-rs
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/vigild \
+    --layers-dir /etc/vigil/layers \
+    --socket /run/vigil/vigild.sock
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/run/vigil /etc/vigil/layers
+
+RuntimeDirectory=vigil
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target

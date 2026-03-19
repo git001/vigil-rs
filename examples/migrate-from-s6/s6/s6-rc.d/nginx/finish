@@ -1,0 +1,7 @@
+#!/command/execlineb -S0
+# s6 passes the exit code in $1 — but this is the signal number, not the
+# real process exit code. There is no reliable way to get the real exit code
+# here. s6 also does not propagate it to the container exit code.
+foreground { echo "nginx exited with status ${1}" }
+ifelse { test ${1} -ne 256 } { exit 0 }
+exit 1

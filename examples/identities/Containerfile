@@ -1,0 +1,72 @@
+# vigil-rs identity example
+#
+# Demonstrates per-role access control with four users:
+#
+#   metrics-bot   m3tr1cs!    metrics  — GET /v1/metrics only
+#   reader        r3ad0nly!   read     — all GET endpoints
+#   writer        wr1t3acc!   write    — read + service control
+#   admin         adm1npass!  admin    — full access including identities
+#
+# Build (from the vigil-rs repo root):
+#   podman build -f examples/identities/Containerfile -t vigil-identities .
+#
+# Run:
+#   podman run --rm -d --name vigil-identities vigil-identities
+#
+# Bootstrap (add the identities — only needed once while store is empty):
+#   podman exec vigil-identities setup-identities
+#
+# Try it:
+#   # reader can list services:
+#   podman exec vigil-identities \
+#     vigil --url http+unix:///run/vigil/vigild.sock services list \
+#     -u reader:r3ad0nly!
+#
+#   # metrics-bot can fetch metrics:
+#   podman exec vigil-identities \
+#     curl --unix-socket /run/vigil/vigild.sock \
+#          -u metrics-bot:m3tr1cs! http://localhost/v1/metrics
+#
+#   # writer can restart a service:
+#   podman exec vigil-identities \
+#     vigil services restart counter -u writer:wr1t3acc!
+#
+#   # metrics-bot is blocked from listing services (returns 403):
+#   podman exec vigil-identities \
+#     curl --unix-socket /run/vigil/vigild.sock \
+#          -u metrics-bot:m3tr1cs! http://localhost/v1/services
+
+# ---------------------------------------------------------------------------
+# Stage 1 — build vigild + vigil
+# ---------------------------------------------------------------------------
+FROM rust:alpine AS vigil-builder
+
+RUN apk add --no-cache musl-dev
+
+WORKDIR /vigil-rs
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+
+RUN cargo build --release --bin vigild --bin vigil
+
+# ---------------------------------------------------------------------------
+# Stage 2 — final image
+# ---------------------------------------------------------------------------
+FROM alpine:3.21
+
+RUN apk add --no-cache curl
+
+# vigil supervisor daemon + CLI
+COPY --from=vigil-builder /vigil-rs/target/release/vigild /usr/local/bin/vigild
+COPY --from=vigil-builder /vigil-rs/target/release/vigil  /usr/local/bin/vigil
+
+# Layers and scripts
+COPY examples/identities/layers/    /etc/vigil/layers/
+COPY examples/identities/scripts/setup-identities /usr/local/bin/setup-identities
+RUN chmod +x /usr/local/bin/setup-identities
+
+RUN mkdir -p /run/vigil
+
+ENTRYPOINT ["/usr/local/bin/vigild", \
+    "--layers-dir", "/etc/vigil/layers", \
+    "--socket",     "/run/vigil/vigild.sock"]

@@ -1,0 +1,5 @@
+#!/command/execlineb -S0
+foreground { echo "api exited with status ${1}" }
+# s6 does not restart with backoff by default — you need to touch ./down
+# and manage restarts manually, or rely on s6's default instant-restart loop.
+exit 0

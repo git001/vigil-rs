@@ -1,0 +1,57 @@
+summary: Kubernetes pod log collector — Filebeat + vigil-http-streamer
+
+services:
+
+  filebeat:
+    summary: Filebeat — listens on TCP 5170; receives ndjson from vigil-http-streamer
+    command: sh -c 'mkdir -p /tmp/fb-data && filebeat run --strict.perms=false --path.data /tmp/fb-data -c /usr/share/filebeat/vigil-filebeat.yml 2>/dev/null'
+    startup: enabled
+    on-failure: restart
+    backoff-delay: 2s
+    backoff-factor: 2.0
+    backoff-limit: 30s
+    # Filebeat writes enriched JSON directly to container stdout.
+    logs-forward: passthrough
+
+  pod-log-collector:
+    summary: Watches pods in NAMESPACE; streams their logs to Filebeat via TCP
+    command: /usr/local/bin/vigil-http-streamer --kubernetes
+    startup: enabled
+    # No `after: filebeat` needed — vigil-http-streamer reconnects to the TCP
+    # sink internally with exponential backoff, so it can start independently.
+    on-failure: restart
+    backoff-delay: 5s
+    backoff-factor: 2.0
+    backoff-limit: 60s
+    # disabled: collector status lines go to vigild's ring buffer only, not to
+    # container stdout. This keeps container stdout as pure JSON from Filebeat.
+    # Inspect with: kubectl exec <pod> -- vigil logs -f pod-log-collector
+    logs-forward: disabled
+    on-check-failure:
+      pod-log-collector-alive: restart
+    # All configuration is via environment variables set in the Deployment
+    # manifest (k8s/deployment.yaml). No defaults here — layer values would
+    # override operator configuration.
+    #
+    # Variables read by vigil-http-streamer --kubernetes:
+    #   NAMESPACE        namespace to watch (required)
+    #   POD_SELECTOR     label selector, e.g. "app=myapp" (optional)
+    #   WATCH_INTERVAL   seconds between pod-list refreshes (default: 30)
+    #   TCP_SINK_HOST    TCP sink host (default: 127.0.0.1)
+    #   TCP_SINK_PORT    TCP sink port (default: 5170)
+
+checks:
+
+  pod-log-collector-alive:
+    # Verifies the watch loop is running and not stuck.
+    # vigil-http-streamer serves GET /healthz on 127.0.0.1:9091 (--healthcheck
+    # default). Returns 200 while the watch loop ticks, 503 if no tick has been
+    # received within --healthcheck-max-age seconds (default: 90 s = 3× WATCH_INTERVAL).
+    level: alive
+    startup: enabled
+    delay: 40s     # first check after one full cycle (WATCH_INTERVAL=30s + margin)
+    period: 30s
+    timeout: 5s
+    threshold: 2   # two consecutive 503s → restart
+    http:
+      url: http://127.0.0.1:9091/healthz

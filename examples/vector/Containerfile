@@ -1,0 +1,63 @@
+# vigil-rs + Vector example
+#
+# Demonstrates vigild supervising a dummy-logger service whose output is
+# collected exclusively by Vector:
+#
+#   dummy-logger  →  vigild SSE stream (/v1/logs/follow?format=json)
+#                 →  Vector exec source (curl subprocess)
+#                 →  remap transform  (add collector=vector)
+#                 →  console sink      (stdout, JSON per line)
+#
+# forward-logs is disabled on both services — Vector is the only delivery
+# path, so nothing is double-printed via vigild's own stdout.
+#
+# Build (from the vigil-rs repo root):
+#   podman build -f examples/vector/Containerfile -t vigil-vector .
+#
+# Run:
+#   podman run --rm --name vigil-vector vigil-vector
+#
+# Expected output (podman logs):
+#   {"service":"dummy-logger","message":"INFO ...","collector":"vector", ...}
+#
+# Interact:
+#   podman exec vigil-vector vigil services list
+#   podman exec vigil-vector vigil logs -f
+
+# ---------------------------------------------------------------------------
+# Stage 1 — build vigild + vigil (static musl binaries)
+# ---------------------------------------------------------------------------
+FROM rust:alpine AS vigil-builder
+
+RUN apk add --no-cache musl-dev
+
+WORKDIR /vigil-rs
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+
+RUN cargo build --release --bin vigild --bin vigil
+
+# ---------------------------------------------------------------------------
+# Stage 2 — final image: Vector (Alpine/musl) + vigil + curl
+# ---------------------------------------------------------------------------
+FROM timberio/vector:latest-alpine
+
+# curl: used inside the Vector exec source to consume the vigild SSE stream.
+RUN apk add --no-cache curl
+
+# vigil binaries (statically linked musl — same libc as the Alpine base).
+COPY --from=vigil-builder /vigil-rs/target/release/vigild /usr/local/bin/vigild
+COPY --from=vigil-builder /vigil-rs/target/release/vigil  /usr/local/bin/vigil
+
+# Vector pipeline configuration.
+COPY examples/vector/vector.toml /etc/vector/vector.toml
+
+# vigil layer config.
+COPY examples/vector/layers/ /etc/vigil/layers/
+
+RUN mkdir -p /run/vigil
+
+# vigild is PID 1 — dummy-logger and vector are supervised child processes.
+ENTRYPOINT ["/usr/local/bin/vigild", \
+    "--layers-dir", "/etc/vigil/layers", \
+    "--socket",     "/run/vigil/vigild.sock"]

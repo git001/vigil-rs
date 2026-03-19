@@ -1,0 +1,64 @@
+# BEFORE: s6-overlay based container
+#
+# Two services: nginx (reverse proxy) + api (backend)
+#
+# Problems with this approach:
+#   - No real exit code propagation (s6 exits 0 even if nginx crashes permanently)
+#   - Health checks require a separate longrun service with manual loop logic
+#   - No built-in backoff — s6 restarts instantly in a tight loop on failure
+#   - Service ordering via dependencies.d/ but no runtime "after" awareness
+#   - No REST API or CLI to inspect/control services from outside
+#   - Custom stop signal (e.g. SIGQUIT for nginx graceful drain) requires
+#     a down script and manual s6-svc invocation
+#   - Observability requires separate log service per process (s6-log)
+#
+# Build:
+#   podman build -f examples/migrate-from-s6/Containerfile.s6 \
+#                -t migrate-s6-before .
+#
+# Run:
+#   podman run --rm -p 8080:8080 migrate-s6-before
+#
+# There is no CLI to inspect what is running — you have to exec into the
+# container and use s6-rc or s6-svstat directly.
+
+FROM debian:bookworm-slim AS s6-download
+RUN apt-get update && apt-get install -y --no-install-recommends curl xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+ARG S6_VERSION=3.1.6.2
+RUN curl -fsSL \
+    https://github.com/just-containers/s6-overlay/releases/download/v${S6_VERSION}/s6-overlay-noarch.tar.xz \
+    -o /tmp/s6-noarch.tar.xz \
+  && curl -fsSL \
+    https://github.com/just-containers/s6-overlay/releases/download/v${S6_VERSION}/s6-overlay-x86_64.tar.xz \
+    -o /tmp/s6-x86_64.tar.xz
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        nginx \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install s6-overlay
+COPY --from=s6-download /tmp/s6-noarch.tar.xz  /tmp/
+COPY --from=s6-download /tmp/s6-x86_64.tar.xz  /tmp/
+RUN tar -C / -Jxpf /tmp/s6-noarch.tar.xz \
+ && tar -C / -Jxpf /tmp/s6-x86_64.tar.xz \
+ && rm /tmp/s6-*.tar.xz
+
+# Fake api binary for the example
+RUN printf '#!/bin/sh\necho "api listening on 127.0.0.1:3000"\nwhile true; do sleep 60; done\n' \
+    > /app/api && chmod +x /app/api
+RUN mkdir -p /app
+
+# nginx config
+COPY examples/migrate-from-s6/nginx.conf /etc/nginx/nginx.conf
+
+# s6 service definitions
+COPY examples/migrate-from-s6/s6/s6-rc.d/ /etc/s6-overlay/s6-rc.d/
+
+EXPOSE 8080
+
+# s6-overlay takes over as PID 1
+ENTRYPOINT ["/init"]

@@ -1,7 +1,44 @@
 [package]
-name    = "vigild"
-version = "0.1.0"
-edition = "2021"
+name        = "vigild"
+version     = "1.0.0"
+edition     = "2024"
+license     = "AGPL-3.0-only"
+description = "vigild — Rust service supervisor and container init daemon"
+homepage    = "https://github.com/git001/vigil-rs"
+repository  = "https://github.com/git001/vigil-rs"
+
+# ---------------------------------------------------------------------------
+# cargo-deb  (debian / ubuntu packages)
+# ---------------------------------------------------------------------------
+[package.metadata.deb]
+name               = "vigild"
+maintainer         = "vigil-rs contributors <al-virgilrs@none.at>"
+copyright          = "2026 vigil-rs contributors"
+license-file       = ["../../LICENSE", "0"]
+extended-description = """\
+vigild is a service supervisor and container init daemon written in Rust.
+It manages multiple processes inside a single container — starting, stopping,
+restarting, and health-checking them — and exposes a REST API over a Unix socket."""
+depends            = ""
+section            = "admin"
+priority           = "optional"
+assets = [
+    ["../../target/release/vigild", "usr/local/bin/vigild", "755"],
+    ["../../packaging/vigild.service", "lib/systemd/system/vigild.service", "644"],
+    ["../../README.md", "usr/share/doc/vigild/README.md", "644"],
+]
+conf-files = []
+
+# ---------------------------------------------------------------------------
+# cargo-generate-rpm  (RHEL / AlmaLinux / Rocky packages)
+# ---------------------------------------------------------------------------
+[package.metadata.generate-rpm]
+assets = [
+    { source = "../../target/release/vigild", dest = "/usr/local/bin/vigild", mode = "0755" },
+    { source = "../../packaging/vigild.service", dest = "/lib/systemd/system/vigild.service", mode = "0644" },
+    { source = "../../README.md", dest = "/usr/share/doc/vigild/README.md", mode = "0644" },
+]
+[package.metadata.generate-rpm.requires]
 
 [[bin]]
 name = "vigild"
@@ -10,17 +47,22 @@ path = "src/main.rs"
 [dependencies]
 vigil-types        = { path = "../vigil-types" }
 tokio              = { workspace = true }
+tokio-stream       = { workspace = true }
 axum               = { workspace = true }
 tower              = { workspace = true }
 tower-http         = { workspace = true }
+hyper              = { workspace = true }
+hyper-util         = { workspace = true }
 serde              = { workspace = true }
 serde_json         = { workspace = true }
 serde_yaml         = { workspace = true }
+clap               = { workspace = true }
 anyhow             = { workspace = true }
 thiserror          = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 rustls             = { workspace = true }
+rustls-pemfile     = { workspace = true }
 tokio-rustls       = { workspace = true }
 rcgen              = { workspace = true }
 nix                = { workspace = true }
@@ -30,5 +72,10 @@ crossbeam-utils    = { workspace = true }
 uuid               = { workspace = true }
 chrono             = { workspace = true }
 notify             = { workspace = true }
+reqwest            = { workspace = true }
 indexmap           = { workspace = true }
+base64             = { workspace = true }
+sha-crypt          = { workspace = true }
+prometheus-client  = { workspace = true }
 mimalloc           = { workspace = true }
+utoipa             = { workspace = true }

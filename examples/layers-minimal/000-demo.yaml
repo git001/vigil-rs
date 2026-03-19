@@ -1,0 +1,67 @@
+summary: Minimal demo — requires only a POSIX shell
+
+# All services here use standard Unix utilities so the demo can be run
+# on any Linux system without installing additional packages.
+# Start vigild pointing at this directory:
+#
+#   vigild --layers-dir examples/layers-minimal --socket /tmp/vigild.sock
+#
+# Then in another terminal:
+#
+#   vigil --socket /tmp/vigild.sock services
+#   vigil --socket /tmp/vigild.sock logs --n 20
+#   vigil --socket /tmp/vigild.sock checks
+
+services:
+
+  ticker:
+    summary: Prints a timestamp every second
+    command: sh -c 'while true; do date "+[ticker] %H:%M:%S"; sleep 1; done'
+    startup: enabled
+    environment:
+      TZ: UTC
+    on-failure: restart
+    backoff-delay: 500ms
+    backoff-limit: 10s
+
+  counter:
+    summary: Counts from 1 to 30 then exits (demonstrates restart + backoff)
+    command: sh -c 'for i in $(seq 1 30); do echo "[counter] step $i"; sleep 0.5; done; echo "[counter] done, exiting 0"'
+    startup: enabled
+    after:
+      - ticker
+    on-success: restart
+    backoff-delay: 2s
+    backoff-factor: 1.0
+    backoff-limit: 2s
+
+  canary:
+    summary: Exits with failure after 10 s (demonstrates on-failure + backoff)
+    command: sh -c 'sleep 10; echo "[canary] simulated crash"; exit 1'
+    startup: disabled
+    on-failure: restart
+    backoff-delay: 3s
+    backoff-factor: 2.0
+    backoff-limit: 30s
+
+checks:
+
+  ticker-alive:
+    level: alive
+    startup: enabled
+    period: 5s
+    timeout: 2s
+    threshold: 2
+    # Check that the ticker process is running by looking for its marker string.
+    exec:
+      command: pgrep -f "while true; do date"
+
+  localhost-ssh:
+    level: ready
+    startup: enabled
+    period: 15s
+    timeout: 3s
+    threshold: 3
+    tcp:
+      host: localhost
+      port: 22

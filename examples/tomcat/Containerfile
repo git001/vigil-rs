@@ -1,0 +1,66 @@
+# vigil-rs + Tomcat example
+#
+# Demonstrates vigild supervising Apache Tomcat 10.1 with:
+#   - proper SIGTERM → graceful Tomcat shutdown
+#   - HTTP health checks with threshold and on-failure restart
+#   - exponential backoff on crash/restart cycles
+#   - live log streaming from Tomcat stdout/stderr
+#
+# Build (from the vigil-rs repo root):
+#   podman build -f examples/tomcat/Containerfile -t vigil-tomcat .
+#
+# Run:
+#   podman run --rm -p 8080:8080 --name vigil-tomcat vigil-tomcat
+#
+# Interact:
+#   podman exec vigil-tomcat vigil services list
+#   podman exec vigil-tomcat vigil checks list
+#   podman exec vigil-tomcat vigil logs -f
+#   podman exec vigil-tomcat vigil services restart tomcat
+
+# ---------------------------------------------------------------------------
+# Stage 1 — build vigild + vigil (static musl binaries — run on any Linux)
+# ---------------------------------------------------------------------------
+FROM rust:alpine AS vigil-builder
+
+RUN apk add --no-cache musl-dev
+
+WORKDIR /vigil-rs
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+
+RUN cargo build --release --bin vigild --bin vigil
+
+# ---------------------------------------------------------------------------
+# Stage 2 — final image based on the official Tomcat image
+# ---------------------------------------------------------------------------
+FROM tomcat:10.1-jre21-temurin
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# vigil binaries (statically linked musl — works on any Linux libc)
+COPY --from=vigil-builder /vigil-rs/target/release/vigild /usr/local/bin/vigild
+COPY --from=vigil-builder /vigil-rs/target/release/vigil  /usr/local/bin/vigil
+
+# Tomcat logs go to stdout/stderr — vigild captures them
+# Disable Tomcat's file logger so all output is on stdout
+COPY examples/tomcat/conf/logging.properties \
+     /usr/local/tomcat/conf/logging.properties
+
+# vigil layer
+COPY examples/tomcat/layers/ /etc/vigil/layers/
+
+# Since Tomcat 10.1 the official image ships an empty webapps/ directory.
+# Webapps are in webapps.dist/ — copy ROOT so the health check has a target.
+# In production you would COPY your own .war here instead.
+RUN cp -r /usr/local/tomcat/webapps.dist/ROOT /usr/local/tomcat/webapps/ROOT
+
+RUN mkdir -p /run/vigil
+
+EXPOSE 8080
+
+# vigild is PID 1 — Tomcat is spawned as a supervised child process
+ENTRYPOINT ["/usr/local/bin/vigild", \
+    "--layers-dir", "/etc/vigil/layers", \
+    "--socket",     "/run/vigil/vigild.sock"]

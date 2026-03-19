@@ -1,0 +1,48 @@
+{
+    admin off
+}
+
+:8080 {
+    # -------------------------------------------------------------------------
+    # /caddy-health — static 200 from Caddy itself (no FPM involved)
+    # Used to verify that Caddy is alive and processing requests.
+    # -------------------------------------------------------------------------
+    handle /caddy-health {
+        respond "OK" 200
+    }
+
+    # -------------------------------------------------------------------------
+    # /php-health — PHP-FPM built-in ping via FastCGI
+    # FPM intercepts requests where SCRIPT_FILENAME matches ping.path (/ping)
+    # and responds directly without executing any PHP script.
+    # -------------------------------------------------------------------------
+    handle /php-health {
+        reverse_proxy unix//run/php-fpm/php-fpm.sock {
+            transport fastcgi {
+                env SCRIPT_FILENAME /ping
+                env SCRIPT_NAME     /ping
+            }
+        }
+    }
+
+    # -------------------------------------------------------------------------
+    # /healthz — aggregated health check
+    # Routes to healthz.php which verifies both Caddy (implicit — this runs
+    # only if Caddy is up) and PHP-FPM (explicit socket check in the script).
+    # Returns 200 only when both are healthy.
+    # -------------------------------------------------------------------------
+    handle /healthz {
+        root * /var/www/html
+        rewrite * /healthz.php
+        php_fastcgi unix//run/php-fpm/php-fpm.sock
+    }
+
+    # -------------------------------------------------------------------------
+    # / — PHP application (phpinfo test page)
+    # -------------------------------------------------------------------------
+    handle {
+        root * /var/www/html
+        php_fastcgi unix//run/php-fpm/php-fpm.sock
+        file_server
+    }
+}

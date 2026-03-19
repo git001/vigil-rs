@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>vigil + h2o</title>
+  <style>
+    body { font-family: monospace; max-width: 600px; margin: 4rem auto; padding: 0 1rem; }
+    h1   { font-size: 1.4rem; }
+    code { background: #f4f4f4; padding: .1em .4em; border-radius: 3px; }
+    pre  { background: #f4f4f4; padding: 1em; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <h1>vigil + h2o</h1>
+  <p>
+    This page is served by <strong>h2o</strong> 2.2.x, supervised by
+    <strong>vigild</strong>.
+  </p>
+
+  <h2>Useful endpoints</h2>
+  <ul>
+    <li><a href="/healthz"><code>GET /healthz</code></a> — liveness probe (200 OK)</li>
+    <li><a href="/status"><code>GET /status</code></a> — h2o internal status</li>
+  </ul>
+
+  <h2>Interact with the supervisor</h2>
+  <pre>
+# from inside the container:
+vigil --socket /run/vigil/vigild.sock services
+vigil --socket /run/vigil/vigild.sock checks
+vigil --socket /run/vigil/vigild.sock logs
+
+# restart h2o (e.g. after config change):
+vigil --socket /run/vigil/vigild.sock restart h2o
+  </pre>
+</body>
+</html>

@@ -1,0 +1,24 @@
+#!/bin/sh
+# Simulated controller process — demonstrates a second service managed by
+# vigild that starts *after* haproxy is up.
+#
+# In a real setup (e.g. HUG) this would be a Go controller binary that
+# configures HAProxy dynamically via its runtime API socket.
+set -e
+
+HAPROXY_SOCK="/var/run/haproxy/health.sock"
+INTERVAL="${CONTROLLER_INTERVAL:-10}"
+
+echo "controller: starting (poll interval=${INTERVAL}s)"
+
+while true; do
+    # Poll HAProxy health via its Unix socket
+    if curl --silent --fail --unix-socket "${HAPROXY_SOCK}" \
+            "http://localhost/healthz" > /dev/null 2>&1; then
+        echo "controller: haproxy healthy"
+    else
+        echo "controller: haproxy health check failed" >&2
+    fi
+
+    sleep "${INTERVAL}"
+done

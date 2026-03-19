@@ -1,0 +1,102 @@
+summary: nginx + api (migrated from s6-overlay)
+
+# Migration notes
+# ───────────────
+# s6-overlay                           vigil-rs
+# ─────────────────────────────────────────────────────────────────────────────
+# s6-rc.d/nginx/type = longrun         services: nginx: command: ...
+# s6-rc.d/nginx/run                    services: nginx: command: nginx -g "daemon off;"
+# s6-rc.d/nginx/finish                 on-success / on-failure (built-in)
+# dependencies.d/nginx                 after: [nginx]
+# longrun health-check service         checks: (first-class, no extra service needed)
+# no backoff support                   backoff-delay / backoff-factor / backoff-limit
+# no stop-signal support               stop-signal: SIGQUIT
+# no exit code propagation             vigild exits with real process exit code
+# s6-rc.d/nginx-log/ + s6-log         logs-push-socket: (one line per service)
+# s6-rc.d/api-log/ + s6-log           logs-push-socket: (one line per service)
+
+services:
+
+  nginx:
+    summary: nginx reverse proxy
+    # Equivalent to s6-rc.d/nginx/run: nginx -g "daemon off;"
+    command: nginx -g "daemon off;"
+    startup: enabled
+    # logs-forward: disabled keeps nginx access logs out of podman logs.
+    # logs-push-socket delivers them to log-writer without a curl wrapper
+    # or a separate s6 log service directory.
+    logs-forward: disabled
+    logs-push-socket: /run/collector/input.sock
+    # SIGQUIT triggers nginx graceful shutdown (drain in-flight requests).
+    # s6 cannot do this without a custom down script — vigil handles it natively.
+    stop-signal: SIGQUIT
+    kill-delay: 30s
+    on-success: ignore
+    on-failure: restart
+    # Exponential backoff — s6 restarts instantly in a tight loop by default.
+    backoff-delay: 1s
+    backoff-factor: 2.0
+    backoff-limit: 60s
+    on-check-failure:
+      nginx-alive: restart
+
+  api:
+    summary: backend API
+    # Equivalent to s6-rc.d/api/run: /app/api --listen 127.0.0.1:3000
+    command: /app/api --listen 127.0.0.1:3000
+    startup: enabled
+    # Equivalent to dependencies.d/nginx — api starts only after nginx is up.
+    after:
+      - nginx
+    logs-forward: disabled
+    logs-push-socket: /run/collector/input.sock
+    on-success: restart
+    on-failure: restart
+    backoff-delay: 2s
+    backoff-factor: 2.0
+    backoff-limit: 60s
+
+  log-writer:
+    summary: Receives pushed ndjson from nginx and api; writes to container stdout
+    # socat listens on the Unix socket and prints every line to stdout.
+    # fork handles simultaneous connections from nginx and api push tasks.
+    # In production, replace this with Fluent Bit, Vector, or Filebeat
+    # (see examples/fluentbit and examples/filebeat-push).
+    #
+    # s6 equivalent: two separate s6-rc.d/<service>-log/ directories,
+    # each with an s6-log run script. vigil-rs needs only one collector service
+    # shared by all services via logs-push-socket.
+    command: sh -c 'socat UNIX-LISTEN:/run/collector/input.sock,fork,reuseaddr STDOUT 2>/dev/null'
+    startup: enabled
+    on-failure: restart
+    backoff-delay: 1s
+    backoff-factor: 2.0
+    backoff-limit: 30s
+    # passthrough: socat writes directly to container stdout — no [log-writer] prefix.
+    logs-forward: passthrough
+
+checks:
+
+  nginx-alive:
+    # In s6, health checks require a separate longrun service with a manual
+    # sleep loop, no threshold concept, and no built-in on-failure action.
+    # vigil-rs provides this as a first-class feature.
+    level: alive
+    startup: enabled
+    delay: 2s
+    period: 10s
+    timeout: 5s
+    threshold: 3
+    http:
+      url: http://127.0.0.1:8080/healthz
+
+  api-ready:
+    level: ready
+    startup: enabled
+    delay: 3s
+    period: 15s
+    timeout: 5s
+    threshold: 2
+    tcp:
+      host: 127.0.0.1
+      port: 3000

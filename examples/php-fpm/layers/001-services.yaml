@@ -1,0 +1,53 @@
+summary: Standalone PHP-FPM supervised by vigil-rs
+
+services:
+
+  php-fpm:
+    summary: PHP-FPM process manager (no web server)
+    # -F  run in the foreground — required for a supervisor (never use -D)
+    # -R  allow the master process to run as root (PID 1 in a container)
+    command: php-fpm83 -F -R
+    startup: enabled
+
+    # SIGQUIT = graceful shutdown: master tells workers to finish their
+    # current request, then exits. vigild sends SIGKILL after kill-delay
+    # if FPM does not exit in time.
+    stop-signal: SIGQUIT
+    kill-delay: 30s
+
+    on-success: ignore
+    on-failure: restart
+
+    # Backoff avoids thrashing if FPM exits immediately on startup
+    # (e.g. bad config, socket permission error).
+    backoff-delay: 2s
+    backoff-factor: 2.0
+    backoff-limit: 60s
+
+    # Forward FPM startup messages and worker errors to vigild stdout/stderr
+    # so they appear in "podman logs".
+    logs-forward: enabled
+
+    # Restart php-fpm if the process check fails 3 times in a row.
+    on-check-failure:
+      php-fpm-alive: restart
+
+checks:
+
+  php-fpm-alive:
+    # Uses pgrep to verify the php-fpm83 master process is present in the
+    # process table. pgrep exits 0 if at least one match is found, non-zero
+    # if no match (process gone or crashed). This works regardless of whether
+    # a web server is present — no HTTP or TCP port needed.
+    #
+    # -x  match the exact process name (avoids matching unrelated processes
+    #     whose name merely contains "php-fpm83" as a substring)
+    level: alive
+    startup: enabled
+    # FPM spawns workers after a short startup; wait before the first check.
+    delay: 5s
+    period: 10s
+    timeout: 5s
+    threshold: 3
+    exec:
+      command: pgrep -x php-fpm83

@@ -1,0 +1,96 @@
+summary: Application layer — web API + background worker
+
+# Layer 100 adds the application services.  They depend on the infrastructure
+# defined in 000-base.yaml.  The web service is started automatically; the
+# worker is left disabled by default so operators can opt in via a higher layer.
+
+services:
+
+  web:
+    summary: HTTP API server (Axum)
+    command: /usr/local/bin/myapp serve --bind 0.0.0.0:8080
+    startup: enabled
+    user: app
+    group: app
+    working-dir: /opt/myapp
+    requires:
+      - postgres
+      - redis
+    after:
+      - postgres
+      - redis
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgres://app:secret@localhost/app
+      REDIS_URL: redis://localhost:6379/0
+      LOG_LEVEL: info
+      HTTP_PORT: "8080"
+    # SIGTERM triggers the app's graceful-drain logic (finish open requests).
+    # Give it up to 20 s before escalating to SIGKILL.
+    stop-signal: SIGTERM
+    kill-delay: 20s
+    on-failure: restart
+    backoff-delay: 1s
+    backoff-factor: 2.0
+    backoff-limit: 60s
+    # React to check failures: if the liveness probe reports down, restart.
+    on-check-failure:
+      web-alive: restart
+
+  worker:
+    summary: Background job worker (Sidekiq-style)
+    command: /usr/local/bin/myapp worker --queues default,mailer --concurrency 4
+    startup: disabled
+    user: app
+    group: app
+    working-dir: /opt/myapp
+    requires:
+      - postgres
+      - redis
+    after:
+      - postgres
+      - redis
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgres://app:secret@localhost/app
+      REDIS_URL: redis://localhost:6379/0
+      LOG_LEVEL: info
+    # SIGUSR1 signals the worker to drain its queue before shutting down.
+    stop-signal: SIGUSR1
+    kill-delay: 30s
+    on-failure: restart
+    backoff-delay: 2s
+    backoff-factor: 2.0
+    backoff-limit: 120s
+
+checks:
+
+  web-alive:
+    level: alive
+    startup: enabled
+    period: 10s
+    timeout: 3s
+    threshold: 3
+    http:
+      url: http://localhost:8080/healthz
+
+  web-ready:
+    level: ready
+    startup: enabled
+    period: 15s
+    timeout: 5s
+    threshold: 2
+    http:
+      url: http://localhost:8080/readyz
+      headers:
+        Accept: application/json
+
+  worker-alive:
+    level: alive
+    startup: enabled
+    period: 30s
+    timeout: 5s
+    threshold: 3
+    exec:
+      command: /usr/local/bin/myapp worker --status
+      service-context: worker

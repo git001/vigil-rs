@@ -1,0 +1,62 @@
+# RBAC for the vigil-rs kubernetes-pod-logs collector.
+#
+# The pod-log-collector needs:
+#   - pods: get, list          (to discover Running pods)
+#   - pods/log: get            (to stream log output)
+#
+# A ClusterRole is used so the same ServiceAccount can watch any namespace
+# by changing the NAMESPACE env var on the Deployment.
+# Use a Role + RoleBinding instead if you want to limit to a single namespace.
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vigil-pod-log-collector
+  namespace: zzz-test-build   # change to the namespace where this Deployment runs
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vigil-pod-log-reader
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vigil-pod-log-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: vigil-pod-log-reader
+subjects:
+  - kind: ServiceAccount
+    name: vigil-pod-log-collector
+    namespace: zzz-test-build   # must match ServiceAccount namespace above
+
+---
+# OpenShift: allow the ServiceAccount to pull from the internal image registry.
+# Required because OpenShift does not grant image-pull to custom ServiceAccounts
+# by default, even within the same namespace.
+# Equivalent CLI: oc policy add-role-to-user system:image-puller -z vigil-pod-log-collector
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vigil-pod-log-collector-image-puller
+  namespace: zzz-test-build
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:image-puller
+subjects:
+  - kind: ServiceAccount
+    name: vigil-pod-log-collector
+    namespace: zzz-test-build

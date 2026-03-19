@@ -1,7 +1,39 @@
 [package]
-name    = "vigil"
-version = "0.1.0"
-edition = "2021"
+name        = "vigil"
+version     = "1.0.0"
+edition     = "2024"
+license     = "AGPL-3.0-only"
+description = "vigil — CLI client for the vigild service supervisor"
+homepage    = "https://github.com/git001/vigil-rs"
+repository  = "https://github.com/git001/vigil-rs"
+
+# ---------------------------------------------------------------------------
+# cargo-deb
+# ---------------------------------------------------------------------------
+[package.metadata.deb]
+name               = "vigil"
+maintainer         = "vigil-rs contributors <al-virgilrs@none.at>"
+copyright          = "2026 vigil-rs contributors"
+license-file       = ["../../LICENSE", "0"]
+extended-description = """\
+vigil is the CLI client for the vigild service supervisor.
+It connects via Unix socket or HTTP/HTTPS and lets you start, stop,
+restart, and inspect services and health checks."""
+depends            = ""
+section            = "admin"
+priority           = "optional"
+assets = [
+    ["../../target/release/vigil", "usr/local/bin/vigil", "755"],
+]
+
+# ---------------------------------------------------------------------------
+# cargo-generate-rpm
+# ---------------------------------------------------------------------------
+[package.metadata.generate-rpm]
+assets = [
+    { source = "../../target/release/vigil", dest = "/usr/local/bin/vigil", mode = "0755" },
+]
+[package.metadata.generate-rpm.requires]
 
 [[bin]]
 name = "vigil"
@@ -12,17 +44,20 @@ name = "vigil_client"
 path = "src/lib.rs"
 
 [dependencies]
-vigil-types = { path = "../vigil-types" }
-tokio       = { workspace = true }
-reqwest     = { workspace = true }
-hyper       = { workspace = true }
-hyper-util  = { workspace = true }
-clap        = { workspace = true }
-serde       = { workspace = true }
-serde_json  = { workspace = true }
-anyhow      = { workspace = true }
-thiserror   = { workspace = true }
-tracing     = { workspace = true }
+vigil-types    = { path = "../vigil-types" }
+tokio          = { workspace = true }
+hyper          = { workspace = true }
+hyper-util     = { workspace = true }
+http-body-util = { workspace = true }
+bytes          = { workspace = true }
+tower          = { workspace = true }
+reqwest        = { workspace = true }
+clap           = { workspace = true }
+serde          = { workspace = true }
+serde_json     = { workspace = true }
+anyhow         = { workspace = true }
+thiserror      = { workspace = true }
+tracing        = { workspace = true }
 tracing-subscriber = { workspace = true }
-chrono      = { workspace = true }
-mimalloc    = { workspace = true }
+chrono         = { workspace = true }
+mimalloc       = { workspace = true }

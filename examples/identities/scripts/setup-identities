@@ -1,0 +1,67 @@
+#!/bin/sh
+# setup-identities — adds one user per access level via the vigild API.
+#
+# Run this script once the daemon is up:
+#   podman exec vigil-identities /usr/local/bin/setup-identities
+#
+# Credentials (all use HTTP Basic Auth):
+#
+#   Username      Password        Access level
+#   -----------   -------------   ------------
+#   metrics-bot   m3tr1cs!        metrics  (GET /v1/metrics only)
+#   reader        r3ad0nly!       read     (all GET endpoints)
+#   writer        wr1t3acc!       write    (read + service control)
+#   admin         adm1npass!      admin    (full access incl. identities)
+#
+# In bootstrap mode (empty store) the daemon grants Admin to everyone, so
+# this first call goes through without credentials.
+
+set -e
+
+SOCKET="${VIGIL_SOCKET:-/run/vigil/vigild.sock}"
+
+curl_api() {
+    curl --silent --fail \
+         --unix-socket "$SOCKET" \
+         --header "Content-Type: application/json" \
+         "$@"
+}
+
+echo "Adding identities..."
+
+curl_api -X POST http://localhost/v1/identities -d '{
+  "identities": {
+    "metrics-bot": {
+      "access": "metrics",
+      "basic": {
+        "password-hash": "$6$ClWHyEv/IsYFlD4i$UOBjsXEjuWf4E0PApPYuCoxrebWQ.Bje5VD0ZbherBHdPrAxvF.cwrOldbYeVPIgWjkq2SXYe5ctLpWoejN161"
+      }
+    },
+    "reader": {
+      "access": "read",
+      "basic": {
+        "password-hash": "$6$I48dMASmHlzgoGV4$WFZg7mRWeoa6hzVWef229Oi1L5oJWoQ60KD6JlUiTltYebi1rTdRvOg6bQiwGeU0KhJeTuKMJIfBNPQG6UUka/"
+      }
+    },
+    "writer": {
+      "access": "write",
+      "basic": {
+        "password-hash": "$6$aCatiE/x2x33jJN5$.AYXChTOe1dgzuTMWwGphzybhOYyO4.i7YIIleIwOakS67FOin70ObtNBNGxk7dFi1Q6EvmkGF0ITfLwiMjv9/"
+      }
+    },
+    "admin": {
+      "access": "admin",
+      "basic": {
+        "password-hash": "$6$2h2aVHht59EY5KPS$akdKSpyt/qwHn3.uy56gWImz2z.PT8fSmLhFEGS4nvNhhnv2Q.9GDz4ccBYOfl159H3uSsSgLpP73jsfo/lhW1"
+      }
+    }
+  }
+}'
+
+echo ""
+echo "Done. Identities active:"
+echo ""
+echo "  metrics-bot   m3tr1cs!    -> metrics"
+echo "  reader        r3ad0nly!   -> read"
+echo "  writer        wr1t3acc!   -> write"
+echo "  admin         adm1npass!  -> admin"

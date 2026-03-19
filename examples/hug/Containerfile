@@ -1,0 +1,67 @@
+# vigil-rs multi-service example: HAProxy + controller
+#
+# Demonstrates vigild supervising two processes with:
+#   - service startup ordering (controller starts after haproxy)
+#   - custom stop signal (SIGUSR1 for haproxy graceful drain)
+#   - health checks via haproxy stats socket
+#   - automatic restart with backoff
+#
+# Build (from the vigil-rs repo root):
+#   podman build -f examples/hug/Containerfile -t vigil-hug .
+#
+# Run:
+#   podman run --rm --network host --name vigil-hug vigil-hug
+#
+# Interact:
+#   podman exec vigil-hug vigil services
+#   podman exec vigil-hug vigil checks
+#   podman exec vigil-hug vigil logs
+#   podman exec vigil-hug vigil restart haproxy
+
+# ---------------------------------------------------------------------------
+# Stage 1 — build vigild + vigil
+# ---------------------------------------------------------------------------
+FROM rust:alpine AS vigil-builder
+
+RUN apk add --no-cache musl-dev
+
+WORKDIR /vigil-rs
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+
+RUN cargo build --release --bin vigild --bin vigil
+
+# ---------------------------------------------------------------------------
+# Stage 2 — final image
+# ---------------------------------------------------------------------------
+FROM alpine:3.21
+
+RUN apk add --no-cache \
+    haproxy \
+    curl \
+    socat \
+    procps
+
+# vigil supervisor daemon + CLI
+COPY --from=vigil-builder /vigil-rs/target/release/vigild /usr/local/bin/vigild
+COPY --from=vigil-builder /vigil-rs/target/release/vigil  /usr/local/bin/vigil
+
+# HAProxy configuration
+COPY examples/hug/haproxy.cfg /etc/haproxy/haproxy.cfg
+
+# Run scripts
+COPY examples/hug/scripts/run-haproxy    /usr/local/bin/run-haproxy
+COPY examples/hug/scripts/run-controller /usr/local/bin/run-controller
+RUN chmod +x /usr/local/bin/run-haproxy /usr/local/bin/run-controller
+
+# vigil layer
+COPY examples/hug/layers/ /etc/vigil/layers/
+
+RUN mkdir -p /run/vigil /var/run/haproxy
+
+EXPOSE 8080 8404
+
+# vigild is PID 1 — zombie-reaper mode activates automatically
+ENTRYPOINT ["/usr/local/bin/vigild", \
+    "--layers-dir", "/etc/vigil/layers", \
+    "--socket",     "/run/vigil/vigild.sock"]

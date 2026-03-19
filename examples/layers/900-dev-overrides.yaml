@@ -1,0 +1,73 @@
+summary: Development overrides — looser settings, verbose logging
+
+# Layer 900 is applied last so it wins over all other layers.
+# In production this file is absent; on a dev workstation it is symlinked in.
+#
+# Demonstrates Override::replace to swap a service definition wholesale, plus
+# plain merge to patch individual environment variables.
+
+services:
+
+  # Replace the production web definition entirely — bind to localhost only,
+  # use the dev database, enable hot-reload and debug logging.
+  web:
+    override: replace
+    summary: HTTP API server (dev mode, hot-reload)
+    command: /usr/local/bin/myapp serve --bind 127.0.0.1:8080 --hot-reload
+    startup: enabled
+    user: app
+    group: app
+    working-dir: /opt/myapp
+    requires:
+      - postgres
+      - redis
+    after:
+      - postgres
+      - redis
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgres://app:devpassword@localhost/app_dev
+      REDIS_URL: redis://localhost:6379/1
+      LOG_LEVEL: debug
+      HTTP_PORT: "8080"
+    stop-signal: SIGTERM
+    kill-delay: 5s
+    on-failure: restart
+    backoff-delay: 500ms
+    backoff-factor: 1.5
+    backoff-limit: 10s
+
+  # Merge into the postgres service: override only the environment so we use
+  # the dev database name without touching the command or user fields.
+  postgres:
+    override: merge
+    environment:
+      POSTGRES_DB: app_dev
+      POSTGRES_LOG_MIN_DURATION_STATEMENT: "200"
+
+  # In dev we run without Redis — replace the definition with a stub that
+  # just sleeps so the dependency graph still resolves.
+  redis:
+    override: replace
+    summary: Redis stub (dev — disabled, uses fakeredis in-process)
+    command: sleep infinity
+    startup: enabled
+
+checks:
+
+  # Relax the liveness check cadence in dev to reduce log noise.
+  web-alive:
+    override: merge
+    period: 30s
+    threshold: 5
+
+  # Drop the TCP port check since redis is replaced by a stub.
+  redis-ready:
+    override: replace
+    level: ready
+    startup: enabled
+    period: 60s
+    timeout: 2s
+    threshold: 1
+    exec:
+      command: true

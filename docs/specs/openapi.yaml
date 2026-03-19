@@ -1,0 +1,746 @@
+openapi: 3.1.0
+info:
+  title: vigil API
+  version: v1
+  description: |
+    HTTP API for the vigild service supervisor daemon.
+
+    All endpoints are served over a Unix socket (default `/run/vigild.sock`).
+    Responses are wrapped in a JSON envelope with a `result` field on success
+    or a `message` field on error.
+
+    **curl example (Unix socket):**
+    ```
+    curl --unix-socket /run/vigild.sock http://localhost/v1/system-info
+    ```
+
+paths:
+
+  # ---------------------------------------------------------------------------
+  # System info
+  # ---------------------------------------------------------------------------
+
+  /v1/system-info:
+    get:
+      summary: Get system info
+      tags:
+        - system info
+      description: Returns the daemon version, boot ID, and start time.
+      responses:
+        "200":
+          description: Daemon system information.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemInfoResponse"
+              example:
+                result:
+                  version: "1.0.0"
+                  boot-id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                  start-time: "2026-03-18T10:00:00Z"
+        "500":
+          $ref: "#/components/responses/Error"
+
+  # ---------------------------------------------------------------------------
+  # Services
+  # ---------------------------------------------------------------------------
+
+  /v1/services:
+    get:
+      summary: List services
+      tags:
+        - services
+      description: Returns the current status of all or selected services.
+      parameters:
+        - name: names
+          in: query
+          description: Comma-separated list of service names to filter by. Omit for all services.
+          required: false
+          schema:
+            type: string
+          example: "web,worker"
+      responses:
+        "200":
+          description: List of service status entries.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServicesResponse"
+              example:
+                result:
+                  - name: web
+                    startup: enabled
+                    current: active
+                    current-since: "2026-03-18T10:00:01Z"
+                  - name: worker
+                    startup: disabled
+                    current: inactive
+                    current-since: "2026-03-18T10:00:00Z"
+        "500":
+          $ref: "#/components/responses/Error"
+
+    post:
+      summary: Perform a service action
+      tags:
+        - services
+      description: |
+        Start, stop, or restart one or more services.
+
+        **Actions:**
+        - `start` — start the named services (or all if empty)
+        - `stop` — stop the named services
+        - `restart` — restart the named services
+        - `autostart` — mark services as enabled and start them
+        - `replan` — reload layers and apply changes (equivalent to `POST /v1/replan`)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ServicesAction"
+            examples:
+              start:
+                summary: Start specific services
+                value:
+                  action: start
+                  services: ["web", "worker"]
+              stop_all:
+                summary: Stop all services
+                value:
+                  action: stop
+                  services: []
+      responses:
+        "200":
+          description: Change record for the performed action.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChangeResponse"
+              example:
+                result:
+                  id: "1"
+                  kind: "start"
+                  summary: "Start [\"web\", \"worker\"]"
+                  status: done
+                  spawn-time: "2026-03-18T10:01:00Z"
+                  ready-time: "2026-03-18T10:01:01Z"
+        "500":
+          $ref: "#/components/responses/Error"
+
+  # ---------------------------------------------------------------------------
+  # Changes
+  # ---------------------------------------------------------------------------
+
+  /v1/changes/{id}:
+    get:
+      summary: Get a change by ID
+      tags:
+        - changes
+      description: Returns the change record for the given change ID.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "1"
+      responses:
+        "200":
+          description: The requested change record.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChangeResponse"
+              example:
+                result:
+                  id: "1"
+                  kind: "restart"
+                  summary: "Restart [\"web\"]"
+                  status: done
+                  spawn-time: "2026-03-18T10:02:00Z"
+                  ready-time: "2026-03-18T10:02:02Z"
+        "404":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+
+  # ---------------------------------------------------------------------------
+  # Checks
+  # ---------------------------------------------------------------------------
+
+  /v1/checks:
+    get:
+      summary: List health checks
+      tags:
+        - checks
+      description: Returns the current status of all or selected health checks.
+      parameters:
+        - name: names
+          in: query
+          description: Comma-separated list of check names to filter by. Omit for all checks.
+          required: false
+          schema:
+            type: string
+          example: "http-alive,db-ready"
+      responses:
+        "200":
+          description: List of check status entries.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChecksResponse"
+              example:
+                result:
+                  - name: http-alive
+                    level: alive
+                    status: up
+                    failures: 0
+                    threshold: 3
+                  - name: db-ready
+                    level: ready
+                    status: down
+                    failures: 3
+                    threshold: 3
+        "500":
+          $ref: "#/components/responses/Error"
+
+  # ---------------------------------------------------------------------------
+  # Logs
+  # ---------------------------------------------------------------------------
+
+  /v1/logs:
+    get:
+      summary: Get recent log output
+      tags:
+        - logs
+      description: Returns the most recent log lines from service stdout/stderr.
+      parameters:
+        - name: services
+          in: query
+          description: Comma-separated list of service names to filter by. Omit for all services.
+          required: false
+          schema:
+            type: string
+          example: "web,worker"
+        - name: n
+          in: query
+          description: Number of most-recent lines to return. Default is 100.
+          required: false
+          schema:
+            type: integer
+            default: 100
+          example: 50
+      responses:
+        "200":
+          description: Recent log entries.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogsResponse"
+              example:
+                result:
+                  - timestamp: "2026-03-18T10:01:00.123Z"
+                    service: web
+                    stream: stdout
+                    message: "Server listening on :8080"
+                  - timestamp: "2026-03-18T10:01:01.456Z"
+                    service: web
+                    stream: stderr
+                    message: "WARN: slow response 823ms"
+        "500":
+          $ref: "#/components/responses/Error"
+
+  /v1/logs/follow:
+    get:
+      summary: Stream live log output (SSE)
+      tags:
+        - logs
+      description: |
+        Opens a Server-Sent Events stream that delivers log entries in real time
+        as services write to stdout/stderr.
+
+        Each SSE event has the format:
+        ```
+        data: {"timestamp":"...","service":"...","stream":"stdout","message":"..."}
+        ```
+
+        A keep-alive comment (`": ping"`) is sent every 15 seconds.
+        If the consumer is too slow, a lagged comment is sent:
+        ```
+        : lagged: skipped N entries
+        ```
+      parameters:
+        - name: services
+          in: query
+          description: Comma-separated list of service names to filter by. Omit for all services.
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Server-Sent Events stream of log entries.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: |
+                data: {"timestamp":"2026-03-18T10:01:00.123Z","service":"web","stream":"stdout","message":"ready"}
+
+                : ping
+
+  # ---------------------------------------------------------------------------
+  # Replan
+  # ---------------------------------------------------------------------------
+
+  /v1/replan:
+    post:
+      summary: Reload layers and replan
+      tags:
+        - replan
+      description: |
+        Reads all layer YAML files from the layers directory, re-merges them
+        into a new plan, starts any newly enabled services, and stops any
+        removed ones. Equivalent to `vigil replan`.
+      responses:
+        "200":
+          description: Replan completed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmptyResponse"
+              example:
+                result: null
+        "500":
+          $ref: "#/components/responses/Error"
+
+  # ---------------------------------------------------------------------------
+  # Identities
+  # ---------------------------------------------------------------------------
+
+  /v1/identities:
+    get:
+      summary: List identities
+      tags:
+        - identities
+      description: Returns all or selected identities.
+      parameters:
+        - name: names
+          in: query
+          description: Comma-separated list of identity names to filter by. Omit for all.
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of identities.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdentitiesResponse"
+              example:
+                result:
+                  - name: admin
+                    access: admin
+                    local:
+                      user-id: 0
+                  - name: ops
+                    access: write
+                    local: {}
+        "500":
+          $ref: "#/components/responses/Error"
+
+    post:
+      summary: Add or update identities
+      tags:
+        - identities
+      description: Creates or updates the named identities.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddIdentitiesRequest"
+            example:
+              identities:
+                ops:
+                  access: write
+                  local: {}
+      responses:
+        "200":
+          description: Identities added or updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmptyResponse"
+              example:
+                result: null
+        "500":
+          $ref: "#/components/responses/Error"
+
+    delete:
+      summary: Remove identities
+      tags:
+        - identities
+      description: Removes the named identities.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RemoveIdentitiesRequest"
+            example:
+              identities: ["ops"]
+      responses:
+        "200":
+          description: Names of the removed identities.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemovedIdentitiesResponse"
+              example:
+                result: ["ops"]
+        "500":
+          $ref: "#/components/responses/Error"
+
+# =============================================================================
+# Components
+# =============================================================================
+
+components:
+
+  # ---------------------------------------------------------------------------
+  # Responses (shared error)
+  # ---------------------------------------------------------------------------
+
+  responses:
+    Error:
+      description: An error occurred.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          example:
+            message: "service 'web' not found"
+
+  # ---------------------------------------------------------------------------
+  # Schemas
+  # ---------------------------------------------------------------------------
+
+  schemas:
+
+    # ---- Envelope ----
+
+    ErrorEnvelope:
+      type: object
+      properties:
+        result:
+          type: "null"
+        message:
+          type: string
+          description: Human-readable error message.
+      required: [message]
+
+    # ---- System info ----
+
+    SystemInfo:
+      type: object
+      properties:
+        version:
+          type: string
+          description: vigild version string.
+          example: "1.0.0"
+        boot-id:
+          type: string
+          format: uuid
+          description: UUID generated fresh at each daemon start. Matches the pebble boot-id field.
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        start-time:
+          type: string
+          format: date-time
+          description: Daemon start time (ISO 8601 / RFC 3339). vigil extension.
+          example: "2026-03-18T10:00:00Z"
+      required: [version, boot-id, start-time]
+
+    SystemInfoResponse:
+      type: object
+      properties:
+        result:
+          $ref: "#/components/schemas/SystemInfo"
+      required: [result]
+
+    # ---- Services ----
+
+    ServiceStatus:
+      type: string
+      enum: [active, inactive, backoff, error]
+      description: |
+        - `active` — process is running
+        - `inactive` — process is not running
+        - `backoff` — waiting before the next restart attempt
+        - `error` — failed to start or exceeded backoff limit
+
+    ServiceInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          example: web
+        startup:
+          type: string
+          enum: [enabled, disabled]
+          description: Whether the service starts automatically on daemon start / replan.
+        current:
+          $ref: "#/components/schemas/ServiceStatus"
+        current-since:
+          type: string
+          format: date-time
+          description: When the service entered its current state.
+          example: "2026-03-18T10:00:01Z"
+      required: [name, startup, current]
+
+    ServicesResponse:
+      type: object
+      properties:
+        result:
+          type: array
+          items:
+            $ref: "#/components/schemas/ServiceInfo"
+      required: [result]
+
+    ServiceAction:
+      type: string
+      enum: [start, stop, restart, autostart, replan]
+
+    ServicesAction:
+      type: object
+      properties:
+        action:
+          $ref: "#/components/schemas/ServiceAction"
+        services:
+          type: array
+          items:
+            type: string
+          description: Service names to act on. Empty list means all services.
+      required: [action, services]
+
+    # ---- Changes ----
+
+    ChangeStatus:
+      type: string
+      enum: [doing, done, error, hold]
+
+    ChangeInfo:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Monotonically increasing change ID.
+          example: "1"
+        kind:
+          type: string
+          description: Action that produced this change.
+          example: "start"
+        summary:
+          type: string
+          description: Human-readable description.
+          example: "Start [\"web\", \"worker\"]"
+        status:
+          $ref: "#/components/schemas/ChangeStatus"
+        spawn-time:
+          type: string
+          format: date-time
+        ready-time:
+          type: string
+          format: date-time
+        err:
+          type: string
+          description: Error message if status is `error`.
+      required: [id, kind, summary, status, spawn-time]
+
+    ChangeResponse:
+      type: object
+      properties:
+        result:
+          $ref: "#/components/schemas/ChangeInfo"
+      required: [result]
+
+    # ---- Checks ----
+
+    CheckLevel:
+      type: string
+      enum: [alive, ready]
+      description: |
+        - `alive` — basic liveness check
+        - `ready` — readiness check (implies alive)
+
+    CheckStatus:
+      type: string
+      enum: [up, down]
+
+    CheckInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          example: http-alive
+        level:
+          $ref: "#/components/schemas/CheckLevel"
+        status:
+          $ref: "#/components/schemas/CheckStatus"
+        failures:
+          type: integer
+          description: Number of consecutive failures since last success.
+          example: 0
+        threshold:
+          type: integer
+          description: Number of failures required to declare the check down.
+          example: 3
+      required: [name, level, status, failures, threshold]
+
+    ChecksResponse:
+      type: object
+      properties:
+        result:
+          type: array
+          items:
+            $ref: "#/components/schemas/CheckInfo"
+      required: [result]
+
+    # ---- Logs ----
+
+    LogStream:
+      type: string
+      enum: [stdout, stderr]
+
+    LogEntry:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-03-18T10:01:00.123Z"
+        service:
+          type: string
+          example: web
+        stream:
+          $ref: "#/components/schemas/LogStream"
+        message:
+          type: string
+          example: "Server listening on :8080"
+      required: [timestamp, service, stream, message]
+
+    LogsResponse:
+      type: object
+      properties:
+        result:
+          type: array
+          items:
+            $ref: "#/components/schemas/LogEntry"
+      required: [result]
+
+    # ---- Replan ----
+
+    EmptyResponse:
+      type: object
+      properties:
+        result:
+          type: "null"
+
+    # ---- Identities ----
+
+    IdentityAccess:
+      type: string
+      enum: [read, write, admin]
+      description: |
+        - `read` — can query service/check/log state
+        - `write` — can start/stop/restart services and replan
+        - `admin` — full access including identity management
+
+    LocalIdentity:
+      type: object
+      description: Matches Unix-socket connections by the caller's UID.
+      properties:
+        user-id:
+          type: integer
+          description: Restrict to this UID. Omit to allow any local user.
+          example: 1000
+
+    TlsIdentity:
+      type: object
+      description: Matches TLS connections whose client cert was signed by the given CA.
+      properties:
+        ca-cert:
+          type: string
+          description: PEM-encoded CA certificate.
+      required: [ca-cert]
+
+    Identity:
+      type: object
+      properties:
+        name:
+          type: string
+          example: ops
+        access:
+          $ref: "#/components/schemas/IdentityAccess"
+        local:
+          $ref: "#/components/schemas/LocalIdentity"
+        tls:
+          $ref: "#/components/schemas/TlsIdentity"
+      required: [name, access]
+
+    IdentitiesResponse:
+      type: object
+      properties:
+        result:
+          type: array
+          items:
+            $ref: "#/components/schemas/Identity"
+      required: [result]
+
+    IdentitySpec:
+      type: object
+      description: Identity definition used when adding/updating (name is the map key, not a field).
+      properties:
+        access:
+          $ref: "#/components/schemas/IdentityAccess"
+        local:
+          $ref: "#/components/schemas/LocalIdentity"
+        tls:
+          $ref: "#/components/schemas/TlsIdentity"
+      required: [access]
+
+    AddIdentitiesRequest:
+      type: object
+      properties:
+        identities:
+          type: object
+          description: Map of identity name → identity spec.
+          additionalProperties:
+            $ref: "#/components/schemas/IdentitySpec"
+          example:
+            ops:
+              access: write
+              local: {}
+      required: [identities]
+
+    RemoveIdentitiesRequest:
+      type: object
+      properties:
+        identities:
+          type: array
+          items:
+            type: string
+          description: Names of identities to remove.
+          example: ["ops"]
+      required: [identities]
+
+    RemovedIdentitiesResponse:
+      type: object
+      properties:
+        result:
+          type: array
+          items:
+            type: string
+          description: Names of the identities that were actually removed.
+          example: ["ops"]
+      required: [result]

@@ -1,0 +1,36 @@
+# Filebeat configuration for the vigil-rs example.
+#
+# Data flow:
+#   stdin (ndjson lines from vigild /v1/logs/follow?format=ndjson)
+#     → json decoder (fields promoted to root)
+#     → add_fields processor (add collector=filebeat)
+#     → console output (JSON lines to stdout → podman logs)
+
+filebeat.inputs:
+  - type: stdin
+    # Each line is a JSON object from vigild's ndjson stream.
+    # keys_under_root merges all fields into the top-level event.
+    json.keys_under_root: true
+    json.overwrite_keys: true
+    json.add_error_key: false
+
+processors:
+  - add_fields:
+      target: ''
+      fields:
+        collector: filebeat
+  # Drop Filebeat's internal metadata — keep only the vigild fields.
+  - drop_fields:
+      fields: [agent, input, ecs, host, log]
+      ignore_missing: true
+
+output.console:
+  pretty: false
+  codec.json:
+    pretty: false
+
+# Filebeat's internal diagnostic output is redirected to /dev/null in the
+# service command (2>/dev/null) so it doesn't pollute podman logs.
+logging.level: warning
+logging.to_stderr: true
+logging.to_files: false

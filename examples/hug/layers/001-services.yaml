@@ -1,0 +1,48 @@
+summary: HAProxy + controller (vigil multi-service example)
+
+services:
+
+  haproxy:
+    summary: HAProxy load balancer
+    command: /usr/local/bin/run-haproxy
+    startup: enabled
+    # SIGUSR1 triggers a graceful drain in master-worker mode:
+    # HAProxy stops accepting new connections and exits after in-flight
+    # requests complete. vigild sends SIGKILL after kill-delay if needed.
+    stop-signal: SIGUSR1
+    kill-delay: 30s
+    on-success: ignore
+    on-failure: restart
+    backoff-delay: 1s
+    backoff-factor: 2.0
+    backoff-limit: 30s
+    on-check-failure:
+      check-haproxy: restart
+
+  controller:
+    summary: Controller — configures HAProxy via runtime API
+    command: /usr/local/bin/run-controller
+    startup: enabled
+    # Controller must start after haproxy is accepting connections
+    after:
+      - haproxy
+    on-success: restart
+    on-failure: restart
+    backoff-delay: 2s
+    backoff-factor: 2.0
+    backoff-limit: 60s
+
+checks:
+
+  check-haproxy:
+    level: alive
+    startup: enabled
+    # Give HAProxy time to bind its socket before the first check
+    delay: 3s
+    period: 10s
+    timeout: 5s
+    threshold: 3
+    exec:
+      command: >-
+        curl --silent --fail --unix-socket /var/run/haproxy/health.sock
+        http://localhost/healthz

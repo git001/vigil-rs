@@ -1,0 +1,74 @@
+# vigil-rs + Caddy + PHP-FPM example
+#
+# Three endpoints managed by Caddy:
+#   /caddy-health  → 200 OK static response from Caddy (no FPM involved)
+#   /php-health    → PHP-FPM built-in ping (FastCGI ping, no PHP script)
+#   /healthz       → aggregated: 200 only when both Caddy and FPM are healthy
+#   /              → phpinfo() test page served by PHP-FPM
+#
+# Build (from the vigil-rs repo root):
+#   podman build -f examples/php-caddy/Containerfile -t vigil-php-caddy .
+#
+# Run:
+#   podman run --rm -p 8080:8080 --name vigil-php-caddy vigil-php-caddy
+#
+# Interact:
+#   curl http://localhost:8080/caddy-health
+#   curl http://localhost:8080/php-health
+#   curl http://localhost:8080/healthz
+#   curl http://localhost:8080/
+#
+#   podman exec vigil-php-caddy vigil services list
+#   podman exec vigil-php-caddy vigil checks list
+#   podman exec vigil-php-caddy vigil logs -f
+
+# ---------------------------------------------------------------------------
+# Stage 1 — build vigild + vigil (static musl — runs on any Linux)
+# ---------------------------------------------------------------------------
+FROM rust:alpine AS vigil-builder
+
+RUN apk add --no-cache musl-dev
+
+WORKDIR /vigil-rs
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+
+RUN cargo build --release --bin vigild --bin vigil
+
+# ---------------------------------------------------------------------------
+# Stage 2 — final image
+# ---------------------------------------------------------------------------
+FROM alpine:3.21
+
+RUN apk add --no-cache \
+    caddy \
+    php83 \
+    php83-fpm
+
+# vigil binaries
+COPY --from=vigil-builder /vigil-rs/target/release/vigild /usr/local/bin/vigild
+COPY --from=vigil-builder /vigil-rs/target/release/vigil  /usr/local/bin/vigil
+
+# PHP-FPM configuration
+COPY examples/php-caddy/php-fpm.conf /etc/php83/php-fpm.d/vigil.conf
+
+# Caddy configuration
+COPY examples/php-caddy/Caddyfile /etc/caddy/Caddyfile
+
+# Web root
+COPY examples/php-caddy/www/ /var/www/html/
+
+# vigil layers
+COPY examples/php-caddy/layers/ /etc/vigil/layers/
+
+# Remove Alpine's default www.conf (listens on 127.0.0.1:9000) so our
+# vigil.conf (Unix socket + ping endpoint) is the only pool config.
+RUN rm /etc/php83/php-fpm.d/www.conf
+
+RUN mkdir -p /run/vigil /run/php-fpm
+
+EXPOSE 8080
+
+ENTRYPOINT ["/usr/local/bin/vigild", \
+    "--layers-dir", "/etc/vigil/layers", \
+    "--socket",     "/run/vigil/vigild.sock"]

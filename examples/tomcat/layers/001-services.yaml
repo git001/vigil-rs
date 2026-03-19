@@ -1,0 +1,58 @@
+summary: Apache Tomcat 10.1 supervised by vigil-rs
+
+services:
+
+  tomcat:
+    summary: Apache Tomcat 10.1 servlet container
+    # catalina.sh run starts Tomcat in the foreground — required for vigild.
+    # Never use "catalina.sh start" (background daemon) with a supervisor.
+    command: /usr/local/tomcat/bin/catalina.sh run
+    startup: enabled
+
+    # SIGTERM triggers Tomcat's graceful shutdown sequence:
+    #   1. Stop accepting new HTTP connections
+    #   2. Drain in-flight requests
+    #   3. Call ServletContextListener.contextDestroyed() on all webapps
+    #   4. Exit cleanly
+    # vigild sends SIGKILL after kill-delay if Tomcat does not exit in time.
+    stop-signal: SIGTERM
+    kill-delay: 30s
+
+    on-success: ignore
+    on-failure: restart
+
+    # Backoff prevents tight crash loops (e.g. JVM OOM, port already in use).
+    backoff-delay: 2s
+    backoff-factor: 2.0
+    backoff-limit: 120s
+
+    # Restart tomcat automatically if the alive check fails 3 times in a row.
+    on-check-failure:
+      tomcat-alive: restart
+
+checks:
+
+  tomcat-alive:
+    # Checks that Tomcat's HTTP connector is accepting connections.
+    # Uses the built-in ROOT webapp — no custom health endpoint needed.
+    level: alive
+    startup: enabled
+    # Tomcat takes a few seconds to start the JVM and deploy webapps.
+    delay: 15s
+    period: 10s
+    timeout: 5s
+    threshold: 3
+    http:
+      url: http://127.0.0.1:8080/
+
+  tomcat-ready:
+    # Deeper check: verifies the ROOT webapp returns a successful response.
+    # Use this for Kubernetes readiness probes or load-balancer gating.
+    level: ready
+    startup: enabled
+    delay: 20s
+    period: 15s
+    timeout: 8s
+    threshold: 2
+    http:
+      url: http://127.0.0.1:8080/

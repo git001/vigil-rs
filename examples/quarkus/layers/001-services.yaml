@@ -1,0 +1,65 @@
+summary: Quarkus application supervised by vigil-rs
+
+services:
+
+  quarkus:
+    summary: Quarkus REST application (Vert.x/Netty HTTP server)
+    # quarkus-run.jar is the fast-jar entry point — runs in the foreground.
+    # Quarkus uses Vert.x/Netty, not a servlet container, so no wrapper script needed.
+    command: java -jar /opt/quarkus/quarkus-run.jar
+    startup: enabled
+
+    # SIGTERM triggers Quarkus's graceful shutdown:
+    #   1. Quarkus fires @Observes ShutdownEvent on all beans
+    #   2. In-flight HTTP requests are drained
+    #   3. The Vert.x event loop exits cleanly
+    # vigild sends SIGKILL after kill-delay if the JVM does not exit in time.
+    stop-signal: SIGTERM
+    kill-delay: 30s
+
+    on-success: ignore
+    on-failure: restart
+
+    # Exponential backoff prevents tight restart loops on JVM startup failures
+    # (e.g. port conflict, missing config, OOM at startup).
+    backoff-delay: 2s
+    backoff-factor: 2.0
+    backoff-limit: 120s
+
+    # Forward Quarkus stdout/stderr to vigild's stdout/stderr so that
+    # "podman logs" shows both vigil and application log lines.
+    logs-forward: enabled
+
+    # Restart if the liveness check fails consistently — indicates the JVM
+    # is alive but the application is stuck (e.g. deadlock, heap exhaustion).
+    on-check-failure:
+      quarkus-alive: restart
+
+checks:
+
+  quarkus-alive:
+    # SmallRye Health liveness probe — provided by quarkus-smallrye-health.
+    # Returns {"status":"UP"} when Quarkus and all @Liveness checks pass.
+    # A DOWN response or connection failure counts as a failed check.
+    level: alive
+    startup: enabled
+    # Quarkus + JVM startup typically takes 2–5 s in fast-jar mode.
+    delay: 10s
+    period: 10s
+    timeout: 5s
+    threshold: 3
+    http:
+      url: http://127.0.0.1:8080/q/health/live
+
+  quarkus-ready:
+    # SmallRye Health readiness probe — all @Readiness checks must pass.
+    # Gates load-balancer / Kubernetes readiness; fails until external
+    # dependencies (DB, message broker) are available.
+    level: ready
+    startup: enabled
+    delay: 15s
+    period: 15s
+    timeout: 8s
+    threshold: 2
+    http:
+      url: http://127.0.0.1:8080/q/health/ready

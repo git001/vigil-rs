@@ -1,0 +1,76 @@
+# AFTER: vigil-rs based container
+#
+# Same two services: nginx (reverse proxy) + api (backend)
+#
+# What changed vs. s6-overlay:
+#   + Real exit code: if nginx exits non-zero permanently, the container
+#     exits with that code — Kubernetes/podman sees the real failure reason
+#   + Built-in health checks with threshold and on-failure action (no extra service)
+#   + Exponential backoff on restart — no tight restart loops
+#   + Custom stop signal: SIGQUIT triggers nginx graceful drain automatically
+#   + Single YAML layer replaces the entire s6-rc.d/ directory tree
+#   + Log collection: logs-push-socket on each service — one line per service
+#     vs. a separate s6-rc.d/<service>-log/ directory for every service in s6
+#   + REST API + vigil CLI to inspect and control services from outside:
+#       podman exec <ctr> vigil services list
+#       podman exec <ctr> vigil logs -f
+#       podman exec <ctr> vigil checks list
+#
+# Build (from the vigil-rs repo root):
+#   podman build -f examples/migrate-from-s6/Containerfile \
+#                -t migrate-s6-after .
+#
+# Run:
+#   podman run --rm -p 8080:8080 --name migrate-after migrate-s6-after
+#
+# Interact:
+#   podman exec migrate-after vigil services list
+#   podman exec migrate-after vigil logs -f
+#   podman exec migrate-after vigil checks list
+
+# ---------------------------------------------------------------------------
+# Stage 1 — build vigild + vigil
+# ---------------------------------------------------------------------------
+FROM rust:alpine AS vigil-builder
+
+RUN apk add --no-cache musl-dev
+
+WORKDIR /vigil-rs
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+
+RUN cargo build --release --bin vigild --bin vigil
+
+# ---------------------------------------------------------------------------
+# Stage 2 — final image
+# ---------------------------------------------------------------------------
+FROM alpine:3.21
+
+RUN apk add --no-cache \
+    nginx \
+    curl \
+    socat
+
+# Fake api binary for the example
+RUN mkdir -p /app && \
+    printf '#!/bin/sh\necho "api listening on 127.0.0.1:3000"\nwhile true; do sleep 60; done\n' \
+    > /app/api && chmod +x /app/api
+
+# vigil binaries
+COPY --from=vigil-builder /vigil-rs/target/release/vigild /usr/local/bin/vigild
+COPY --from=vigil-builder /vigil-rs/target/release/vigil  /usr/local/bin/vigil
+
+# nginx config
+COPY examples/migrate-from-s6/nginx.conf /etc/nginx/nginx.conf
+
+# vigil layer — replaces the entire s6-rc.d/ directory tree
+COPY examples/migrate-from-s6/layers/ /etc/vigil/layers/
+
+RUN mkdir -p /run/vigil /run/nginx /run/collector
+
+EXPOSE 8080
+
+# vigild is PID 1 — zombie-reaper mode activates automatically
+ENTRYPOINT ["/usr/local/bin/vigild", \
+    "--layers-dir", "/etc/vigil/layers", \
+    "--socket",     "/run/vigil/vigild.sock"]

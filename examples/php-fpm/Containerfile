@@ -1,0 +1,71 @@
+# vigil-rs + PHP-FPM (standalone, no web server) example
+#
+# Demonstrates vigild supervising a bare PHP-FPM process manager with:
+#   - exec-based health check: pgrep verifies the php-fpm master is alive
+#   - SIGQUIT → graceful shutdown (drain workers before exit)
+#   - on-check-failure restart if FPM stops responding
+#
+# Use case: PHP queue workers / background job processors that consume tasks
+# directly from a queue (Redis, DB, filesystem) without an HTTP front-end.
+# The FastCGI socket is still available for a web server added later via layers.
+#
+# Build (from the vigil-rs repo root):
+#   podman build -f examples/php-fpm/Containerfile -t vigil-php-fpm .
+#
+# Run:
+#   podman run --rm --name vigil-php-fpm vigil-php-fpm
+#
+# Interact:
+#   podman exec vigil-php-fpm vigil services list
+#   podman exec vigil-php-fpm vigil checks list
+#   podman exec vigil-php-fpm vigil logs -f
+#   podman exec vigil-php-fpm pgrep -a php-fpm83
+
+# ---------------------------------------------------------------------------
+# Stage 1 — build vigild + vigil (static musl binaries)
+# ---------------------------------------------------------------------------
+FROM rust:alpine AS vigil-builder
+
+RUN apk add --no-cache musl-dev
+
+WORKDIR /vigil-rs
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+
+RUN cargo build --release --bin vigild --bin vigil
+
+# ---------------------------------------------------------------------------
+# Stage 2 — final image: Alpine + PHP-FPM
+# ---------------------------------------------------------------------------
+FROM alpine:3.21
+
+# php83-fpm: the process manager
+# procps:    provides pgrep (used by the vigil exec health check)
+RUN apk add --no-cache php83-fpm procps
+
+# vigil binaries (statically linked musl — work on any Linux libc)
+COPY --from=vigil-builder /vigil-rs/target/release/vigild /usr/local/bin/vigild
+COPY --from=vigil-builder /vigil-rs/target/release/vigil  /usr/local/bin/vigil
+
+# Replace the main php-fpm.conf so we can set [global] error_log = /dev/stderr.
+# The global error_log (master-process messages) can only be configured here,
+# not from a file in php-fpm.d/.
+COPY examples/php-fpm/php-fpm.conf /etc/php83/php-fpm.conf
+
+# Pool config: access log → stdout, worker errors → stderr.
+# Remove the default www.conf first (conflicting [www] pool definition).
+RUN rm /etc/php83/php-fpm.d/www.conf
+COPY examples/php-fpm/pool.conf /etc/php83/php-fpm.d/vigil.conf
+
+# vigil layer config
+COPY examples/php-fpm/layers/ /etc/vigil/layers/
+
+RUN mkdir -p /run/vigil /run/php-fpm
+
+# No EXPOSE — FPM listens on a Unix socket; add a web server via an extra
+# layer if HTTP access is needed.
+
+# vigild is PID 1 — PHP-FPM is spawned as a supervised child process
+ENTRYPOINT ["/usr/local/bin/vigild", \
+    "--layers-dir", "/etc/vigil/layers", \
+    "--socket",     "/run/vigil/vigild.sock"]

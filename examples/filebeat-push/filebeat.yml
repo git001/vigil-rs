@@ -1,0 +1,42 @@
+# Filebeat configuration for the vigil-rs push example.
+#
+# Data flow:
+#   Unix socket /run/collector/input.sock  (vigild connects here and pushes ndjson)
+#     → unix input (json decoder, fields promoted to root)
+#     → add_fields processor (add collector=filebeat)
+#     → console output (JSON lines to stdout → podman logs)
+#
+# No curl, no SSE framing — vigild is the client, Filebeat is the server.
+
+filebeat.inputs:
+  - type: unix
+    path: /run/collector/input.sock
+    # The unix input reads each ndjson line as plain text into "message".
+    # JSON decoding is handled by the decode_json_fields processor below
+    # (json.* options are not supported by the unix input type).
+
+processors:
+  # Parse the "message" field as JSON and promote all fields to root.
+  # This decodes the vigild ndjson fields: timestamp, service, stream, message.
+  - decode_json_fields:
+      fields: ["message"]
+      target: ""
+      overwrite_keys: true
+      add_error_key: false
+  - add_fields:
+      target: ''
+      fields:
+        collector: filebeat
+  # Drop Filebeat's internal metadata — keep only the vigild fields.
+  - drop_fields:
+      fields: [agent, input, ecs, host, log]
+      ignore_missing: true
+
+output.console:
+  pretty: false
+  codec.json:
+    pretty: false
+
+logging.level: warning
+logging.to_stderr: true
+logging.to_files: false

@@ -3,20 +3,24 @@ members = [
     "crates/vigil-types",
     "crates/vigild",
     "crates/vigil",
+    "crates/vigil-http-streamer",
 ]
 resolver = "2"
 
 [workspace.dependencies]
 # Async runtime
 tokio              = { version = "1",    features = ["full"] }
+tokio-stream       = { version = "0.1", features = ["sync"] }
 # HTTP server
 axum               = { version = "0.8",  features = ["ws", "macros"] }
 tower              = { version = "0.5" }
 tower-http         = { version = "0.6",  features = ["trace"] }
 # HTTP client (CLI-side)
-reqwest            = { version = "0.12", features = ["json", "stream"] }
+reqwest            = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 hyper              = { version = "1",    features = ["full"] }
-hyper-util         = { version = "0.1" }
+hyper-util         = { version = "0.1",  features = ["client-legacy", "http1", "tokio"] }
+http-body-util     = { version = "0.1" }
+bytes              = { version = "1" }
 # Serialisation
 serde              = { version = "1",    features = ["derive"] }
 serde_json         = { version = "1" }
@@ -30,7 +34,8 @@ thiserror          = { version = "2" }
 tracing            = { version = "0.1" }
 tracing-subscriber = { version = "0.3",  features = ["env-filter", "json"] }
 # TLS
-rustls             = { version = "0.23" }
+rustls             = { version = "0.23", features = ["aws-lc-rs"] }
+rustls-pemfile     = { version = "2" }
 tokio-rustls       = { version = "0.26" }
 rcgen              = { version = "0.13" }
 # Unix / signals / process
@@ -45,5 +50,13 @@ chrono             = { version = "0.4",  features = ["serde"] }
 notify             = { version = "7" }
 regex              = { version = "1" }
 indexmap           = { version = "2",    features = ["serde"] }
+# Encoding
+base64             = { version = "0.22" }
+# Password hashing
+sha-crypt          = { version = "0.5" }
+# Metrics
+prometheus-client  = { version = "0.22" }
 # Allocator
 mimalloc           = { version = "0.1",  default-features = false }
+# OpenAPI
+utoipa             = { version = "5",    features = ["axum_extras", "chrono", "uuid"] }

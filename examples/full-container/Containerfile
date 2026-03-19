@@ -1,0 +1,58 @@
+# vigil-rs + h2o example container
+#
+# Build (from the vigil-rs repo root):
+#   podman build -f examples/full-container/Containerfile -t vigil-h2o .
+#
+# Run:
+#   podman run --rm -p 8080:8080 vigil-h2o
+#
+# Interact with vigild inside the running container:
+#   podman exec <ctr> vigil services
+#   podman exec <ctr> vigil logs
+#   podman exec <ctr> vigil checks
+
+# ---------------------------------------------------------------------------
+# Stage 1 — build vigild + vigil
+# ---------------------------------------------------------------------------
+FROM rust:1-bookworm AS vigil-builder
+
+WORKDIR /vigil-rs
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+
+RUN cargo build --release --bin vigild --bin vigil
+
+# ---------------------------------------------------------------------------
+# Stage 2 — final image
+# ---------------------------------------------------------------------------
+FROM debian:bookworm-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        h2o \
+        curl \
+        procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# vigil supervisor daemon + CLI
+COPY --from=vigil-builder /vigil-rs/target/release/vigild /usr/local/bin/vigild
+COPY --from=vigil-builder /vigil-rs/target/release/vigil  /usr/local/bin/vigil
+
+# h2o configuration
+COPY examples/full-container/h2o.conf /etc/h2o/h2o.conf
+
+# static web root
+COPY examples/full-container/www/ /var/www/html/
+
+# vigil layer
+COPY examples/full-container/layers/ /etc/vigil/layers/
+
+RUN mkdir -p /run/vigil
+
+EXPOSE 8080
+
+# vigild is PID 1 — zombie-reaper mode activates automatically
+ENTRYPOINT ["/usr/local/bin/vigild", \
+    "--layers-dir", "/etc/vigil/layers", \
+    "--tls-addr","127.0.0.1:8081"]
+#    "--socket",     "/run/vigil/vigild.sock"]

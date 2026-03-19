@@ -1,0 +1,457 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v1.0.0)'
+        required: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write   # create releases, upload assets
+  packages: write   # push to ghcr.io
+  id-token: write   # OIDC for cosign keyless signing
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # 1. Changelog
+  # ───────────────────────────────────────────────────────────────────────────
+  changelog:
+    name: Changelog
+    runs-on: ubuntu-latest
+    outputs:
+      content: ${{ steps.cliff.outputs.content }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: cliff
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+
+      - name: Upload CHANGELOG.md
+        uses: actions/upload-artifact@v4
+        with:
+          name: changelog
+          path: CHANGELOG.md
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # 2. Build static binaries  (amd64 + arm64, musl)
+  # ───────────────────────────────────────────────────────────────────────────
+  build:
+    name: Build (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-musl
+            use_cross: false
+          - arch: arm64
+            target: aarch64-unknown-linux-musl
+            use_cross: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Install musl-tools (amd64)
+        if: matrix.arch == 'amd64'
+        run: sudo apt-get install -y --no-install-recommends musl-tools
+
+      - name: Install cross (arm64)
+        if: matrix.arch == 'arm64'
+        run: cargo install cross --locked --git https://github.com/cross-rs/cross
+
+      - name: Build binaries (amd64)
+        if: matrix.arch == 'amd64'
+        run: cargo build --release --target ${{ matrix.target }} --bin vigild --bin vigil --bin vigil-http-streamer
+
+      - name: Build binaries (arm64 via cross)
+        if: matrix.arch == 'arm64'
+        run: cross build --release --target ${{ matrix.target }} --bin vigild --bin vigil --bin vigil-http-streamer
+
+      - name: Stage artifacts
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/vigild               dist/vigild-${{ matrix.arch }}
+          cp target/${{ matrix.target }}/release/vigil                dist/vigil-${{ matrix.arch }}
+          cp target/${{ matrix.target }}/release/vigil-http-streamer  dist/vigil-http-streamer-${{ matrix.arch }}
+          chmod +x dist/vigild-${{ matrix.arch }} dist/vigil-${{ matrix.arch }} dist/vigil-http-streamer-${{ matrix.arch }}
+          sha256sum dist/* > dist/SHA256SUMS-${{ matrix.arch }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.arch }}
+          path: dist/
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # 3. Debian / Ubuntu .deb packages
+  # ───────────────────────────────────────────────────────────────────────────
+  package-deb:
+    name: .deb — ${{ matrix.distro }} ${{ matrix.version }}
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: debian
+            version: "12"
+            codename: bookworm
+          - distro: debian
+            version: "13"
+            codename: trixie
+          - distro: ubuntu
+            version: "22.04"
+            codename: jammy
+          - distro: ubuntu
+            version: "24.04"
+            codename: noble
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download amd64 binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries-amd64
+          path: dist-bin/
+
+      - name: Stage binary in target/release/
+        run: |
+          mkdir -p target/release
+          cp dist-bin/vigild-amd64              target/release/vigild
+          cp dist-bin/vigil-amd64               target/release/vigil
+          cp dist-bin/vigil-http-streamer-amd64 target/release/vigil-http-streamer
+          chmod +x target/release/vigild target/release/vigil target/release/vigil-http-streamer
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --locked
+
+      - name: Extract version
+        run: echo "PKG_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Build vigild .deb
+        run: |
+          cargo deb -p vigild --no-build \
+            -o "dist/vigild_${{ env.PKG_VERSION }}_amd64_${{ matrix.distro }}${{ matrix.version }}.deb"
+
+      - name: Build vigil .deb
+        run: |
+          cargo deb -p vigil --no-build \
+            -o "dist/vigil_${{ env.PKG_VERSION }}_amd64_${{ matrix.distro }}${{ matrix.version }}.deb"
+
+      - name: Build vigil-http-streamer .deb
+        run: |
+          cargo deb -p vigil-http-streamer --no-build \
+            -o "dist/vigil-http-streamer_${{ env.PKG_VERSION }}_amd64_${{ matrix.distro }}${{ matrix.version }}.deb"
+
+      - name: Verify packages
+        run: |
+          for f in dist/*.deb; do
+            echo "=== $f ==="
+            dpkg-deb --info "$f" | grep -E 'Package|Version|Architecture|Installed-Size'
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.distro }}${{ matrix.version }}
+          path: dist/*.deb
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # 4. RPM packages  (RHEL 8 / 9 / 10)
+  # ───────────────────────────────────────────────────────────────────────────
+  package-rpm:
+    name: .rpm — RHEL ${{ matrix.rhel }}
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rhel: "8"
+            dist: el8
+            # RHEL 8: RPM must use gzip or xz payload (no zstd support)
+            compress: gzip
+          - rhel: "9"
+            dist: el9
+            compress: zstd
+          - rhel: "10"
+            dist: el10
+            compress: zstd
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download amd64 binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries-amd64
+          path: dist-bin/
+
+      - name: Stage binary in target/release/
+        run: |
+          mkdir -p target/release
+          cp dist-bin/vigild-amd64              target/release/vigild
+          cp dist-bin/vigil-amd64               target/release/vigil
+          cp dist-bin/vigil-http-streamer-amd64 target/release/vigil-http-streamer
+          chmod +x target/release/vigild target/release/vigil target/release/vigil-http-streamer
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-generate-rpm
+        run: cargo install cargo-generate-rpm --locked
+
+      - name: Extract version
+        run: echo "PKG_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Build vigild .rpm
+        run: |
+          cargo generate-rpm -p crates/vigild \
+            --payload-compress ${{ matrix.compress }} \
+            -o dist/
+
+      - name: Build vigil .rpm
+        run: |
+          cargo generate-rpm -p crates/vigil \
+            --payload-compress ${{ matrix.compress }} \
+            -o dist/
+
+      - name: Build vigil-http-streamer .rpm
+        run: |
+          cargo generate-rpm -p crates/vigil-http-streamer \
+            --payload-compress ${{ matrix.compress }} \
+            -o dist/
+
+      - name: Add dist tag to RPM filenames
+        run: |
+          mkdir -p dist-out
+          for f in dist/*.rpm; do
+            base=$(basename "$f" .rpm)
+            cp "$f" "dist-out/${base}.${{ matrix.dist }}.rpm"
+          done
+
+      - name: Verify packages
+        run: |
+          for f in dist-out/*.rpm; do
+            echo "=== $f ==="
+            rpm -qip "$f" 2>/dev/null | grep -E 'Name|Version|Release|Architecture|Size' || true
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm-rhel${{ matrix.rhel }}
+          path: dist-out/*.rpm
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # 5. Container image  (multi-arch: amd64 + arm64)
+  # ───────────────────────────────────────────────────────────────────────────
+  container:
+    name: Container image
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+      image:  ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download amd64 binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries-amd64
+          path: dist/amd64/
+
+      - name: Download arm64 binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries-arm64
+          path: dist/arm64/
+
+      - name: Make binaries executable
+        run: chmod +x dist/amd64/* dist/arm64/*
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ !contains(github.ref, '-rc') && !contains(github.ref, '-beta') && !contains(github.ref, '-alpha') }}
+          labels: |
+            org.opencontainers.image.title=vigil-rs
+            org.opencontainers.image.description=Rust service supervisor and container init daemon
+            org.opencontainers.image.licenses=AGPL-3.0-only
+            org.opencontainers.image.vendor=vigil-rs contributors
+
+      - name: Build and push multi-arch image
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags:       ${{ steps.meta.outputs.tags }}
+          labels:     ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+          provenance: true
+          sbom:       true
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # 6. SBOM + Image signing
+  # ───────────────────────────────────────────────────────────────────────────
+  sbom:
+    name: SBOM & signing
+    needs: [build, container]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Sign container image with cosign (keyless, OIDC) ────────────────────
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign container image
+        run: |
+          cosign sign --yes \
+            "${{ needs.container.outputs.image }}@${{ needs.container.outputs.digest }}"
+
+      # ── SBOM: container image ───────────────────────────────────────────────
+      - name: Generate SBOM — container image (SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image:       "${{ needs.container.outputs.image }}@${{ needs.container.outputs.digest }}"
+          format:      spdx-json
+          output-file: sbom-container.spdx.json
+
+      - name: Generate SBOM — container image (CycloneDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image:       "${{ needs.container.outputs.image }}@${{ needs.container.outputs.digest }}"
+          format:      cyclonedx-json
+          output-file: sbom-container.cdx.json
+
+      # ── SBOM: binary artifacts ──────────────────────────────────────────────
+      - name: Download amd64 binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries-amd64
+          path: dist/
+
+      - name: Generate SBOM — binaries (SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          path:        dist/
+          format:      spdx-json
+          output-file: sbom-binaries.spdx.json
+
+      # ── Attest SBOM to container image ────────────────────────────────────
+      - name: Attest SBOM
+        run: |
+          cosign attest --yes \
+            --predicate sbom-container.spdx.json \
+            --type spdxjson \
+            "${{ needs.container.outputs.image }}@${{ needs.container.outputs.digest }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: |
+            sbom-container.spdx.json
+            sbom-container.cdx.json
+            sbom-binaries.spdx.json
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # 7. GitHub Release
+  # ───────────────────────────────────────────────────────────────────────────
+  release:
+    name: GitHub Release
+    needs: [changelog, build, package-deb, package-rpm, sbom]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: List artifacts
+        run: find artifacts/ -type f | sort
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd artifacts
+          find . -type f \( -name "*.deb" -o -name "*.rpm" -o -name "vigild-*" -o -name "vigil-*" -o -name "*.json" \) \
+            | sort | xargs sha256sum > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "vigil-rs ${{ github.ref_name }}"
+          body: ${{ needs.changelog.outputs.content }}
+          draft: false
+          prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}
+          files: |
+            artifacts/vigild-amd64
+            artifacts/vigild-arm64
+            artifacts/vigil-amd64
+            artifacts/vigil-arm64
+            artifacts/vigil-http-streamer-amd64
+            artifacts/vigil-http-streamer-arm64
+            artifacts/*.deb
+            artifacts/*.rpm
+            artifacts/sbom-container.spdx.json
+            artifacts/sbom-container.cdx.json
+            artifacts/sbom-binaries.spdx.json
+            artifacts/SHA256SUMS
+
+      - name: Print container image
+        run: |
+          echo "Container image pushed to:"
+          echo "  ghcr.io/${{ github.repository }}:${{ github.ref_name }}"
+          echo "  ghcr.io/${{ github.repository }}:latest"

@@ -1,0 +1,63 @@
+# Vector pipeline for the vigil-rs example.
+#
+# Data flow:
+#   exec source  (curl → vigild NDJSON stream → JSON lines)
+#     → remap transform  (parse fields, add collector=vector)
+#     → console sink     (stdout, JSON per line)
+
+# ---------------------------------------------------------------------------
+# Source — consume the vigild live log stream
+# ---------------------------------------------------------------------------
+
+[sources.vigil_logs]
+type = "exec"
+# Streaming mode: Vector spawns the command once and reads its stdout
+# continuously for as long as it runs — ideal for a long-lived ndjson stream.
+mode = "streaming"
+# ?format=ndjson returns application/x-ndjson: one JSON object per line,
+# no SSE framing. No grep/sed pipeline needed.
+command = [
+  "curl", "-sN", "--unix-socket", "/run/vigil/vigild.sock",
+  "http://localhost/v1/logs/follow?format=ndjson"
+]
+# Each line is a self-contained JSON object from vigild.
+decoding.codec = "json"
+framing.method = "newline_delimited"
+
+# ---------------------------------------------------------------------------
+# Transform — enrich records
+# ---------------------------------------------------------------------------
+
+[transforms.enrich]
+type   = "remap"
+inputs = ["vigil_logs"]
+source = """
+# Tag every record with the collector identity so downstream sinks
+# (Loki, Elasticsearch, …) can label log streams by source.
+.collector = "vector"
+
+# Promote the vigild "stream" field to a standard Vector log level field
+# so level-based routing transforms work out of the box.
+if .stream == "stderr" {
+  .level = "error"
+} else {
+  .level = "info"
+}
+
+# Drop exec-source metadata that isn't useful downstream.
+del(.command)
+del(.source_type)
+del(.pid)
+del(.host)
+"""
+
+# ---------------------------------------------------------------------------
+# Sink — print to stdout
+# ---------------------------------------------------------------------------
+
+[sinks.console]
+type     = "console"
+inputs   = ["enrich"]
+# JSON lines to stdout: podman/docker logs captures them here.
+# In a real setup replace this sink with loki, elasticsearch, s3, etc.
+encoding.codec = "json"

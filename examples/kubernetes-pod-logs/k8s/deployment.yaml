@@ -1,0 +1,66 @@
+# Deploys the vigil-rs kubernetes-pod-logs collector.
+#
+# One replica is sufficient — vigil-rs restarts Filebeat and the
+# pod-log-collector script if either crashes (with exponential backoff).
+#
+# Set NAMESPACE to the namespace whose pod logs you want to collect.
+# To watch multiple namespaces, deploy one instance per namespace.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vigil-pod-log-collector
+  namespace: zzz-test-build
+  annotations:
+    # OpenShift image change trigger: automatically rolls out a new pod
+    # whenever oc start-build pushes a new image to the ImageStream.
+    image.openshift.io/triggers: >-
+      [{"from":{"kind":"ImageStreamTag","name":"vigil-k8s-pod-logs:latest","namespace":"zzz-test-build"},"fieldPath":"spec.template.spec.containers[?(@.name==\"vigil\")].image","pause":"false"}]
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vigil-pod-log-collector
+  template:
+    metadata:
+      labels:
+        app: vigil-pod-log-collector
+    spec:
+      serviceAccountName: vigil-pod-log-collector
+
+      containers:
+        - name: vigil
+          # OpenShift internal registry — replace <namespace> with the namespace
+          # where oc new-build pushed the image (usually the same namespace).
+          # Full path required: OpenShift enforces qualified image names.
+          #
+          #   oc get is vigil-k8s-pod-logs -o jsonpath='{.status.dockerImageRepository}'
+          #
+          image: image-registry.openshift-image-registry.svc:5000/zzz-test-build/vigil-k8s-pod-logs:latest
+          imagePullPolicy: Always
+
+          env:
+            # Namespace to watch for pod logs
+            - name: NAMESPACE
+              value: "zzz-test-build"
+            # Seconds between pod-list refreshes
+            - name: WATCH_INTERVAL
+              value: "30"
+            # Label selector — omit to collect all pods in the namespace.
+            # Examples: "app=myapp"  "app=api,env=prod"  "tier notin (cache)"
+            - name: POD_SELECTOR
+              value: "app=caddyv2-upload"
+            # Emit vigild's own logs as JSON (matches Filebeat's output format)
+            - name: VIGIL_LOG_FORMAT
+              value: "json"
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+
+          # vigild Unix socket at /tmp/vigild.sock — not exposed externally
+          # but useful for: kubectl exec <pod> -- vigil services list

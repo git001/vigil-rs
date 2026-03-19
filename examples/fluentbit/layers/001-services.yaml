@@ -1,0 +1,32 @@
+summary: Fluent Bit push-mode log collection example
+
+services:
+
+  dummy-logger:
+    summary: Generates simulated application log output (stdout + stderr)
+    command: >-
+      sh -c 'i=0; while true; do
+      echo "INFO  req=$i GET /api/users status=200 duration_ms=$((i % 47 + 3))";
+      echo "DEBUG req=$i cache_key=user_$((i % 5)) hit=$((i % 3 == 0))";
+      if [ $((i % 7)) -eq 0 ]; then echo "ERROR req=$i downstream=payments timeout=30s" >&2; fi;
+      i=$((i+1)); sleep 1; done'
+    startup: enabled
+    on-failure: restart
+    # vigild pushes ndjson directly to Fluent Bit's TCP listener.
+    # No curl wrapper, no SSE framing — vigild is the client.
+    logs-forward: disabled
+    logs-push-addr: 127.0.0.1:5170
+
+  fluentbit:
+    summary: Fluent Bit — listens on TCP 5170; vigild pushes ndjson directly
+    # -q suppresses the startup banner (printed before config is loaded,
+    # so Quiet=on in the config file has no effect).
+    # 2>/dev/null suppresses engine diagnostic messages on stderr.
+    command: sh -c '/fluent-bit/bin/fluent-bit -q -c /fluent-bit/etc/vigil-fluent-bit.conf 2>/dev/null'
+    startup: enabled
+    on-failure: restart
+    backoff-delay: 2s
+    backoff-factor: 2.0
+    backoff-limit: 30s
+    # Fluent Bit writes collected logs directly to container stdout.
+    logs-forward: passthrough

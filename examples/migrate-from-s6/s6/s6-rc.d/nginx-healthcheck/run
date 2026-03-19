@@ -1,0 +1,7 @@
+#!/command/execlineb -P
+# Health checks in s6 require a separate longrun service that loops manually.
+# There is no built-in check concept — no threshold, no on-failure action.
+loopwhilex -x 0
+  foreground { sleep 10 }
+  foreground { curl -sf http://127.0.0.1:8080/healthz }
+  exit 0

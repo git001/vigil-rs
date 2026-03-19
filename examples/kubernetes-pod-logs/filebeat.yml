@@ -1,0 +1,42 @@
+# Filebeat configuration for the kubernetes-pod-logs vigil-rs example.
+#
+# Data flow:
+#   pod-log-collector  →  TCP 127.0.0.1:5170  (one ndjson line per log entry)
+#     → tcp input (reads newline-delimited lines)
+#     → decode_json_fields (promotes pod, namespace, message, stream to root)
+#     → add_fields (collector=filebeat)
+#     → console output (JSON lines → podman/container logs)
+#
+# In production, replace output.console with your real sink:
+#   output.logstash, output.elasticsearch, output.kafka, etc.
+
+filebeat.inputs:
+  - type: tcp
+    host: "127.0.0.1:5170"
+    # pod-log-collector sends one JSON object per line.
+    # decode_json_fields (below) promotes the fields to root.
+
+processors:
+  # The tcp input stores each raw line in "message". Parse it as JSON
+  # so pod, namespace, timestamp, stream become top-level fields.
+  - decode_json_fields:
+      fields: ["message"]
+      target: ""
+      overwrite_keys: true
+      add_error_key: false
+  - add_fields:
+      target: ''
+      fields:
+        collector: filebeat
+  - drop_fields:
+      fields: [agent, input, ecs, host, log]
+      ignore_missing: true
+
+output.console:
+  pretty: false
+  codec.json:
+    pretty: false
+
+logging.level: warning
+logging.to_stderr: true
+logging.to_files: false

@@ -1,0 +1,30 @@
+summary: h2o web server
+
+services:
+
+  h2o:
+    summary: h2o HTTP/1.1 + HTTP/2 web server
+    command: h2o -c /etc/h2o/h2o.conf
+    startup: enabled
+    # h2o reacts to SIGTERM with a graceful shutdown: it stops accepting new
+    # connections and waits for in-flight requests to finish.
+    stop-signal: SIGTERM
+    kill-delay: 10s
+    on-failure: restart
+    backoff-delay: 1s
+    backoff-factor: 2.0
+    backoff-limit: 30s
+    on-check-failure:
+      h2o-alive: restart
+
+checks:
+
+  h2o-alive:
+    level: alive
+    startup: enabled
+# default 3s    delay: 5s
+    period: 10s
+    timeout: 3s
+    threshold: 3
+    http:
+      url: http://localhost:8080/healthz

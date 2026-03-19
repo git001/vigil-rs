@@ -1,0 +1,38 @@
+summary: Filebeat log collection example
+
+services:
+
+  dummy-logger:
+    summary: Generates simulated application log output (stdout + stderr)
+    command: >-
+      sh -c 'i=0; while true; do
+      echo "INFO  req=$i GET /api/users status=200 duration_ms=$((i % 47 + 3))";
+      echo "DEBUG req=$i cache_key=user_$((i % 5)) hit=$((i % 3 == 0))";
+      if [ $((i % 7)) -eq 0 ]; then echo "ERROR req=$i downstream=payments timeout=30s" >&2; fi;
+      i=$((i+1)); sleep 1; done'
+    startup: enabled
+    on-failure: restart
+    # Disable vigild's built-in log forwarding — Filebeat is the only
+    # delivery path. Prevents double-printing on container stdout.
+    logs-forward: disabled
+
+  filebeat:
+    summary: Filebeat — consumes vigild ndjson stream and emits enriched JSON
+    # ?format=ndjson: one JSON object per line, no SSE framing.
+    # curl pipes those lines directly to Filebeat stdin.
+    command: >-
+      sh -c 'curl -sN --unix-socket /run/vigil/vigild.sock
+      "http://localhost/v1/logs/follow?format=ndjson"
+      | /usr/share/filebeat/filebeat run --strict.perms=false
+      -c /usr/share/filebeat/vigil-filebeat.yml 2>/dev/null'
+    startup: enabled
+    # Wait until dummy-logger is active before subscribing to the log stream.
+    after:
+      - dummy-logger
+    on-failure: restart
+    backoff-delay: 2s
+    backoff-factor: 2.0
+    backoff-limit: 30s
+    # Filebeat writes collected logs directly to container stdout.
+    # passthrough lets the process own fd 1 without vigild intercepting.
+    logs-forward: passthrough

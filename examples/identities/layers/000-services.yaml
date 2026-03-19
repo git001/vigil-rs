@@ -1,0 +1,65 @@
+summary: Identity example — three fake services with health checks
+
+# This layer defines three simple long-running services to give the
+# identities example something observable:
+#
+#   counter  — increments a counter every second (stdout log demo)
+#   ticker   — emits a heartbeat every 5 s
+#   flaky    — restarts randomly to demonstrate on-failure handling
+#
+# All commands use only busybox/sh so no extra packages are needed.
+
+services:
+
+  counter:
+    summary: Counts seconds since start
+    command: >-
+      sh -c 'i=0; while true; do echo "tick $i"; i=$((i+1)); sleep 1; done'
+    startup: enabled
+    on-failure: restart
+    backoff-delay: 1s
+    backoff-factor: 2.0
+    backoff-limit: 30s
+
+  ticker:
+    summary: Emits a heartbeat every 5 seconds
+    command: >-
+      sh -c 'while true; do echo "heartbeat $(date -Iseconds)"; sleep 5; done'
+    startup: enabled
+    on-failure: restart
+    backoff-delay: 1s
+    backoff-factor: 2.0
+    backoff-limit: 30s
+
+  flaky:
+    summary: Exits with a random code every 10–20 s (demonstrates restart)
+    command: >-
+      sh -c 'n=$((RANDOM % 11 + 10)); echo "running for ${n}s"; sleep $n; exit 1'
+    startup: enabled
+    on-success: restart
+    on-failure: restart
+    backoff-delay: 2s
+    backoff-factor: 1.5
+    backoff-limit: 30s
+
+checks:
+
+  counter-alive:
+    level: alive
+    startup: enabled
+    period: 10s
+    timeout: 3s
+    threshold: 2
+    exec:
+      command: sh -c 'kill -0 $(pgrep -f "tick [0-9]") 2>/dev/null'
+      service-context: counter
+
+  ticker-alive:
+    level: alive
+    startup: enabled
+    period: 15s
+    timeout: 3s
+    threshold: 2
+    exec:
+      command: sh -c 'kill -0 $(pgrep -f heartbeat) 2>/dev/null'
+      service-context: ticker

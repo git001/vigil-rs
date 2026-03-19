@@ -1,0 +1,21 @@
+# Stage 1 — build vigild and vigil as static musl binaries
+FROM rust:alpine AS vigil-builder
+RUN apk add --no-cache musl-dev
+WORKDIR /vigil-rs
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+RUN cargo build --release --bin vigild --bin vigil
+
+# Stage 2 — final image: official Filebeat + vigil binaries
+FROM docker.elastic.co/beats/filebeat:8.17.0
+USER root
+COPY --from=vigil-builder /vigil-rs/target/release/vigild /usr/local/bin/vigild
+COPY --from=vigil-builder /vigil-rs/target/release/vigil  /usr/local/bin/vigil
+COPY examples/filebeat-push/filebeat.yml /usr/share/filebeat/vigil-filebeat.yml
+COPY examples/filebeat-push/layers/ /etc/vigil/layers/
+RUN mkdir -p /run/vigil /run/collector && \
+    chmod 600 /usr/share/filebeat/vigil-filebeat.yml
+
+ENTRYPOINT ["/usr/local/bin/vigild", \
+    "--layers-dir", "/etc/vigil/layers", \
+    "--socket",     "/run/vigil/vigild.sock"]

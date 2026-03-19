@@ -1,0 +1,47 @@
+# kubernetes-pod-logs — vigil-rs + Filebeat + pod-log-collector
+#
+# Runs inside a Kubernetes pod to collect logs from other pods in a namespace
+# via the Kubernetes API (/api/v1/namespaces/<ns>/pods/<pod>/log).
+#
+# vigil-rs supervises both Filebeat and vigil-http-streamer.
+# If either crashes, vigil-rs restarts it with exponential backoff.
+#
+# Prerequisites:
+#   - ServiceAccount with get/list on pods and get on pods/log (see k8s/rbac.yaml)
+#   - NAMESPACE env var set to the target namespace
+#
+# Build (from repo root):
+#   podman build -f examples/kubernetes-pod-logs/Containerfile \
+#                -t vigil-k8s-pod-logs .
+#
+# Deploy:
+#   kubectl apply -f examples/kubernetes-pod-logs/k8s/rbac.yaml
+#   kubectl apply -f examples/kubernetes-pod-logs/k8s/deployment.yaml
+
+# Stage 1 — build vigild, vigil, and vigil-http-streamer as static musl binaries
+FROM rust:alpine AS vigil-builder
+RUN apk add --no-cache musl-dev
+WORKDIR /vigil-rs
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+RUN cargo build --release --bin vigild --bin vigil --bin vigil-http-streamer
+
+# Stage 2 — final image: Filebeat (Ubuntu) + vigil binaries
+FROM docker.elastic.co/beats/filebeat:8.17.0
+USER root
+
+COPY --from=vigil-builder /vigil-rs/target/release/vigild                /usr/local/bin/vigild
+COPY --from=vigil-builder /vigil-rs/target/release/vigil                 /usr/local/bin/vigil
+COPY --from=vigil-builder /vigil-rs/target/release/vigil-http-streamer   /usr/local/bin/vigil-http-streamer
+COPY examples/kubernetes-pod-logs/filebeat.yml                            /usr/share/filebeat/vigil-filebeat.yml
+COPY examples/kubernetes-pod-logs/layers/                                 /etc/vigil/layers/
+
+RUN chmod 644 /usr/share/filebeat/vigil-filebeat.yml
+
+# /tmp is world-writable; OpenShift mounts /run as a fresh root-owned tmpfs
+# so any chmod done in the image layer is lost at runtime.
+WORKDIR /tmp
+
+ENTRYPOINT ["/usr/local/bin/vigild", \
+    "--layers-dir", "/etc/vigil/layers", \
+    "--socket",     "/tmp/vigild.sock"]

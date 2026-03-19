@@ -1,0 +1,34 @@
+summary: Vector log collection example
+
+services:
+
+  dummy-logger:
+    summary: Generates simulated application log output (stdout + stderr)
+    command: >-
+      sh -c 'i=0; while true; do
+      echo "INFO  req=$i GET /api/users status=200 duration_ms=$((i % 47 + 3))";
+      echo "DEBUG req=$i cache_key=user_$((i % 5)) hit=$((i % 3 == 0))";
+      if [ $((i % 7)) -eq 0 ]; then echo "ERROR req=$i downstream=payments timeout=30s" >&2; fi;
+      i=$((i+1)); sleep 1; done'
+    startup: enabled
+    on-failure: restart
+    # Disable vigild's built-in log forwarding — Vector is the only
+    # delivery path. Prevents double-printing on container stdout.
+    logs-forward: disabled
+
+  vector:
+    summary: Vector — consumes vigild SSE stream and emits enriched JSON
+    # Vector reads the vigild SSE stream via its exec source (see vector.toml).
+    # The config path is fixed; override by mounting a different file.
+    command: vector --config /etc/vector/vector.toml
+    startup: enabled
+    # Wait until dummy-logger is active before subscribing to the log stream.
+    after:
+      - dummy-logger
+    on-failure: restart
+    backoff-delay: 2s
+    backoff-factor: 2.0
+    backoff-limit: 30s
+    # Vector writes collected logs directly to container stdout.
+    # passthrough lets the process own fd 1 without vigild intercepting.
+    logs-forward: passthrough

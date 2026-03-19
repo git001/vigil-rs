@@ -1,0 +1,14 @@
+summary: Enable the background worker
+
+# This optional layer activates the worker service that is defined (but
+# disabled) in 100-app.yaml.  Drop this file into the layers directory when
+# the node should run background jobs.
+#
+# Only the fields that need to change are listed — merge semantics fill in
+# the rest from the lower layers.
+
+services:
+
+  worker:
+    override: merge
+    startup: enabled

@@ -1,0 +1,61 @@
+summary: Caddy + PHP-FPM
+
+services:
+
+  php-fpm:
+    summary: PHP 8.3 FastCGI Process Manager
+    command: php-fpm83 --nodaemonize --fpm-config /etc/php83/php-fpm.conf
+    startup: enabled
+    # SIGQUIT triggers PHP-FPM graceful shutdown (drains in-flight requests).
+    stop-signal: SIGQUIT
+    kill-delay: 10s
+    on-success: ignore
+    on-failure: restart
+    backoff-delay: 1s
+    backoff-factor: 2.0
+    backoff-limit: 30s
+    on-check-failure:
+      php-fpm-ping: restart
+
+  caddy:
+    summary: Caddy web server (reverse proxy + static files)
+    command: caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    startup: enabled
+    # Caddy starts after php-fpm so php_fastcgi can connect immediately.
+    after:
+      - php-fpm
+    stop-signal: SIGTERM
+    kill-delay: 10s
+    on-success: ignore
+    on-failure: restart
+    backoff-delay: 1s
+    backoff-factor: 2.0
+    backoff-limit: 30s
+    on-check-failure:
+      caddy-alive: restart
+
+checks:
+
+  php-fpm-ping:
+    # Hits /php-health → Caddy forwards the FastCGI ping to PHP-FPM.
+    # FPM responds with "pong" (no PHP script involved).
+    level: alive
+    startup: enabled
+    delay: 5s
+    period: 10s
+    timeout: 5s
+    threshold: 3
+    http:
+      url: http://127.0.0.1:8080/php-health
+
+  caddy-alive:
+    # Hits /caddy-health → Caddy responds statically with "OK".
+    # Verifies Caddy is processing requests without involving PHP-FPM.
+    level: alive
+    startup: enabled
+    delay: 3s
+    period: 10s
+    timeout: 5s
+    threshold: 3
+    http:
+      url: http://127.0.0.1:8080/caddy-health

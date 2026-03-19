@@ -1,0 +1,77 @@
+# vigil-rs + Quarkus example
+#
+# Demonstrates vigild supervising a Quarkus application with:
+#   - live check via /q/health/live   (Quarkus liveness probe)
+#   - ready check via /q/health/ready (Quarkus readiness probe, gates LB traffic)
+#   - on-check-failure restart on persistent liveness failures
+#   - proper SIGTERM → Quarkus graceful shutdown
+#   - forward-logs: enabled (app stdout/stderr visible via "podman logs")
+#
+# Build (from the vigil-rs repo root):
+#   podman build -f examples/quarkus/Containerfile -t vigil-quarkus .
+#
+# Run:
+#   podman run --rm -p 8080:8080 --name vigil-quarkus vigil-quarkus
+#
+# Interact:
+#   curl http://localhost:8080/hello
+#   curl http://localhost:8080/q/health/live
+#   curl http://localhost:8080/q/health/ready
+#   podman exec vigil-quarkus vigil services list
+#   podman exec vigil-quarkus vigil checks list
+#   podman exec vigil-quarkus vigil logs -f
+
+# ---------------------------------------------------------------------------
+# Stage 1 — build Quarkus application (fast-jar)
+# ---------------------------------------------------------------------------
+FROM maven:3.9-eclipse-temurin-21-alpine AS quarkus-builder
+
+WORKDIR /app
+
+# Cache Maven dependencies separately from the source build
+COPY examples/quarkus/app/pom.xml ./
+RUN mvn -B dependency:go-offline -q
+
+# Build the fast-jar (quarkus.package.jar.type=fast-jar by default in 3.x)
+COPY examples/quarkus/app/src/ src/
+RUN mvn -B package -DskipTests -q
+
+# ---------------------------------------------------------------------------
+# Stage 2 — build vigild + vigil (static musl binaries)
+# ---------------------------------------------------------------------------
+FROM rust:alpine AS vigil-builder
+
+RUN apk add --no-cache musl-dev
+
+WORKDIR /vigil-rs
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+
+RUN cargo build --release --bin vigild --bin vigil
+
+# ---------------------------------------------------------------------------
+# Stage 3 — final image: lightweight JRE + static vigil binaries
+# ---------------------------------------------------------------------------
+FROM eclipse-temurin:21-alpine
+
+# curl is used by the HTTP health check inside vigild
+RUN apk add --no-cache curl
+
+# vigil binaries (statically linked musl — work on any Linux libc)
+COPY --from=vigil-builder /vigil-rs/target/release/vigild /usr/local/bin/vigild
+COPY --from=vigil-builder /vigil-rs/target/release/vigil  /usr/local/bin/vigil
+
+# Quarkus fast-jar layout: quarkus-run.jar + lib/ + app/ + quarkus/
+COPY --from=quarkus-builder /app/target/quarkus-app/ /opt/quarkus/
+
+# vigil layer config
+COPY examples/quarkus/layers/ /etc/vigil/layers/
+
+RUN mkdir -p /run/vigil
+
+EXPOSE 8080
+
+# vigild is PID 1 — Quarkus is spawned as a supervised child process
+ENTRYPOINT ["/usr/local/bin/vigild", \
+    "--layers-dir", "/etc/vigil/layers", \
+    "--socket",     "/run/vigil/vigild.sock"]
