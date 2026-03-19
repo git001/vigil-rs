@@ -53,6 +53,36 @@ spec:
             # Emit vigild's own logs as JSON (matches Filebeat's output format)
             - name: VIGIL_LOG_FORMAT
               value: "json"
+            # Enable vigild HTTPS API listener for Kubernetes probes
+            - name: VIGIL_TLS_ADDR
+              value: "0.0.0.0:8443"
+
+          ports:
+            - name: vigild-api
+              containerPort: 8443
+              protocol: TCP
+
+          livenessProbe:
+            httpGet:
+              path: /v1/checks
+              port: 8443
+              scheme: HTTPS
+              insecureSkipTLSVerify: true   # vigild uses a self-signed cert by default
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /v1/checks
+              port: 8443
+              scheme: HTTPS
+              insecureSkipTLSVerify: true
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
 
           resources:
             requests:
