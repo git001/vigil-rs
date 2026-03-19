@@ -417,7 +417,7 @@ vigil-rs supervises two services in one container:
 
 | Service | Role |
 |---|---|
-| `pod-log-collector` | `vigil-http-streamer --kubernetes`: watches pods, streams logs via Kubernetes API, pushes ndjson to Filebeat via TCP |
+| `pod-log-collector` | `vigil-log-relay --kubernetes`: watches pods, streams logs via Kubernetes API, pushes ndjson to Filebeat via TCP |
 | `filebeat` | Listens on TCP 5170, decodes ndjson, emits enriched JSON to stdout |
 
 The pod list is refreshed every `WATCH_INTERVAL` seconds (default: 30 s):
@@ -428,7 +428,7 @@ The pod list is refreshed every `WATCH_INTERVAL` seconds (default: 30 s):
 Data flow:
 
 ```
-Kubernetes API  →  vigil-http-streamer --kubernetes
+Kubernetes API  →  vigil-log-relay --kubernetes
                 →  ndjson: {timestamp, namespace, pod, stream, message}
                 →  TCP → Filebeat 127.0.0.1:5170
                 →  decode_json_fields (pod/namespace/message to root)

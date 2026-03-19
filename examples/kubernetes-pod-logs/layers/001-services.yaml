@@ -1,9 +1,9 @@
-summary: Kubernetes pod log collector — Filebeat + vigil-http-streamer
+summary: Kubernetes pod log collector — Filebeat + vigil-log-relay
 
 services:
 
   filebeat:
-    summary: Filebeat — listens on TCP 5170; receives ndjson from vigil-http-streamer
+    summary: Filebeat — listens on TCP 5170; receives ndjson from vigil-log-relay
     command: sh -c 'mkdir -p /tmp/fb-data && filebeat run --strict.perms=false --path.data /tmp/fb-data -c /usr/share/filebeat/vigil-filebeat.yml 2>/dev/null'
     startup: enabled
     on-failure: restart
@@ -15,9 +15,9 @@ services:
 
   pod-log-collector:
     summary: Watches pods in NAMESPACE; streams their logs to Filebeat via TCP
-    command: /usr/local/bin/vigil-http-streamer --kubernetes
+    command: /usr/local/bin/vigil-log-relay --kubernetes
     startup: enabled
-    # No `after: filebeat` needed — vigil-http-streamer reconnects to the TCP
+    # No `after: filebeat` needed — vigil-log-relay reconnects to the TCP
     # sink internally with exponential backoff, so it can start independently.
     on-failure: restart
     backoff-delay: 5s
@@ -33,7 +33,7 @@ services:
     # manifest (k8s/deployment.yaml). No defaults here — layer values would
     # override operator configuration.
     #
-    # Variables read by vigil-http-streamer --kubernetes:
+    # Variables read by vigil-log-relay --kubernetes:
     #   NAMESPACE        namespace to watch (required)
     #   POD_SELECTOR     label selector, e.g. "app=myapp" (optional)
     #   WATCH_INTERVAL   seconds between pod-list refreshes (default: 30)
@@ -44,7 +44,7 @@ checks:
 
   pod-log-collector-alive:
     # Verifies the watch loop is running and not stuck.
-    # vigil-http-streamer serves GET /healthz on 127.0.0.1:9091 (--healthcheck
+    # vigil-log-relay serves GET /healthz on 127.0.0.1:9091 (--healthcheck
     # default). Returns 200 while the watch loop ticks, 503 if no tick has been
     # received within --healthcheck-max-age seconds (default: 90 s = 3× WATCH_INTERVAL).
     level: alive

@@ -1,9 +1,9 @@
 [package]
-name        = "vigil-http-streamer"
-version     = "1.0.0"
+name        = "vigil-log-relay"
+version     = "2.0.0"
 edition     = "2024"
 license     = "AGPL-3.0-only"
-description = "Generic HTTP→TCP ndjson streamer and Kubernetes pod log collector for vigil-rs"
+description = "Reads ndjson log streams from Kubernetes pods, HTTP endpoints, or Unix sockets and forwards them to a TCP sink"
 homepage    = "https://github.com/git001/vigil-rs"
 repository  = "https://github.com/git001/vigil-rs"
 
@@ -11,19 +11,19 @@ repository  = "https://github.com/git001/vigil-rs"
 # cargo-deb  (debian / ubuntu packages)
 # ---------------------------------------------------------------------------
 [package.metadata.deb]
-name               = "vigil-http-streamer"
+name               = "vigil-log-relay"
 maintainer         = "vigil-rs contributors <al-virgilrs@none.at>"
 copyright          = "2026 vigil-rs contributors"
 license-file       = ["../../LICENSE", "0"]
 extended-description = """\
-vigil-http-streamer forwards ndjson log streams to a TCP sink.
-It can collect logs from Kubernetes pods via the Kubernetes API,
-or stream from an HTTP/HTTPS URL or a Unix-domain socket."""
+vigil-log-relay reads ndjson log streams from Kubernetes pods via the \
+Kubernetes API, from HTTP/HTTPS endpoints, or from Unix-domain sockets, \
+and forwards the lines to a TCP sink (Filebeat, Fluent Bit, Logstash)."""
 depends            = ""
 section            = "admin"
 priority           = "optional"
 assets = [
-    ["../../target/release/vigil-http-streamer", "usr/local/bin/vigil-http-streamer", "755"],
+    ["../../target/release/vigil-log-relay", "usr/local/bin/vigil-log-relay", "755"],
 ]
 
 # ---------------------------------------------------------------------------
@@ -31,12 +31,12 @@ assets = [
 # ---------------------------------------------------------------------------
 [package.metadata.generate-rpm]
 assets = [
-    { source = "../../target/release/vigil-http-streamer", dest = "/usr/local/bin/vigil-http-streamer", mode = "0755" },
+    { source = "../../target/release/vigil-log-relay", dest = "/usr/local/bin/vigil-log-relay", mode = "0755" },
 ]
 [package.metadata.generate-rpm.requires]
 
 [[bin]]
-name = "vigil-http-streamer"
+name = "vigil-log-relay"
 path = "src/main.rs"
 
 [dependencies]
@@ -60,10 +60,17 @@ bytes              = { workspace = true }
 tower              = { workspace = true }
 
 # Kubernetes client (--kubernetes mode)
-kube         = { version = "0.98", default-features = false, features = ["client", "rustls-tls"] }
+kube         = { version = "0.98", default-features = false, features = ["client", "runtime", "rustls-tls"] }
 rustls       = { version = "0.23", features = ["ring"], default-features = false }
+rustls-pemfile = "2"
 k8s-openapi  = { version = "0.24", features = ["v1_32"] }
 
 # Async I/O bridges (futures-io ↔ tokio-io, body streaming)
 futures      = "0.3"
 tokio-util   = { version = "0.7", features = ["compat", "io"] }
+
+# Log line filtering (--include / --exclude)
+regex        = "1"
+
+# TCP keepalive configuration (--dest-keepalive-*)
+socket2      = { version = "0.5", features = ["all"] }

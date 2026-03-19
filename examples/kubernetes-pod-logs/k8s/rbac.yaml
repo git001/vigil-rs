@@ -1,7 +1,7 @@
 # RBAC for the vigil-rs kubernetes-pod-logs collector.
 #
 # The pod-log-collector needs:
-#   - pods: get, list          (to discover Running pods)
+#   - pods: get, list, watch   (to discover Running pods via Watch API)
 #   - pods/log: get            (to stream log output)
 #
 # A ClusterRole is used so the same ServiceAccount can watch any namespace
@@ -23,7 +23,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]

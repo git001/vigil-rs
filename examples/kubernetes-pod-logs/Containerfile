@@ -3,7 +3,7 @@
 # Runs inside a Kubernetes pod to collect logs from other pods in a namespace
 # via the Kubernetes API (/api/v1/namespaces/<ns>/pods/<pod>/log).
 #
-# vigil-rs supervises both Filebeat and vigil-http-streamer.
+# vigil-rs supervises both Filebeat and vigil-log-relay.
 # If either crashes, vigil-rs restarts it with exponential backoff.
 #
 # Prerequisites:
@@ -18,13 +18,13 @@
 #   kubectl apply -f examples/kubernetes-pod-logs/k8s/rbac.yaml
 #   kubectl apply -f examples/kubernetes-pod-logs/k8s/deployment.yaml
 
-# Stage 1 — build vigild, vigil, and vigil-http-streamer as static musl binaries
+# Stage 1 — build vigild, vigil, and vigil-log-relay as static musl binaries
 FROM rust:alpine AS vigil-builder
 RUN apk add --no-cache musl-dev
 WORKDIR /vigil-rs
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
-RUN cargo build --release --bin vigild --bin vigil --bin vigil-http-streamer
+RUN cargo build --release --bin vigild --bin vigil --bin vigil-log-relay
 
 # Stage 2 — final image: Filebeat (Ubuntu) + vigil binaries
 FROM docker.elastic.co/beats/filebeat:8.17.0
@@ -32,7 +32,7 @@ USER root
 
 COPY --from=vigil-builder /vigil-rs/target/release/vigild                /usr/local/bin/vigild
 COPY --from=vigil-builder /vigil-rs/target/release/vigil                 /usr/local/bin/vigil
-COPY --from=vigil-builder /vigil-rs/target/release/vigil-http-streamer   /usr/local/bin/vigil-http-streamer
+COPY --from=vigil-builder /vigil-rs/target/release/vigil-log-relay   /usr/local/bin/vigil-log-relay
 COPY examples/kubernetes-pod-logs/filebeat.yml                            /usr/share/filebeat/vigil-filebeat.yml
 COPY examples/kubernetes-pod-logs/layers/                                 /etc/vigil/layers/
 

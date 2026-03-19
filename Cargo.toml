@@ -3,7 +3,7 @@ members = [
     "crates/vigil-types",
     "crates/vigild",
     "crates/vigil",
-    "crates/vigil-http-streamer",
+    "crates/vigil-log-relay",
 ]
 resolver = "2"
 
