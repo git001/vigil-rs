@@ -227,7 +227,7 @@ automatic restarts, and programmatic control.
 | Dependency ordering | ✅ (`dependencies.d/`) | ✅ (`after:`) |
 | Custom stop signal | ❌ | ✅ per-service |
 | Programmatic control | ❌ | ✅ (`vigil` CLI / REST) |
-| Used by | linuxserver.io images | HAProxy Unified Gateway |
+| Used by | linuxserver.io images | - |
 
 **When to use s6-overlay:** Classic multi-service containers (nginx + cron +
 sshd) where you don't need runtime control. Battle-tested, extremely small.
