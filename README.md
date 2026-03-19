@@ -5,10 +5,10 @@ It manages multiple processes inside a single container — starting, stopping,
 restarting, and health-checking them — and exposes a REST API over a Unix
 socket for programmatic control.
 
-> vigil-rs is a clean-room Rust rewrite of
-> [Canonical Pebble](https://github.com/canonical/pebble), with native PID 1 /
-> container-init capabilities and a custom stop-signal feature that remains
-> unmerged in upstream Pebble (PR #720).
+> vigil-rs is inspired by the layer-based service model pioneered by
+> [Canonical Pebble](https://github.com/canonical/pebble), implemented from
+> scratch in Rust with native PID 1 / container-init support and an extended
+> stop-signal model.
 
 ---
 
