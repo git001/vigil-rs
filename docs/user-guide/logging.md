@@ -423,6 +423,58 @@ podman run --rm vigil-filebeat
 # {"@timestamp":"...","collector":"filebeat","message":"INFO req=1...","service":"myapp",...}
 ```
 
+#### vigil-http-streamer — generic HTTP→TCP ndjson streamer
+
+`vigil-http-streamer` is a standalone binary that reads ndjson from an HTTP
+source and forwards it to a TCP sink (Filebeat, Fluent Bit, Logstash, …).
+Three source modes are available:
+
+| Flag | Source |
+|---|---|
+| `--kubernetes` | Kubernetes pod logs via the K8s API (in-cluster) |
+| `--source-socket PATH` | Unix-domain socket (e.g. vigild's `/tmp/vigild.sock`) |
+| `--source-url URL` | HTTP/HTTPS URL |
+
+**Streaming vigild logs to Filebeat via TCP:**
+
+```yaml
+# layers/001-services.yaml
+services:
+  http-streamer:
+    command: >
+      vigil-http-streamer
+      --source-socket /tmp/vigild.sock
+      --source-path /v1/logs/follow?format=ndjson
+      --tcp-sink-host 127.0.0.1
+      --tcp-sink-port 5170
+    startup: enabled
+    after: [filebeat]
+    on-failure: restart
+    logs-forward: disabled
+
+checks:
+  http-streamer-alive:
+    level: alive
+    period: 30s
+    timeout: 5s
+    http:
+      url: http://127.0.0.1:9091/healthz
+```
+
+Key parameters:
+
+```
+--source-socket PATH       Unix socket to connect to
+--source-path PATH         HTTP path (default: /v1/logs/follow?format=ndjson)
+--tcp-sink-host HOST       TCP sink host (default: 127.0.0.1)
+--tcp-sink-port PORT       TCP sink port (default: 5170)
+--reconnect-delay MS       Initial backoff delay in ms (default: 500)
+--reconnect-max MS         Backoff ceiling in ms (default: 30000)
+--reconnect-retries N      Max failures before exit, 0 = unlimited (default: 0)
+--healthcheck HOST:PORT    Address for GET /healthz endpoint (default: 127.0.0.1:9091)
+--healthcheck-max-age SECS Seconds without tick before /healthz returns 503 (default: 90)
+```
+
 #### Kubernetes pod log collector
 
 [`examples/kubernetes-pod-logs/`](../../examples/kubernetes-pod-logs/) — a
