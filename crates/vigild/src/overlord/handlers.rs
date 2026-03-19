@@ -84,17 +84,39 @@ impl Overlord {
         }
     }
 
-    /// Returns `true` if all `after:` dependencies of `name` are running.
+    /// Returns `true` if all ordering dependencies of `name` are running.
+    ///
+    /// Three sources contribute:
+    /// - `after: [X]`    — X must be running before name starts
+    /// - `requires: [X]` — same ordering constraint (plus a stop cascade at runtime)
+    /// - `X before: [name]` — X declared it must start before name (reverse `after`)
     fn after_deps_running(&self, name: &str) -> bool {
         let Some(config) = self.plan.services.get(name) else {
             return true;
         };
-        config.after.iter().all(|dep| {
+
+        // after: and requires: direct ordering deps
+        let direct_ok = config.after.iter().chain(config.requires.iter()).all(|dep| {
             self.services
                 .get(dep)
                 .map(|e| e.snapshot.state.is_running())
                 .unwrap_or(false)
-        })
+        });
+
+        // before: reverse — any service X where name ∈ X.before must be running first
+        let before_ok = self
+            .plan
+            .services
+            .iter()
+            .filter(|(other, c)| *other != name && c.before.contains(&name.to_string()))
+            .all(|(dep, _)| {
+                self.services
+                    .get(dep)
+                    .map(|e| e.snapshot.state.is_running())
+                    .unwrap_or(false)
+            });
+
+        direct_ok && before_ok
     }
 
     /// Check pending services and start any whose `after:` deps are now running.
@@ -300,7 +322,7 @@ impl Overlord {
                             self.plan
                                 .services
                                 .get(*name)
-                                .map(|c| c.after.contains(&event.service))
+                                .map(|c| c.after.contains(&event.service) || c.requires.contains(&event.service))
                                 .unwrap_or(false)
                         })
                         .map(String::as_str)
@@ -313,6 +335,38 @@ impl Overlord {
                         );
                     }
                 }
+
+                // requires: stop cascade — if a required dependency has permanently stopped
+                // (Inactive or Error), stop every service that lists it in requires: and is
+                // still active.  Backoff and Stopping are transient states: the service will
+                // restart or finish stopping on its own, so we must not cascade there.
+                if matches!(new_state, ServiceState::Inactive | ServiceState::Error) {
+                    let dependents: Vec<String> = self
+                        .plan
+                        .services
+                        .iter()
+                        .filter(|(dep_name, c)| {
+                            c.requires.contains(&event.service)
+                                && self
+                                    .services
+                                    .get(*dep_name)
+                                    .map(|e| e.snapshot.state.is_running())
+                                    .unwrap_or(false)
+                        })
+                        .map(|(name, _)| name.clone())
+                        .collect();
+                    for dep_name in dependents {
+                        warn!(
+                            service = %dep_name,
+                            requires = %event.service,
+                            "required dependency stopped — stopping dependent service",
+                        );
+                        if let Err(e) = self.svc_cmd(&dep_name, SvcCmd::Stop).await {
+                            error!(service = %dep_name, error = %e, "failed to stop service after required dependency stopped");
+                        }
+                    }
+                }
+
                 None
             }
             service::EventKind::ProcessExited { .. } => None,
@@ -423,4 +477,251 @@ fn fmt_on_exit(policy: OnExit) -> String {
         OnExit::SuccessShutdown => "success-shutdown",
     }
     .into()
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use indexmap::IndexMap;
+    use tokio::sync::mpsc;
+    use vigil_types::plan::{Plan, ServiceConfig, Startup};
+
+    use crate::logs::LogStore;
+    use crate::metrics::MetricsStore;
+    use crate::service::{self, Snapshot};
+    use crate::state::ServiceState;
+
+    // ------------------------------------------------------------------
+    // Test helpers
+    // ------------------------------------------------------------------
+
+    /// Build a minimal `Overlord` for testing `after_deps_running` and
+    /// `handle_svc_event`.
+    ///
+    /// `plan_services`: list of `(name, after, requires, before)` tuples
+    /// that describe the dependency graph.
+    ///
+    /// `states`: current state for each service name (services not listed
+    /// here get `ServiceState::Inactive`).
+    fn make_overlord(
+        plan_services: &[(&str, &[&str], &[&str], &[&str])],
+        states: &[(&str, ServiceState)],
+    ) -> Overlord {
+        let mut services_plan: IndexMap<String, ServiceConfig> = IndexMap::new();
+        for (name, after, requires, before) in plan_services {
+            let mut cfg = ServiceConfig::default();
+            cfg.after = after.iter().map(|s| s.to_string()).collect();
+            cfg.requires = requires.iter().map(|s| s.to_string()).collect();
+            cfg.before = before.iter().map(|s| s.to_string()).collect();
+            services_plan.insert(name.to_string(), cfg);
+        }
+
+        let state_map: std::collections::HashMap<&str, ServiceState> =
+            states.iter().copied().collect();
+
+        let mut svc_map: IndexMap<String, ServiceEntry> = IndexMap::new();
+        for (name, _, _, _) in plan_services {
+            let (tx, _rx) = mpsc::channel(4);
+            let handle = service::Handle { tx };
+            let state = state_map.get(name).copied().unwrap_or(ServiceState::Inactive);
+            let snapshot = Snapshot {
+                name: name.to_string(),
+                state,
+                since: Utc::now(),
+                startup: Startup::Enabled,
+                pid: None,
+            };
+            svc_map.insert(name.to_string(), ServiceEntry { handle, snapshot });
+        }
+
+        let (event_tx, event_rx) = mpsc::channel(8);
+        let (check_event_tx, check_event_rx) = mpsc::channel(8);
+        let (_, cmd_rx) = mpsc::channel(8);
+
+        Overlord {
+            plan: Plan { services: services_plan, checks: IndexMap::new(), layers: Vec::new() },
+            services: svc_map,
+            checks: IndexMap::new(),
+            changes: Vec::new(),
+            change_counter: 0,
+            boot_id: "test".to_string(),
+            start_time: Utc::now(),
+            http_address: String::new(),
+            https_address: None,
+            log_store: LogStore::new(64, 64),
+            metrics: MetricsStore::new(),
+            event_rx,
+            event_tx,
+            check_event_rx,
+            check_event_tx,
+            cmd_rx,
+            layers_dir: std::path::PathBuf::new(),
+            pending_autostart: Vec::new(),
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // after_deps_running — `after:` ordering
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn after_dep_running_unblocks_service() {
+        let ov = make_overlord(
+            &[("dep", &[], &[], &[]), ("svc", &["dep"], &[], &[])],
+            &[("dep", ServiceState::Active), ("svc", ServiceState::Inactive)],
+        );
+        assert!(ov.after_deps_running("svc"));
+    }
+
+    #[test]
+    fn after_dep_inactive_blocks_service() {
+        let ov = make_overlord(
+            &[("dep", &[], &[], &[]), ("svc", &["dep"], &[], &[])],
+            &[("dep", ServiceState::Inactive), ("svc", ServiceState::Inactive)],
+        );
+        assert!(!ov.after_deps_running("svc"));
+    }
+
+    #[test]
+    fn service_with_no_deps_is_always_ready() {
+        let ov = make_overlord(&[("svc", &[], &[], &[])], &[]);
+        assert!(ov.after_deps_running("svc"));
+    }
+
+    // ------------------------------------------------------------------
+    // after_deps_running — `before:` (reverse-after) ordering
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn before_dep_running_unblocks_service() {
+        // "gate before: [svc]" means svc must wait for gate.
+        let ov = make_overlord(
+            &[("gate", &[], &[], &["svc"]), ("svc", &[], &[], &[])],
+            &[("gate", ServiceState::Active), ("svc", ServiceState::Inactive)],
+        );
+        assert!(ov.after_deps_running("svc"));
+    }
+
+    #[test]
+    fn before_dep_inactive_blocks_service() {
+        let ov = make_overlord(
+            &[("gate", &[], &[], &["svc"]), ("svc", &[], &[], &[])],
+            &[("gate", ServiceState::Inactive), ("svc", ServiceState::Inactive)],
+        );
+        assert!(!ov.after_deps_running("svc"));
+    }
+
+    // ------------------------------------------------------------------
+    // after_deps_running — `requires:` ordering (identical to `after:`)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn requires_dep_running_unblocks_service() {
+        let ov = make_overlord(
+            &[("db", &[], &[], &[]), ("api", &[], &["db"], &[])],
+            &[("db", ServiceState::Active), ("api", ServiceState::Inactive)],
+        );
+        assert!(ov.after_deps_running("api"));
+    }
+
+    #[test]
+    fn requires_dep_inactive_blocks_service() {
+        let ov = make_overlord(
+            &[("db", &[], &[], &[]), ("api", &[], &["db"], &[])],
+            &[("db", ServiceState::Inactive), ("api", ServiceState::Inactive)],
+        );
+        assert!(!ov.after_deps_running("api"));
+    }
+
+    // ------------------------------------------------------------------
+    // requires: stop cascade
+    // ------------------------------------------------------------------
+
+    /// Helper: build an overlord with db (Active) and api (Active, requires db),
+    /// wire both handles to auto-reply tasks, and return the overlord plus a
+    /// receiver that signals whenever api receives a Stop command.
+    async fn make_requires_overlord() -> (Overlord, mpsc::Receiver<()>) {
+        let plan_services: &[(&str, &[&str], &[&str], &[&str])] =
+            &[("db", &[], &[], &[]), ("api", &[], &["db"], &[])];
+        let states = &[("db", ServiceState::Active), ("api", ServiceState::Active)];
+        let mut ov = make_overlord(plan_services, states);
+
+        let (stop_tx, stop_rx) = mpsc::channel::<()>(4);
+
+        for (svc_name, notify) in [("api", Some(stop_tx)), ("db", None)] {
+            let (tx, mut rx) = mpsc::channel::<service::Cmd>(8);
+            let n = notify;
+            tokio::spawn(async move {
+                while let Some(cmd) = rx.recv().await {
+                    match cmd {
+                        service::Cmd::Stop(reply) => {
+                            if let Some(ref t) = n { let _ = t.try_send(()); }
+                            let _ = reply.send(Ok(()));
+                        }
+                        service::Cmd::Start(reply) => { let _ = reply.send(Ok(())); }
+                        service::Cmd::Restart(reply) => { let _ = reply.send(Ok(())); }
+                        _ => {}
+                    }
+                }
+            });
+            if let Some(entry) = ov.services.get_mut(svc_name) {
+                entry.handle = service::Handle { tx };
+            }
+        }
+
+        (ov, stop_rx)
+    }
+
+    #[tokio::test]
+    async fn requires_stop_cascade_fires_on_inactive() {
+        // db becomes Inactive → api (requires db) must be stopped.
+        let (mut ov, mut stop_rx) = make_requires_overlord().await;
+        let event = service::Event {
+            service: "db".to_string(),
+            kind: service::EventKind::StateChanged { new_state: ServiceState::Inactive },
+        };
+        ov.handle_svc_event(event).await;
+        assert!(stop_rx.try_recv().is_ok(), "Stop was never sent to api on Inactive");
+    }
+
+    #[tokio::test]
+    async fn requires_stop_cascade_fires_on_error() {
+        // db enters Error → api (requires db) must also be stopped.
+        let (mut ov, mut stop_rx) = make_requires_overlord().await;
+        let event = service::Event {
+            service: "db".to_string(),
+            kind: service::EventKind::StateChanged { new_state: ServiceState::Error },
+        };
+        ov.handle_svc_event(event).await;
+        assert!(stop_rx.try_recv().is_ok(), "Stop was never sent to api on Error");
+    }
+
+    #[tokio::test]
+    async fn requires_stop_cascade_does_not_fire_on_backoff() {
+        // db enters Backoff (transient crash, will restart) → api must NOT be stopped.
+        let (mut ov, mut stop_rx) = make_requires_overlord().await;
+        let event = service::Event {
+            service: "db".to_string(),
+            kind: service::EventKind::StateChanged { new_state: ServiceState::Backoff },
+        };
+        ov.handle_svc_event(event).await;
+        assert!(stop_rx.try_recv().is_err(), "Stop was wrongly sent to api during Backoff");
+    }
+
+    #[tokio::test]
+    async fn requires_stop_cascade_does_not_fire_on_stopping() {
+        // db enters Stopping (transient) → cascade must not fire yet; it fires on Inactive.
+        let (mut ov, mut stop_rx) = make_requires_overlord().await;
+        let event = service::Event {
+            service: "db".to_string(),
+            kind: service::EventKind::StateChanged { new_state: ServiceState::Stopping },
+        };
+        ov.handle_svc_event(event).await;
+        assert!(stop_rx.try_recv().is_err(), "Stop was wrongly sent to api during Stopping");
+    }
 }

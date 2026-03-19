@@ -29,7 +29,8 @@ pub fn parse_command(s: &str) -> anyhow::Result<Vec<String>> {
             anyhow::bail!("malformed default-args syntax in command: {:?}", s);
         }
         let base = &s[..open];
-        let defaults = &s[open + 3..close];
+        let defaults_start = open + 3;
+        let defaults = if defaults_start <= close { &s[defaults_start..close] } else { "" };
         let mut args = shell_words(base)?;
         args.extend(shell_words(defaults)?);
         Ok(args)

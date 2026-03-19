@@ -96,8 +96,12 @@ pub struct ServiceConfig {
     pub startup: Startup,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub after: Vec<String>,
+    /// Syntactic sugar for `after` from the reverse direction.
+    /// `B before: [A]` is equivalent to `A after: [B]` — B must be running before A starts.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub before: Vec<String>,
+    /// Hard dependency: implies `after` ordering AND stops this service if any
+    /// listed service leaves the running state (Inactive, Backoff, Error).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<String>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
@@ -164,6 +168,13 @@ pub struct HttpCheck {
     pub url: String,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub headers: IndexMap<String, String>,
+    /// Skip TLS certificate verification (useful for self-signed certs).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub insecure: bool,
+    /// PEM file with a CA certificate (or chain) to verify the server's TLS.
+    /// Supports chain files with multiple concatenated PEM blocks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -359,4 +370,162 @@ fn merge_check(base: &mut CheckConfig, overlay: &CheckConfig) {
     opt!(http);
     opt!(tcp);
     opt!(exec);
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layer(services: impl IntoIterator<Item = (&'static str, ServiceConfig)>) -> Layer {
+        Layer {
+            order: 0,
+            label: "test".into(),
+            summary: None,
+            description: None,
+            services: services.into_iter().map(|(k, v)| (k.to_owned(), v)).collect(),
+            checks: IndexMap::new(),
+        }
+    }
+
+    fn svc(command: &str) -> ServiceConfig {
+        ServiceConfig { command: Some(command.into()), ..Default::default() }
+    }
+
+    // --- single layer ---
+
+    #[test]
+    fn empty_layers_produces_empty_plan() {
+        let plan = Plan::from_layers(vec![]);
+        assert!(plan.services.is_empty());
+        assert!(plan.checks.is_empty());
+    }
+
+    #[test]
+    fn single_layer_is_passed_through() {
+        let plan = Plan::from_layers(vec![layer([("app", svc("/bin/app"))])]);
+        assert_eq!(plan.services["app"].command.as_deref(), Some("/bin/app"));
+    }
+
+    // --- merge: command override ---
+
+    #[test]
+    fn later_layer_overrides_command() {
+        let base = layer([("app", svc("/bin/v1"))]);
+        let overlay = layer([("app", svc("/bin/v2"))]);
+        let plan = Plan::from_layers(vec![base, overlay]);
+        assert_eq!(plan.services["app"].command.as_deref(), Some("/bin/v2"));
+    }
+
+    #[test]
+    fn overlay_none_field_does_not_clear_base() {
+        let mut base_svc = svc("/bin/app");
+        base_svc.user = Some("alice".into());
+        let overlay_svc = svc("/bin/app-v2"); // user is None
+        let plan = Plan::from_layers(vec![
+            layer([("app", base_svc)]),
+            layer([("app", overlay_svc)]),
+        ]);
+        // user from base must survive
+        assert_eq!(plan.services["app"].user.as_deref(), Some("alice"));
+    }
+
+    // --- merge: lists are union-merged, no duplicates ---
+
+    #[test]
+    fn after_lists_are_merged_without_duplicates() {
+        let mut s1 = svc("/bin/app");
+        s1.after = vec!["db".into(), "cache".into()];
+        let mut s2 = svc("/bin/app");
+        s2.after = vec!["cache".into(), "queue".into()]; // "cache" already in base
+        let plan = Plan::from_layers(vec![layer([("app", s1)]), layer([("app", s2)])]);
+        let after = &plan.services["app"].after;
+        assert_eq!(after.len(), 3, "expected db, cache, queue — got {after:?}");
+        assert!(after.contains(&"db".to_owned()));
+        assert!(after.contains(&"cache".to_owned()));
+        assert!(after.contains(&"queue".to_owned()));
+    }
+
+    #[test]
+    fn requires_lists_are_merged() {
+        let mut s1 = svc("/bin/app");
+        s1.requires = vec!["db".into()];
+        let mut s2 = svc("/bin/app");
+        s2.requires = vec!["auth".into()];
+        let plan = Plan::from_layers(vec![layer([("app", s1)]), layer([("app", s2)])]);
+        let req = &plan.services["app"].requires;
+        assert!(req.contains(&"db".to_owned()));
+        assert!(req.contains(&"auth".to_owned()));
+    }
+
+    // --- merge: environment map ---
+
+    #[test]
+    fn environment_maps_are_merged_overlay_wins() {
+        let mut s1 = svc("/bin/app");
+        s1.environment.insert("FOO".into(), "base".into());
+        s1.environment.insert("BAR".into(), "base".into());
+        let mut s2 = svc("/bin/app");
+        s2.environment.insert("FOO".into(), "overlay".into()); // override
+        s2.environment.insert("BAZ".into(), "overlay".into()); // new key
+        let plan = Plan::from_layers(vec![layer([("app", s1)]), layer([("app", s2)])]);
+        let env = &plan.services["app"].environment;
+        assert_eq!(env["FOO"], "overlay"); // overlay wins
+        assert_eq!(env["BAR"], "base");    // base survives
+        assert_eq!(env["BAZ"], "overlay"); // new key added
+    }
+
+    // --- replace override ---
+
+    #[test]
+    fn replace_override_discards_base() {
+        let mut s1 = svc("/bin/v1");
+        s1.after = vec!["db".into()];
+        s1.environment.insert("KEY".into(), "val".into());
+
+        let mut s2 = svc("/bin/v2");
+        s2.override_mode = Override::Replace;
+
+        let plan = Plan::from_layers(vec![layer([("app", s1)]), layer([("app", s2)])]);
+        let svc = &plan.services["app"];
+        assert_eq!(svc.command.as_deref(), Some("/bin/v2"));
+        assert!(svc.after.is_empty(), "replace must clear after list");
+        assert!(svc.environment.is_empty(), "replace must clear environment");
+    }
+
+    // --- multiple services, independent ---
+
+    #[test]
+    fn multiple_services_are_independent() {
+        let plan = Plan::from_layers(vec![layer([
+            ("web", svc("/bin/web")),
+            ("db",  svc("/bin/db")),
+        ])]);
+        assert_eq!(plan.services.len(), 2);
+        assert_eq!(plan.services["web"].command.as_deref(), Some("/bin/web"));
+        assert_eq!(plan.services["db"].command.as_deref(),  Some("/bin/db"));
+    }
+
+    // --- startup field ---
+
+    #[test]
+    fn startup_enabled_propagates() {
+        let mut s = svc("/bin/app");
+        s.startup = Startup::Enabled;
+        let plan = Plan::from_layers(vec![layer([("app", s)])]);
+        assert_eq!(plan.services["app"].startup, Startup::Enabled);
+    }
+
+    #[test]
+    fn startup_can_be_overridden_to_disabled() {
+        let mut s1 = svc("/bin/app");
+        s1.startup = Startup::Enabled;
+        let mut s2 = svc("/bin/app");
+        s2.startup = Startup::Disabled;
+        let plan = Plan::from_layers(vec![layer([("app", s1)]), layer([("app", s2)])]);
+        assert_eq!(plan.services["app"].startup, Startup::Disabled);
+    }
 }

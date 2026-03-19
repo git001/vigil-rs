@@ -9,7 +9,7 @@ pub enum ServiceState {
     /// Not running, no pending restart.
     Inactive,
     /// Process has been spawned; waiting for it to become stable.
-    /// (For Phase 2 we transition immediately to Active; checks will gate this in Phase 4.)
+    /// Transitions to Active once the process is confirmed running; health checks monitor thereafter.
     Starting,
     /// Process is running normally.
     Active,
