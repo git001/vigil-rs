@@ -424,11 +424,32 @@ jobs:
     needs: [changelog, build, package-deb, package-rpm, sbom]
     runs-on: ubuntu-latest
     steps:
-      - name: Download all artifacts
+      - name: Download binaries
         uses: actions/download-artifact@v4
         with:
+          pattern: binaries-*
           path: artifacts/
           merge-multiple: true
+
+      - name: Download .deb packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: deb-*
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Download .rpm packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rpm-*
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Download SBOM
+        uses: actions/download-artifact@v4
+        with:
+          name: sbom
+          path: artifacts/
 
       - name: List artifacts
         run: find artifacts/ -type f | sort
