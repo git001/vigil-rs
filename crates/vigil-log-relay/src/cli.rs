@@ -251,9 +251,13 @@ pub struct Cli {
           help_heading = "Health Check")]
     pub healthcheck_max_age: u64,
 
-    // ---- Debug ------------------------------------------------------------
+    // ---- Logging ----------------------------------------------------------
+
+    /// Log format: "text" or "json".
+    #[arg(long, env = "VIGIL_LOG_FORMAT", default_value = "text", help_heading = "Logging")]
+    pub log_format: String,
 
     /// Enable debug logging with timestamps.
-    #[arg(long, help_heading = "Debug")]
+    #[arg(long, help_heading = "Logging")]
     pub debug: bool,
 }

@@ -48,17 +48,29 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    if cli.debug {
-        tracing_subscriber::fmt()
-            .with_target(true)
-            .with_timer(tracing_subscriber::fmt::time::SystemTime)
-            .with_max_level(tracing::Level::DEBUG)
-            .init();
-    } else {
-        tracing_subscriber::fmt()
-            .with_target(false)
-            .without_time()
-            .init();
+    let level = if cli.debug { tracing::Level::DEBUG } else { tracing::Level::INFO };
+    match cli.log_format.as_str() {
+        "json" => {
+            tracing_subscriber::fmt()
+                .json()
+                .with_max_level(level)
+                .init();
+        }
+        _ => {
+            if cli.debug {
+                tracing_subscriber::fmt()
+                    .with_target(true)
+                    .with_timer(tracing_subscriber::fmt::time::SystemTime)
+                    .with_max_level(level)
+                    .init();
+            } else {
+                tracing_subscriber::fmt()
+                    .with_target(false)
+                    .without_time()
+                    .with_max_level(level)
+                    .init();
+            }
+        }
     }
 
     let source_count = usize::from(cli.kubernetes)
