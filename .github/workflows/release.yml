@@ -232,22 +232,18 @@ jobs:
         run: echo "PKG_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
       - name: Build vigild .rpm
-        run: |
-          cargo generate-rpm -p crates/vigild \
-            --payload-compress ${{ matrix.compress }} \
-            -o dist/
+        run: cargo generate-rpm -p crates/vigild --payload-compress ${{ matrix.compress }}
 
       - name: Build vigil .rpm
-        run: |
-          cargo generate-rpm -p crates/vigil \
-            --payload-compress ${{ matrix.compress }} \
-            -o dist/
+        run: cargo generate-rpm -p crates/vigil --payload-compress ${{ matrix.compress }}
 
       - name: Build vigil-http-streamer .rpm
+        run: cargo generate-rpm -p crates/vigil-http-streamer --payload-compress ${{ matrix.compress }}
+
+      - name: Collect RPMs
         run: |
-          cargo generate-rpm -p crates/vigil-http-streamer \
-            --payload-compress ${{ matrix.compress }} \
-            -o dist/
+          mkdir -p dist
+          cp target/generate-rpm/*.rpm dist/
 
       - name: Add dist tag to RPM filenames
         run: |
@@ -293,6 +289,14 @@ jobs:
         with:
           name: binaries-arm64
           path: dist/arm64/
+
+      - name: Rename binaries (strip arch suffix for Dockerfile COPY)
+        run: |
+          for arch in amd64 arm64; do
+            mv dist/$arch/vigild-$arch               dist/$arch/vigild
+            mv dist/$arch/vigil-$arch                dist/$arch/vigil
+            mv dist/$arch/vigil-http-streamer-$arch  dist/$arch/vigil-http-streamer
+          done
 
       - name: Make binaries executable
         run: chmod +x dist/amd64/* dist/arm64/*
