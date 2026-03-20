@@ -11,10 +11,12 @@ FROM alpine:3.21
 ARG TARGETARCH
 
 # Pre-built static binaries are staged by the CI workflow under dist/<arch>/
-COPY dist/${TARGETARCH}/vigild /usr/local/bin/vigild
-COPY dist/${TARGETARCH}/vigil  /usr/local/bin/vigil
+COPY dist/${TARGETARCH}/vigild           /usr/local/bin/vigild
+COPY dist/${TARGETARCH}/vigil            /usr/local/bin/vigil
+COPY dist/${TARGETARCH}/vigil-log-relay  /usr/local/bin/vigil-log-relay
 
-RUN chmod +x /usr/local/bin/vigild /usr/local/bin/vigil \
+RUN apk add --no-cache bash curl \
+ && chmod +x /usr/local/bin/vigild /usr/local/bin/vigil /usr/local/bin/vigil-log-relay \
  && mkdir -p /run/vigil /etc/vigil/layers
 
 LABEL org.opencontainers.image.title="vigil-rs" \
