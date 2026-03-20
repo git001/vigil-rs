@@ -18,30 +18,30 @@
 #   kubectl apply -f examples/kubernetes-pod-logs/k8s/rbac.yaml
 #   kubectl apply -f examples/kubernetes-pod-logs/k8s/deployment.yaml
 
-# Stage 1 — build vigild, vigil, and vigil-log-relay as static musl binaries
-FROM rust:alpine AS vigil-builder
-RUN apk add --no-cache musl-dev
-WORKDIR /vigil-rs
-COPY Cargo.toml Cargo.lock ./
-COPY crates/ crates/
-RUN cargo build --release --bin vigild --bin vigil --bin vigil-log-relay
+# Stage 1 — pull binaries from the published vigil-rs image (no local build needed)
+FROM ghcr.io/git001/vigil-rs:2 AS vigil-binaries
 
 # Stage 2 — final image: Filebeat (Ubuntu) + vigil binaries
 FROM docker.elastic.co/beats/filebeat:8.17.0
 USER root
 
-COPY --from=vigil-builder /vigil-rs/target/release/vigild                /usr/local/bin/vigild
-COPY --from=vigil-builder /vigil-rs/target/release/vigil                 /usr/local/bin/vigil
-COPY --from=vigil-builder /vigil-rs/target/release/vigil-log-relay   /usr/local/bin/vigil-log-relay
-COPY examples/kubernetes-pod-logs/filebeat.yml                            /usr/share/filebeat/vigil-filebeat.yml
-COPY examples/kubernetes-pod-logs/layers/                                 /etc/vigil/layers/
+COPY --from=vigil-binaries /usr/local/bin/vigild           /usr/local/bin/vigild
+COPY --from=vigil-binaries /usr/local/bin/vigil            /usr/local/bin/vigil
+COPY --from=vigil-binaries /usr/local/bin/vigil-log-relay  /usr/local/bin/vigil-log-relay
+COPY examples/kubernetes-pod-logs/filebeat.yml             /usr/share/filebeat/vigil-filebeat.yml
+COPY examples/kubernetes-pod-logs/layers/                  /etc/vigil/layers/
 
-RUN chmod 644 /usr/share/filebeat/vigil-filebeat.yml
+RUN chmod 644 /usr/share/filebeat/vigil-filebeat.yml \
+ && chown -R 1001:0 /etc/vigil \
+ && chmod -R g=u   /etc/vigil
 
-# /tmp is world-writable; OpenShift mounts /run as a fresh root-owned tmpfs
-# so any chmod done in the image layer is lost at runtime.
+# Use /tmp for the socket: /run is a root-owned tmpfs on OpenShift and
+# any chmod done in the image layer is lost at runtime.
 WORKDIR /tmp
 
-ENTRYPOINT ["/usr/local/bin/vigild", \
-    "--layers-dir", "/etc/vigil/layers", \
-    "--socket",     "/tmp/vigild.sock"]
+ENV VIGIL_LAYERS=/etc/vigil/layers \
+    VIGIL_SOCKET=/tmp/vigild.sock
+
+USER 1001
+
+ENTRYPOINT ["/usr/local/bin/vigild"]
