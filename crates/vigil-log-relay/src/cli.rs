@@ -7,6 +7,7 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 #[command(
     name    = "vigil-log-relay",
+    version,
     about   = "Read ndjson log streams from Kubernetes pods, HTTP endpoints, or Unix sockets and forward them to a TCP sink",
     next_help_heading = "Source"
 )]
