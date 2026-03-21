@@ -6,14 +6,14 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use futures::TryStreamExt;
-use tokio::io::AsyncBufReadExt;
+use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_util::io::StreamReader;
 use tracing::{info, warn};
 
+use crate::source_http::{bump_failures, spawn_liveness_ticker, stream_loop};
 use crate::{LineFilter, Liveness, ReconnectConfig, SourceConnConfig};
-use crate::source_http::{bump_failures, forward_line, spawn_liveness_ticker};
 
 // ---------------------------------------------------------------------------
 // URL source entry point
@@ -27,8 +27,14 @@ pub async fn run(
     cfg: ReconnectConfig,
     filter: LineFilter,
 ) -> Result<()> {
-    let mut builder = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true); // allow vigild self-signed TLS
+    let mut builder = reqwest::Client::builder().danger_accept_invalid_certs(conn.source_insecure);
+    if let Some(ca_path) = &conn.source_cacert {
+        for cert in load_pem_chain(ca_path).with_context(|| {
+            format!("failed to load --source-cacert {}", ca_path.display())
+        })? {
+            builder = builder.add_root_certificate(cert);
+        }
+    }
     if conn.connect_timeout_ms > 0 {
         builder = builder.connect_timeout(Duration::from_millis(conn.connect_timeout_ms));
     }
@@ -39,18 +45,28 @@ pub async fn run(
         builder = builder.tcp_keepalive(Duration::from_secs(conn.keepalive_interval_secs));
     }
     if let Some(proxy_url) = &conn.proxy_url {
-        builder = builder.proxy(
-            reqwest::Proxy::all(proxy_url.as_str())
-                .context("invalid --source-proxy URL")?,
-        );
+        use vigil_types::no_proxy::{no_proxy_matches, parse_no_proxy};
+        let no_proxy_entries = parse_no_proxy(conn.no_proxy.as_deref());
+        let proxy_uri: reqwest::Url = proxy_url
+            .parse()
+            .context("invalid --source-proxy URL")?;
+        let proxy = reqwest::Proxy::custom(move |url| {
+            let host = url.host_str().unwrap_or("");
+            if no_proxy_matches(host, &no_proxy_entries) {
+                None
+            } else {
+                Some(proxy_uri.clone())
+            }
+        });
+        builder = builder.proxy(proxy);
     }
     if conn.proxy_insecure {
         builder = builder.danger_accept_invalid_certs(true);
     }
     if let Some(ca_path) = &conn.proxy_cacert {
-        for cert in load_pem_chain(ca_path)
-            .with_context(|| format!("failed to load --source-proxy-cacert {}", ca_path.display()))?
-        {
+        for cert in load_pem_chain(ca_path).with_context(|| {
+            format!("failed to load --source-proxy-cacert {}", ca_path.display())
+        })? {
             builder = builder.add_root_certificate(cert);
         }
     }
@@ -70,41 +86,11 @@ pub async fn run(
                 failures = 0;
                 backoff = Duration::from_millis(cfg.initial_delay_ms);
 
-                let byte_stream = resp
-                    .bytes_stream()
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
-                let mut lines = tokio::io::BufReader::new(StreamReader::new(byte_stream)).lines();
+                let byte_stream = resp.bytes_stream().map_err(std::io::Error::other);
+                let lines = BufReader::new(StreamReader::new(byte_stream)).lines();
 
-                let mut clean_eof = true;
-                loop {
-                    let next = if conn.idle_timeout_ms > 0 {
-                        match tokio::time::timeout(
-                            Duration::from_millis(conn.idle_timeout_ms),
-                            lines.next_line(),
-                        ).await {
-                            Ok(r) => r,
-                            Err(_) => {
-                                warn!(url = %url, "idle timeout — reconnecting");
-                                clean_eof = false;
-                                break;
-                            }
-                        }
-                    } else {
-                        lines.next_line().await
-                    };
-                    match next {
-                        Ok(Some(line)) => forward_line(line, &tx, &filter),
-                        Ok(None) => {
-                            info!(url = %url, "stream EOF — reconnecting");
-                            break;
-                        }
-                        Err(e) => {
-                            warn!(url = %url, error = %e, "read error — reconnecting");
-                            clean_eof = false;
-                            break;
-                        }
-                    }
-                }
+                let clean_eof =
+                    stream_loop(lines, &tx, &filter, conn.idle_timeout_ms, &url).await;
                 if !clean_eof {
                     failures = bump_failures(failures, cfg.max_retries, &url)?;
                 }
@@ -150,3 +136,6 @@ fn load_pem_chain(path: &Path) -> Result<Vec<reqwest::Certificate>> {
     }
     Ok(certs)
 }
+
+#[cfg(test)]
+mod tests;

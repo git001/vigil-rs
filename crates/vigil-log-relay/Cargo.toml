@@ -1,6 +1,6 @@
 [package]
 name        = "vigil-log-relay"
-version     = "2.0.0"
+version     = "3.0.0"
 edition     = "2024"
 license     = "AGPL-3.0-only"
 description = "Reads ndjson log streams from Kubernetes pods, HTTP endpoints, or Unix sockets and forwards them to a TCP sink"
@@ -40,6 +40,7 @@ name = "vigil-log-relay"
 path = "src/main.rs"
 
 [dependencies]
+vigil-types        = { path = "../vigil-types" }
 # Workspace shared deps
 tokio              = { workspace = true }
 serde              = { workspace = true }
@@ -61,6 +62,7 @@ tower              = { workspace = true }
 
 # Kubernetes client (--kubernetes mode)
 kube         = { version = "0.98", default-features = false, features = ["client", "runtime", "rustls-tls"] }
+http         = "1.1"
 rustls       = { version = "0.23", features = ["ring"], default-features = false }
 rustls-pemfile = "2"
 k8s-openapi  = { version = "0.24", features = ["v1_32"] }
@@ -74,3 +76,7 @@ regex        = "1"
 
 # TCP keepalive configuration (--dest-keepalive-*)
 socket2      = { version = "0.5", features = ["all"] }
+
+[dev-dependencies]
+rcgen    = { workspace = true }
+tempfile = { workspace = true }

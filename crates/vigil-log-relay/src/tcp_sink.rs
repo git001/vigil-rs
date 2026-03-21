@@ -46,6 +46,9 @@ pub struct SinkConfig {
 
 pub async fn run(addr: String, mut rx: mpsc::Receiver<String>, cfg: SinkConfig) {
     let mut backoff = Duration::from_millis(cfg.reconnect_delay_ms);
+    // Line that failed to write — retried first on the next connection
+    // so no log entries are lost on Broken pipe / write timeout.
+    let mut pending: Option<String> = None;
 
     loop {
         let connect = TcpStream::connect(&addr);
@@ -68,8 +71,10 @@ pub async fn run(addr: String, mut rx: mpsc::Receiver<String>, cfg: SinkConfig) 
                 backoff = Duration::from_millis(cfg.reconnect_delay_ms);
 
                 loop {
-                    // Receive next line (with optional idle timeout)
-                    let line = if cfg.idle_timeout_ms > 0 {
+                    // Retry a previously failed line first; otherwise receive next.
+                    let line = if let Some(p) = pending.take() {
+                        p
+                    } else if cfg.idle_timeout_ms > 0 {
                         match timeout(Duration::from_millis(cfg.idle_timeout_ms), rx.recv()).await {
                             Ok(Some(l)) => l,
                             Ok(None) => {
@@ -111,6 +116,7 @@ pub async fn run(addr: String, mut rx: mpsc::Receiver<String>, cfg: SinkConfig) 
 
                     if let Err(e) = write_result {
                         warn!(addr = %addr, error = %e, "write error — reconnecting");
+                        pending = Some(line); // preserve for retry after reconnect
                         break;
                     }
                 }
@@ -133,7 +139,7 @@ pub async fn run(addr: String, mut rx: mpsc::Receiver<String>, cfg: SinkConfig) 
 // TCP keepalive helper
 // ---------------------------------------------------------------------------
 
-fn apply_keepalive(stream: &TcpStream, cfg: &SinkConfig) {
+pub fn apply_keepalive(stream: &TcpStream, cfg: &SinkConfig) {
     if cfg.keepalive_interval_secs == 0 {
         return;
     }
@@ -152,5 +158,128 @@ fn apply_keepalive(stream: &TcpStream, cfg: &SinkConfig) {
 
     if let Err(e) = SockRef::from(stream).set_tcp_keepalive(&ka) {
         warn!(error = %e, "failed to set TCP keepalive");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpListener;
+
+    fn default_cfg() -> SinkConfig {
+        SinkConfig {
+            connect_timeout_ms: 1000,
+            write_timeout_ms: 0,
+            idle_timeout_ms: 0,
+            keepalive_interval_secs: 0,
+            keepalive_timeout_secs: 0,
+            reconnect_delay_ms: 10,
+            reconnect_max_ms: 100,
+        }
+    }
+
+    #[tokio::test]
+    async fn channel_close_after_connect_exits() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let (tx, rx) = mpsc::channel::<String>(8);
+
+        // Accept one connection in the background
+        tokio::spawn(async move {
+            let _ = listener.accept().await;
+            // keep connection alive briefly, then drop it
+        });
+
+        // Close the sender immediately — run() should exit after connecting
+        drop(tx);
+
+        // run() will connect, then rx.recv() returns None → exits
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            run(addr, rx, default_cfg()),
+        )
+        .await
+        .expect("run() did not exit after channel was closed");
+    }
+
+    #[tokio::test]
+    async fn writes_lines_to_sink() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let (tx, rx) = mpsc::channel::<String>(8);
+
+        // Accept and collect received data
+        let collect = tokio::spawn(async move {
+            let (mut conn, _) = listener.accept().await.unwrap();
+            let mut buf = String::new();
+            // Read up to 3 lines then return
+            let mut line_buf = [0u8; 4096];
+            loop {
+                let n = conn.read(&mut line_buf).await.unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                buf.push_str(&String::from_utf8_lossy(&line_buf[..n]));
+                if buf.matches('\n').count() >= 3 {
+                    break;
+                }
+            }
+            buf
+        });
+
+        // Send 3 lines
+        tx.send("line-one\n".to_string()).await.unwrap();
+        tx.send("line-two\n".to_string()).await.unwrap();
+        tx.send("line-three\n".to_string()).await.unwrap();
+
+        // Start run() — it will connect and write the lines
+        let run_handle = tokio::spawn(run(addr, rx, default_cfg()));
+
+        let received = tokio::time::timeout(std::time::Duration::from_secs(5), collect)
+            .await
+            .expect("collect timed out")
+            .unwrap();
+
+        assert!(
+            received.contains("line-one"),
+            "missing line-one in: {received}"
+        );
+        assert!(
+            received.contains("line-two"),
+            "missing line-two in: {received}"
+        );
+        assert!(
+            received.contains("line-three"),
+            "missing line-three in: {received}"
+        );
+
+        run_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn apply_keepalive_zero_interval_is_noop() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).await.unwrap();
+        // keepalive_interval_secs = 0 → early return, no panic
+        apply_keepalive(&stream, &default_cfg());
+    }
+
+    #[tokio::test]
+    async fn apply_keepalive_nonzero_does_not_panic() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).await.unwrap();
+        let cfg = SinkConfig {
+            keepalive_interval_secs: 10,
+            keepalive_timeout_secs: 30,
+            ..default_cfg()
+        };
+        apply_keepalive(&stream, &cfg);
     }
 }

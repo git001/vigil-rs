@@ -22,22 +22,31 @@ use std::time::Duration;
 use anyhow::Result;
 use futures::StreamExt;
 use k8s_openapi::api::core::v1::Pod;
-use kube::{runtime::watcher, Api};
+use kube::{Api, runtime::watcher};
 use regex::Regex;
 use tokio::sync::mpsc;
-use tokio::time::{interval, MissedTickBehavior};
+use tokio::time::{MissedTickBehavior, interval};
 use tracing::{info, warn};
 
-use crate::{cli::Cli, LineFilter, Liveness};
+use crate::{LineFilter, Liveness, cli::Cli};
 
 // ---------------------------------------------------------------------------
 // Main event loop
 // ---------------------------------------------------------------------------
 
-pub async fn run(cli: Cli, tx: mpsc::Sender<String>, liveness: Arc<Liveness>, filter: LineFilter) -> Result<()> {
+pub async fn run(
+    cli: Cli,
+    tx: mpsc::Sender<String>,
+    liveness: Arc<Liveness>,
+    filter: LineFilter,
+) -> Result<()> {
     let filter = Arc::new(filter);
-    let exclude_pod_re: Vec<Regex> = cli.exclude_pod.iter()
-        .map(|p| Regex::new(p).map_err(|e| anyhow::anyhow!("invalid --exclude-pod regex: {p}: {e}")))
+    let exclude_pod_re: Vec<Regex> = cli
+        .exclude_pod
+        .iter()
+        .map(|p| {
+            Regex::new(p).map_err(|e| anyhow::anyhow!("invalid --exclude-pod regex: {p}: {e}"))
+        })
         .collect::<Result<_>>()?;
 
     let semaphore = if cli.max_log_requests > 0 {
@@ -47,16 +56,18 @@ pub async fn run(cli: Cli, tx: mpsc::Sender<String>, liveness: Arc<Liveness>, fi
     };
 
     let kube_client = client::build(&cli).await?;
-    let pods_api: Api<Pod> = Api::namespaced(kube_client, &cli.namespace);
+    let pods_api: Api<Pod> = Api::namespaced(kube_client.clone(), &cli.namespace);
     let namespace = Arc::new(cli.namespace.clone());
     let container = cli.container.map(Arc::new);
+
+    let use_stream_param = !cli.no_stream_param && detect_stream_param_support(&kube_client).await;
 
     let watcher_config = if cli.pod_selector.is_empty() {
         watcher::Config::default()
     } else {
         watcher::Config::default().labels(&cli.pod_selector)
     };
-    let mut pod_events = watcher(pods_api.clone(), watcher_config).boxed();
+    let mut pod_events = watcher(pods_api, watcher_config).boxed();
 
     // running_pods: pods known to be in Running phase (from watcher events)
     let mut running_pods: HashSet<String> = HashSet::new();
@@ -98,19 +109,17 @@ pub async fn run(cli: Cli, tx: mpsc::Sender<String>, liveness: Arc<Liveness>, fi
                             let (tail, since) = stream_params(&name, &initialized, cli.tail_lines, cli.since_seconds);
                             if stream::try_start(
                                 &name, &mut active, &semaphore,
-                                &pods_api, &namespace, &container,
-                                tail, since,
+                                &kube_client, &namespace, &container,
+                                tail, since, use_stream_param,
                                 &filter, &tx,
                             ) {
                                 initialized.insert(name.clone());
                             }
-                        } else {
-                            if running_pods.remove(&name) {
-                                if let Some(handle) = active.remove(&name) {
-                                    info!(pod = %name, "pod no longer running — aborting stream");
-                                    handle.abort();
-                                }
-                            }
+                        } else if running_pods.remove(&name)
+                            && let Some(handle) = active.remove(&name)
+                        {
+                            info!(pod = %name, "pod no longer running — aborting stream");
+                            handle.abort();
                         }
                     }
 
@@ -149,8 +158,8 @@ pub async fn run(cli: Cli, tx: mpsc::Sender<String>, liveness: Arc<Liveness>, fi
                     let (tail, since) = stream_params(name, &initialized, cli.tail_lines, cli.since_seconds);
                     if stream::try_start(
                         name, &mut active, &semaphore,
-                        &pods_api, &namespace, &container,
-                        tail, since,
+                        &kube_client, &namespace, &container,
+                        tail, since, use_stream_param,
                         &filter, &tx,
                     ) {
                         initialized.insert(name.clone());
@@ -168,6 +177,38 @@ pub async fn run(cli: Cli, tx: mpsc::Sender<String>, liveness: Arc<Liveness>, fi
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Detect whether the K8s API server supports the `stream` query parameter
+/// for pod log endpoints (requires K8s ≥ 1.32).
+async fn detect_stream_param_support(client: &kube::Client) -> bool {
+    let info = match client.apiserver_version().await {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(error = %e, "failed to detect K8s version — stream param disabled");
+            return false;
+        }
+    };
+    // Minor version may carry a suffix (e.g. "34+") — strip non-digit tail.
+    let minor: u32 = info
+        .minor
+        .trim_end_matches(|c: char| !c.is_ascii_digit())
+        .parse()
+        .unwrap_or(0);
+    let major: u32 = info.major.parse().unwrap_or(0);
+    let supported = (major == 1 && minor >= 32) || major > 1;
+    if supported {
+        info!(
+            k8s_version = %format!("{}.{}", info.major, info.minor),
+            "K8s stream param supported — stdout/stderr separated"
+        );
+    } else {
+        info!(
+            k8s_version = %format!("{}.{}", info.major, info.minor),
+            "K8s stream param not supported (< 1.32) — using combined output stream"
+        );
+    }
+    supported
+}
 
 /// Returns (tail_lines, since_seconds) for a stream start.
 /// First connect uses tail_lines; reconnects use since_seconds only.

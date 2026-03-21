@@ -26,10 +26,12 @@ impl LineFilter {
     /// Build a filter from lists of pattern strings.
     pub fn new(include: &[String], exclude: &[String]) -> Result<Self> {
         Ok(Self {
-            include: include.iter()
+            include: include
+                .iter()
                 .map(|p| Regex::new(p).with_context(|| format!("invalid --include regex: {p}")))
                 .collect::<Result<Vec<_>>>()?,
-            exclude: exclude.iter()
+            exclude: exclude
+                .iter()
                 .map(|p| Regex::new(p).with_context(|| format!("invalid --exclude regex: {p}")))
                 .collect::<Result<Vec<_>>>()?,
         })
@@ -115,7 +117,7 @@ mod tests {
         let f = LineFilter::from_strs(&["ERROR"], &["GET /healthz"]);
         assert!(f.allow("ERROR: db timeout"));
         assert!(!f.allow("ERROR: GET /healthz failed")); // matches exclude
-        assert!(!f.allow("INFO: normal log"));           // doesn't match include
+        assert!(!f.allow("INFO: normal log")); // doesn't match include
     }
 
     // --- invalid regex ---

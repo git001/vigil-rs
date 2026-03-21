@@ -60,3 +60,8 @@ prometheus-client  = { version = "0.22" }
 mimalloc           = { version = "0.1",  default-features = false }
 # OpenAPI
 utoipa             = { version = "5",    features = ["axum_extras", "chrono", "uuid"] }
+# Templating
+minijinja          = { version = "2" }
+# Testing
+tempfile           = { version = "3" }
+wiremock           = { version = "0.6" }

@@ -17,10 +17,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
+use tokio::io::AsyncRead;
+use tokio::io::BufReader;
 use tokio::sync::mpsc;
 use tokio::time::interval;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{LineFilter, Liveness};
 
@@ -46,12 +48,18 @@ pub struct SourceConnConfig {
     pub keepalive_interval_secs: u64,
     /// TCP keepalive probe timeout in seconds (0 = OS default).
     pub keepalive_timeout_secs: u64,
+    /// Skip TLS certificate verification for the source connection.
+    pub source_insecure: bool,
+    /// PEM file with one or more CA certificates (chain) used to verify the source's TLS.
+    pub source_cacert: Option<PathBuf>,
     /// Explicit proxy URL (overrides HTTP_PROXY / HTTPS_PROXY env vars).
     pub proxy_url: Option<String>,
     /// Skip TLS certificate verification for the proxy connection.
     pub proxy_insecure: bool,
     /// PEM file with one or more CA certificates (chain) used to verify the proxy's TLS.
     pub proxy_cacert: Option<PathBuf>,
+    /// Comma-separated list of hosts / CIDRs that bypass the proxy.
+    pub no_proxy: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -101,137 +109,6 @@ pub fn bump_failures(failures: u64, max_retries: u64, source: &str) -> Result<u6
     Ok(n)
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use tokio::sync::mpsc;
-    use super::*;
-    use crate::filter::LineFilter;
-
-    fn passthrough() -> LineFilter {
-        LineFilter::from_strs(&[], &[])
-    }
-
-    /// Send `line` through `forward_line` and return what arrived in the channel,
-    /// with the trailing newline stripped for easier assertions.
-    fn fwd(line: &str, filter: &LineFilter) -> Option<String> {
-        let (tx, mut rx) = mpsc::channel(4);
-        forward_line(line.to_owned(), &tx, filter);
-        rx.try_recv().ok().map(|s| s.trim_end_matches('\n').to_owned())
-    }
-
-    // --- SSE skips ---
-
-    #[test]
-    fn empty_line_is_skipped() {
-        assert_eq!(fwd("", &passthrough()), None);
-    }
-
-    #[test]
-    fn sse_keepalive_comment_is_skipped() {
-        assert_eq!(fwd(": ping", &passthrough()), None);
-        assert_eq!(fwd(": keep-alive", &passthrough()), None);
-    }
-
-    #[test]
-    fn sse_event_field_is_skipped() {
-        assert_eq!(fwd("event: heartbeat", &passthrough()), None);
-    }
-
-    #[test]
-    fn sse_id_field_is_skipped() {
-        assert_eq!(fwd("id: 42", &passthrough()), None);
-    }
-
-    #[test]
-    fn sse_retry_field_is_skipped() {
-        assert_eq!(fwd("retry: 3000", &passthrough()), None);
-    }
-
-    // --- SSE data stripping ---
-
-    #[test]
-    fn sse_data_with_space_strips_prefix() {
-        let result = fwd(r#"data: {"level":"info","msg":"ok"}"#, &passthrough());
-        assert_eq!(result.as_deref(), Some(r#"{"level":"info","msg":"ok"}"#));
-    }
-
-    #[test]
-    fn sse_data_without_space_strips_prefix() {
-        let result = fwd(r#"data:{"level":"info","msg":"ok"}"#, &passthrough());
-        assert_eq!(result.as_deref(), Some(r#"{"level":"info","msg":"ok"}"#));
-    }
-
-    #[test]
-    fn sse_data_empty_payload_is_skipped() {
-        assert_eq!(fwd("data:", &passthrough()), None);
-        assert_eq!(fwd("data: ", &passthrough()), None);
-    }
-
-    // --- plain ndjson passthrough ---
-
-    #[test]
-    fn plain_ndjson_is_forwarded_verbatim() {
-        let line = r#"{"level":"error","msg":"timeout"}"#;
-        assert_eq!(fwd(line, &passthrough()).as_deref(), Some(line));
-    }
-
-    // --- filter integration ---
-
-    #[test]
-    fn forward_line_respects_include_filter() {
-        let f = LineFilter::from_strs(&["ERROR"], &[]);
-        assert!(fwd(r#"{"level":"error"}"#, &f).is_none()); // no "ERROR" in uppercase
-        let f2 = LineFilter::from_strs(&["level"], &[]);
-        assert!(fwd(r#"{"level":"error"}"#, &f2).is_some());
-    }
-
-    #[test]
-    fn forward_line_respects_exclude_filter() {
-        let f = LineFilter::from_strs(&[], &["healthz"]);
-        assert!(fwd(r#"GET /healthz 200"#, &f).is_none());
-        assert!(fwd(r#"GET /api/data 200"#, &f).is_some());
-    }
-
-    // --- output has trailing newline ---
-
-    #[test]
-    fn forwarded_line_ends_with_newline() {
-        let (tx, mut rx) = mpsc::channel(4);
-        forward_line(r#"{"msg":"hi"}"#.to_owned(), &tx, &passthrough());
-        let got = rx.try_recv().unwrap();
-        assert!(got.ends_with('\n'));
-    }
-
-    // --- bump_failures ---
-
-    #[test]
-    fn bump_failures_increments_counter() {
-        assert_eq!(bump_failures(0, 0, "src").unwrap(), 1);
-        assert_eq!(bump_failures(4, 0, "src").unwrap(), 5);
-    }
-
-    #[test]
-    fn bump_failures_unlimited_never_errors() {
-        // max_retries = 0 means unlimited
-        assert!(bump_failures(9999, 0, "src").is_ok());
-    }
-
-    #[test]
-    fn bump_failures_exits_at_limit() {
-        // errors when failures+1 >= max_retries
-        assert!(bump_failures(2, 3, "src").is_err());
-    }
-
-    #[test]
-    fn bump_failures_below_limit_is_ok() {
-        assert!(bump_failures(1, 3, "src").is_ok());
-    }
-}
-
 /// Spawn a background task that ticks liveness every 30 s.
 /// This keeps the healthcheck alive even when the stream is idle
 /// (next_line() blocks waiting for data from a quiet source).
@@ -244,3 +121,58 @@ pub fn spawn_liveness_ticker(liveness: Arc<Liveness>) {
         }
     });
 }
+
+/// Drive the inner streaming loop shared by `source_url` and `source_unix`.
+///
+/// Reads lines from `lines` until EOF, a read error, or an idle-timeout
+/// expiry.  Returns `true` on a clean EOF and `false` on any unclean exit
+/// (error or timeout), so the caller knows whether to increment the failure
+/// counter.
+///
+/// * `idle_timeout_ms` — per-line timeout in milliseconds; 0 disables it.
+/// * `source_label`    — human-readable name used in log messages
+///                       (e.g. the URL string or socket path).
+pub async fn stream_loop<R>(
+    mut lines: tokio::io::Lines<BufReader<R>>,
+    tx: &mpsc::Sender<String>,
+    filter: &LineFilter,
+    idle_timeout_ms: u64,
+    source_label: &str,
+) -> bool
+where
+    R: AsyncRead + Unpin,
+{
+    loop {
+        let next = if idle_timeout_ms > 0 {
+            match tokio::time::timeout(
+                Duration::from_millis(idle_timeout_ms),
+                lines.next_line(),
+            )
+            .await
+            {
+                Ok(r) => r,
+                Err(_) => {
+                    warn!(source = %source_label, "idle timeout — reconnecting");
+                    return false;
+                }
+            }
+        } else {
+            lines.next_line().await
+        };
+
+        match next {
+            Ok(Some(line)) => forward_line(line, tx, filter),
+            Ok(None) => {
+                info!(source = %source_label, "stream EOF — reconnecting");
+                return true;
+            }
+            Err(e) => {
+                warn!(source = %source_label, error = %e, "read error — reconnecting");
+                return false;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;
