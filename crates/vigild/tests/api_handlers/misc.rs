@@ -44,7 +44,10 @@ async fn metrics_body_contains_all_family_names() {
         "vigil_check_failure_count",
         "vigil_alert_fire_count",
     ] {
-        assert!(body.contains(name), "metric '{name}' missing from /v1/metrics response");
+        assert!(
+            body.contains(name),
+            "metric '{name}' missing from /v1/metrics response"
+        );
     }
     assert!(body.contains("# EOF"), "OpenMetrics EOF marker missing");
     app.shutdown().await;

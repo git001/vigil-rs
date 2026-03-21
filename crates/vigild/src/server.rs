@@ -99,16 +99,17 @@ pub async fn serve_tls(addr: &str, acceptor: TlsAcceptor, router: Router) -> any
                         .map(|c| TlsPeerCert(c.to_vec()));
 
                     let io = TokioIo::new(tls_stream);
-                    let svc = hyper::service::service_fn(move |mut req: hyper::Request<Incoming>| {
-                        let mut r = router.clone();
-                        let cert = peer_cert.clone();
-                        async move {
-                            if let Some(c) = cert {
-                                req.extensions_mut().insert(c);
+                    let svc =
+                        hyper::service::service_fn(move |mut req: hyper::Request<Incoming>| {
+                            let mut r = router.clone();
+                            let cert = peer_cert.clone();
+                            async move {
+                                if let Some(c) = cert {
+                                    req.extensions_mut().insert(c);
+                                }
+                                r.call(req.map(Body::new)).await
                             }
-                            r.call(req.map(Body::new)).await
-                        }
-                    });
+                        });
                     if let Err(e) = http1::Builder::new().serve_connection(io, svc).await {
                         tracing::debug!("HTTP/1 error from {peer}: {e}");
                     }

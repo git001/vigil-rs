@@ -144,11 +144,8 @@ where
 {
     loop {
         let next = if idle_timeout_ms > 0 {
-            match tokio::time::timeout(
-                Duration::from_millis(idle_timeout_ms),
-                lines.next_line(),
-            )
-            .await
+            match tokio::time::timeout(Duration::from_millis(idle_timeout_ms), lines.next_line())
+                .await
             {
                 Ok(r) => r,
                 Err(_) => {

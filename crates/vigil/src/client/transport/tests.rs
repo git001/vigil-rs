@@ -12,7 +12,10 @@ use super::*;
 fn drain_sse_buf_empty_buffer() {
     let mut buf = String::new();
     drain_sse_buf(&mut buf);
-    assert!(buf.is_empty(), "empty buffer should remain empty after drain");
+    assert!(
+        buf.is_empty(),
+        "empty buffer should remain empty after drain"
+    );
 }
 
 /// Partial data without a newline: buffer must be left unchanged.
@@ -77,11 +80,9 @@ fn drain_sse_buf_valid_data_line() {
 /// complete lines are consumed, only a trailing partial line is retained.
 #[test]
 fn drain_sse_buf_multiple_lines() {
-    let json = r#"{"timestamp":"2026-01-01T00:00:00Z","service":"svc","stream":"stderr","message":"err"}"#;
-    let mut buf = format!(
-        ":keepalive\nevent:ping\ndata:{}\npartial",
-        json
-    );
+    let json =
+        r#"{"timestamp":"2026-01-01T00:00:00Z","service":"svc","stream":"stderr","message":"err"}"#;
+    let mut buf = format!(":keepalive\nevent:ping\ndata:{}\npartial", json);
     drain_sse_buf(&mut buf);
     assert_eq!(
         buf, "partial",
@@ -185,7 +186,10 @@ fn make_resp(status: u16, body: &'static str) -> reqwest::Response {
 
 #[tokio::test]
 async fn http_parse_success() {
-    let resp = make_resp(200, r#"{"type":"sync","status-code":200,"status":"OK","result":42}"#);
+    let resp = make_resp(
+        200,
+        r#"{"type":"sync","status-code":200,"status":"OK","result":42}"#,
+    );
     let val: u32 = http_parse(resp).await.expect("http_parse should succeed");
     assert_eq!(val, 42);
 }
@@ -259,9 +263,7 @@ async fn http_parse_void_fallback_http_status_message() {
         400,
         r#"{"type":"error","status-code":400,"status":"Bad Request","result":null}"#,
     );
-    let err = http_parse_void(resp)
-        .await
-        .expect_err("should return Err");
+    let err = http_parse_void(resp).await.expect_err("should return Err");
     assert!(
         err.to_string().contains("400"),
         "fallback message should include HTTP status: {err}"

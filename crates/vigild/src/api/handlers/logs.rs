@@ -18,8 +18,8 @@ use tokio_stream::wrappers::BroadcastStream;
 use vigil_types::api::LogEntry;
 use vigil_types::identity::IdentityAccess;
 
-use super::{LogFormat, LogsQuery, parse_services};
 use super::super::{ApiError, ApiResult, AppState, auth::Caller, ok};
+use super::{LogFormat, LogsQuery, parse_services};
 
 #[utoipa::path(
     get, path = "/v1/logs",

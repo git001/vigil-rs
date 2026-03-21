@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 vigil-rs contributors
 
-use std::time::Duration;
 use nix::sys::signal::Signal;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use vigil_types::plan::ServiceConfig;
 use vigil_types::signal::StopSignal;
@@ -515,7 +515,10 @@ async fn do_start_command_with_multiple_args() {
     let mut stop_deadline = None;
     actor.handle_start(reply_tx, &mut stop_deadline).await;
     let result = reply_rx.await.unwrap();
-    assert!(result.is_ok(), "expected successful spawn with args: {result:?}");
+    assert!(
+        result.is_ok(),
+        "expected successful spawn with args: {result:?}"
+    );
     actor.cleanup().await;
 }
 
@@ -615,7 +618,10 @@ async fn start_when_stopping_returns_error() {
     let mut stop_deadline = None;
     actor.handle_start(reply_tx, &mut stop_deadline).await;
     let result = reply_rx.await.unwrap();
-    assert!(result.is_err(), "expected error when starting a Stopping service");
+    assert!(
+        result.is_err(),
+        "expected error when starting a Stopping service"
+    );
 }
 
 // -----------------------------------------------------------------------

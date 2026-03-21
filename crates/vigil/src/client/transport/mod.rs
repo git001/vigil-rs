@@ -5,9 +5,9 @@
 
 mod connector;
 mod http;
-mod unix;
 #[cfg(test)]
 mod tests;
+mod unix;
 
 pub(super) use connector::Transport;
 pub(super) use http::{drain_sse_buf, http_parse, http_parse_void, names_query};

@@ -7,7 +7,10 @@ use super::MetricsStore;
 fn render_empty_registry_contains_eof_marker() {
     let m = MetricsStore::new();
     let out = m.render();
-    assert!(out.contains("# EOF"), "OpenMetrics output must end with # EOF");
+    assert!(
+        out.contains("# EOF"),
+        "OpenMetrics output must end with # EOF"
+    );
 }
 
 #[test]
@@ -24,7 +27,10 @@ fn all_metric_family_names_present_in_empty_render() {
         "vigil_check_failure_count",
         "vigil_alert_fire_count",
     ] {
-        assert!(out.contains(name), "metric '{name}' missing from render output");
+        assert!(
+            out.contains(name),
+            "metric '{name}' missing from render output"
+        );
     }
 }
 
@@ -36,8 +42,7 @@ fn set_services_label_and_count() {
     assert!(out.contains("web"), "service label 'web' missing");
     assert!(out.contains("db"), "service label 'db' missing");
     assert!(
-        out.contains("vigil_services_count_total 2")
-            || out.contains("vigil_services_count 2"),
+        out.contains("vigil_services_count_total 2") || out.contains("vigil_services_count 2"),
         "services_count not 2 in: {out}"
     );
 }

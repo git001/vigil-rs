@@ -4,8 +4,10 @@
 use vigil_types::api::CheckStatus;
 use vigil_types::plan::{AlertConfig, AlertFormat};
 
-use super::{format_alertmanager, format_cloudevents, format_otlp_logs, format_payload,
-            format_webhook, resolve};
+use super::{
+    format_alertmanager, format_cloudevents, format_otlp_logs, format_payload, format_webhook,
+    resolve,
+};
 
 fn empty_cfg() -> AlertConfig {
     AlertConfig {
@@ -119,7 +121,8 @@ fn template_slack_like_up() {
 fn template_with_labels_and_info() {
     let mut cfg = empty_cfg();
     cfg.labels.insert("env".into(), "prod".into());
-    cfg.send_info_fields.insert("team".into(), "platform".into());
+    cfg.send_info_fields
+        .insert("team".into(), "platform".into());
     cfg.body_template = Some(
         r#"{"env": "{{ labels.env }}", "team": "{{ info.team }}", "s": "{{ status }}"}"#
             .to_string(),
@@ -135,15 +138,17 @@ fn template_timestamp_is_string() {
     let mut cfg = empty_cfg();
     cfg.body_template = Some(r#"{"ts": "{{ timestamp }}"}"#.to_string());
     let v = format_payload("web", CheckStatus::Down, &cfg);
-    assert!(v["ts"].as_str().unwrap().contains('T'), "timestamp should be RFC3339");
+    assert!(
+        v["ts"].as_str().unwrap().contains('T'),
+        "timestamp should be RFC3339"
+    );
 }
 
 #[test]
 fn template_conditional_color() {
     let mut cfg = empty_cfg();
-    cfg.body_template = Some(
-        r#"{"color": "{% if status == 'down' %}red{% else %}green{% endif %}"}"#.to_string(),
-    );
+    cfg.body_template =
+        Some(r#"{"color": "{% if status == 'down' %}red{% else %}green{% endif %}"}"#.to_string());
     let down = format_payload("web", CheckStatus::Down, &cfg);
     assert_eq!(down["color"], "red");
     let up = format_payload("web", CheckStatus::Up, &cfg);

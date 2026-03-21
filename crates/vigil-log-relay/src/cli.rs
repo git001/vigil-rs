@@ -98,11 +98,7 @@ pub struct Cli {
     /// Skip TLS certificate verification for the source connection.
     ///
     /// Applies to --source-url mode. Useful when vigild uses a self-signed certificate.
-    #[arg(
-        long,
-        env = "SOURCE_INSECURE",
-        help_heading = "Source Connection"
-    )]
+    #[arg(long, env = "SOURCE_INSECURE", help_heading = "Source Connection")]
     pub source_insecure: bool,
 
     /// PEM file with one or more CA certificates (chain) to verify the source's TLS.
@@ -287,11 +283,7 @@ pub struct Cli {
     /// The stream= parameter was added in K8s 1.32 but some distributions
     /// (e.g. OpenShift) forbid it via admission control even on newer versions.
     /// Set this flag if you see "stream: Forbidden: may not be specified" errors.
-    #[arg(
-        long,
-        env = "NO_STREAM_PARAM",
-        help_heading = "Kubernetes"
-    )]
+    #[arg(long, env = "NO_STREAM_PARAM", help_heading = "Kubernetes")]
     pub no_stream_param: bool,
 
     // ---- Filter -----------------------------------------------------------

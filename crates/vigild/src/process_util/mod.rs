@@ -2,7 +2,6 @@
 // Copyright (C) 2026 vigil-rs contributors
 
 /// Shared process-launching helpers used by both service.rs and check.rs.
-
 mod identity;
 mod parse;
 #[cfg(test)]

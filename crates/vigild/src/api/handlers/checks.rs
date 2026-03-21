@@ -8,8 +8,8 @@ use vigil_types::identity::IdentityAccess;
 
 use crate::overlord::Cmd;
 
-use super::{NamesQuery, parse_names};
 use super::super::{ApiError, ApiResult, AppState, auth::Caller, ok};
+use super::{NamesQuery, parse_names};
 
 #[utoipa::path(
     get, path = "/v1/checks",

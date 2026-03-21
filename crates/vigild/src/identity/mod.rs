@@ -118,8 +118,7 @@ impl IdentityStore {
 /// Returns `true` if `cert_der` is a valid end-entity certificate that was
 /// signed by one of the CA certificates in `ca_pem` (PEM, may be a chain).
 pub(crate) fn verify_cert_against_ca(cert_der: &[u8], ca_pem: &str) -> bool {
-    let Ok(ca_ders) = rustls_pemfile::certs(&mut ca_pem.as_bytes())
-        .collect::<Result<Vec<_>, _>>()
+    let Ok(ca_ders) = rustls_pemfile::certs(&mut ca_pem.as_bytes()).collect::<Result<Vec<_>, _>>()
     else {
         return false;
     };

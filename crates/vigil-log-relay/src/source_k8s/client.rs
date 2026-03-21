@@ -101,7 +101,8 @@ mod tests {
     #[test]
     fn load_der_certs_no_pem_blocks_errors() {
         let mut f = NamedTempFile::new().unwrap();
-        f.write_all(b"this is plain text, not a PEM file\n").unwrap();
+        f.write_all(b"this is plain text, not a PEM file\n")
+            .unwrap();
         let err = load_der_certs(f.path()).unwrap_err();
         assert!(err.to_string().contains("no certificates"));
     }

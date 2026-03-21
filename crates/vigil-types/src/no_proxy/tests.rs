@@ -36,7 +36,10 @@ fn no_false_suffix() {
 fn leading_dot_entry() {
     assert!(no_proxy_matches("local.com", &entries(".local.com")));
     assert!(no_proxy_matches("www.local.com", &entries(".local.com")));
-    assert!(!no_proxy_matches("www.notlocal.com", &entries(".local.com")));
+    assert!(!no_proxy_matches(
+        "www.notlocal.com",
+        &entries(".local.com")
+    ));
 }
 
 #[test]
@@ -64,7 +67,10 @@ fn case_insensitive() {
 #[test]
 fn ipv4_cidr_match() {
     assert!(no_proxy_matches("10.0.1.5", &entries("10.0.0.0/8")));
-    assert!(no_proxy_matches("192.168.1.100", &entries("192.168.0.0/16")));
+    assert!(no_proxy_matches(
+        "192.168.1.100",
+        &entries("192.168.0.0/16")
+    ));
     assert!(no_proxy_matches("169.254.1.2", &entries("169.254.0.0/16")));
 }
 
@@ -105,7 +111,10 @@ fn ipv6_cidr_no_match() {
 
 #[test]
 fn ipv6_with_port() {
-    assert!(no_proxy_matches("[2001:db8::1]:443", &entries("2001:db8::/32")));
+    assert!(no_proxy_matches(
+        "[2001:db8::1]:443",
+        &entries("2001:db8::/32")
+    ));
 }
 
 // --- mixed entries ---

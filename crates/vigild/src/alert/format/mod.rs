@@ -66,7 +66,12 @@ pub(super) fn format_payload(check: &str, status: CheckStatus, cfg: &AlertConfig
 ///
 /// On template parse/render errors or invalid JSON output, a warning is logged
 /// and the function falls back to the default webhook payload.
-fn format_webhook_template(check: &str, status: CheckStatus, cfg: &AlertConfig, template: &str) -> Value {
+fn format_webhook_template(
+    check: &str,
+    status: CheckStatus,
+    cfg: &AlertConfig,
+    template: &str,
+) -> Value {
     use minijinja::{Environment, context};
 
     let mut env = Environment::new();

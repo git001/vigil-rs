@@ -216,7 +216,9 @@ fn gen_ca_and_client_cert() -> (String, Vec<u8>) {
 
     let client_key = KeyPair::generate().unwrap();
     let client_params = CertificateParams::new(vec!["test-client".to_string()]).unwrap();
-    let client_cert = client_params.signed_by(&client_key, &ca_cert, &ca_key).unwrap();
+    let client_cert = client_params
+        .signed_by(&client_key, &ca_cert, &ca_key)
+        .unwrap();
     (ca_pem, client_cert.der().to_vec())
 }
 

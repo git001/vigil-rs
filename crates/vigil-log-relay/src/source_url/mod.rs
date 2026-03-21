@@ -29,9 +29,9 @@ pub async fn run(
 ) -> Result<()> {
     let mut builder = reqwest::Client::builder().danger_accept_invalid_certs(conn.source_insecure);
     if let Some(ca_path) = &conn.source_cacert {
-        for cert in load_pem_chain(ca_path).with_context(|| {
-            format!("failed to load --source-cacert {}", ca_path.display())
-        })? {
+        for cert in load_pem_chain(ca_path)
+            .with_context(|| format!("failed to load --source-cacert {}", ca_path.display()))?
+        {
             builder = builder.add_root_certificate(cert);
         }
     }
@@ -47,9 +47,7 @@ pub async fn run(
     if let Some(proxy_url) = &conn.proxy_url {
         use vigil_types::no_proxy::{no_proxy_matches, parse_no_proxy};
         let no_proxy_entries = parse_no_proxy(conn.no_proxy.as_deref());
-        let proxy_uri: reqwest::Url = proxy_url
-            .parse()
-            .context("invalid --source-proxy URL")?;
+        let proxy_uri: reqwest::Url = proxy_url.parse().context("invalid --source-proxy URL")?;
         let proxy = reqwest::Proxy::custom(move |url| {
             let host = url.host_str().unwrap_or("");
             if no_proxy_matches(host, &no_proxy_entries) {
@@ -89,8 +87,7 @@ pub async fn run(
                 let byte_stream = resp.bytes_stream().map_err(std::io::Error::other);
                 let lines = BufReader::new(StreamReader::new(byte_stream)).lines();
 
-                let clean_eof =
-                    stream_loop(lines, &tx, &filter, conn.idle_timeout_ms, &url).await;
+                let clean_eof = stream_loop(lines, &tx, &filter, conn.idle_timeout_ms, &url).await;
                 if !clean_eof {
                     failures = bump_failures(failures, cfg.max_retries, &url)?;
                 }

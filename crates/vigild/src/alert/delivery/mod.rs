@@ -5,9 +5,9 @@
 
 mod client;
 mod send;
-mod worker;
 #[cfg(test)]
 mod tests;
+mod worker;
 
 use std::time::Duration;
 

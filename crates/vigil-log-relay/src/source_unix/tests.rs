@@ -14,8 +14,7 @@ static COUNTER: AtomicU32 = AtomicU32::new(0);
 /// Unique temp socket path per test (pid + counter avoids stale-socket conflicts).
 fn tmp_socket() -> PathBuf {
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let p =
-        std::env::temp_dir().join(format!("vigil_test_unix_{}_{}.sock", std::process::id(), n));
+    let p = std::env::temp_dir().join(format!("vigil_test_unix_{}_{}.sock", std::process::id(), n));
     let _ = std::fs::remove_file(&p); // remove stale socket if any
     p
 }

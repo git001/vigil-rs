@@ -64,8 +64,22 @@ pub fn try_start(
 
     let handle = if use_stream_param {
         // K8s ≥ 1.32: request stdout and stderr as separate streams.
-        let url_out = log_url(namespace, pod, container_name, tail_lines, since_seconds, Some("Stdout"));
-        let url_err = log_url(namespace, pod, container_name, tail_lines, since_seconds, Some("Stderr"));
+        let url_out = log_url(
+            namespace,
+            pod,
+            container_name,
+            tail_lines,
+            since_seconds,
+            Some("Stdout"),
+        );
+        let url_err = log_url(
+            namespace,
+            pod,
+            container_name,
+            tail_lines,
+            since_seconds,
+            Some("Stderr"),
+        );
         let client = kube_client.clone();
         let pod_str = pod.to_owned();
         let ns = Arc::clone(namespace);
@@ -77,7 +91,13 @@ pub fn try_start(
         tokio::spawn(async move {
             let _permit = permit;
             let mut h_out = tokio::spawn(stream_pod(
-                client.clone(), url_out, pod_str.clone(), Arc::clone(&ns), filter_out, tx_out, "stdout",
+                client.clone(),
+                url_out,
+                pod_str.clone(),
+                Arc::clone(&ns),
+                filter_out,
+                tx_out,
+                "stdout",
             ));
             let mut h_err = tokio::spawn(stream_pod(
                 client, url_err, pod_str, ns, filter_err, tx_err, "stderr",
@@ -90,7 +110,14 @@ pub fn try_start(
         })
     } else {
         // K8s < 1.32: single combined stream, labeled "output".
-        let url = log_url(namespace, pod, container_name, tail_lines, since_seconds, None);
+        let url = log_url(
+            namespace,
+            pod,
+            container_name,
+            tail_lines,
+            since_seconds,
+            None,
+        );
         let client = kube_client.clone();
         let pod_str = pod.to_owned();
         let ns = Arc::clone(namespace);
@@ -119,9 +146,8 @@ fn log_url(
     since_seconds: i64,
     stream: Option<&str>,
 ) -> String {
-    let mut url = format!(
-        "/api/v1/namespaces/{namespace}/pods/{pod}/log?follow=true&timestamps=true"
-    );
+    let mut url =
+        format!("/api/v1/namespaces/{namespace}/pods/{pod}/log?follow=true&timestamps=true");
     if let Some(c) = container {
         url.push_str(&format!("&container={c}"));
     }

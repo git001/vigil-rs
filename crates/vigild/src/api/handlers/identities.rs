@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 vigil-rs contributors
 
-use axum::{Json, extract::{Query, State}};
+use axum::{
+    Json,
+    extract::{Query, State},
+};
 use vigil_types::api::DaemonActionRequest;
 use vigil_types::identity::{
     AddIdentitiesRequest, Identity, IdentityAccess, RemoveIdentitiesRequest,
 };
 
-use super::{NamesQuery, parse_names};
 use super::super::{ApiError, ApiResult, AppState, auth::Caller, ok};
+use super::{NamesQuery, parse_names};
 
 #[utoipa::path(
     post, path = "/v1/vigild",

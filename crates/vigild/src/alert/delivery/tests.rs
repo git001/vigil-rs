@@ -184,8 +184,12 @@ fn warn_unset_env_vars_proxy_and_no_proxy() {
 #[test]
 fn warn_unset_env_vars_headers_and_send_info_fields() {
     let mut cfg = empty_cfg();
-    cfg.headers.insert("X-Token".into(), "env:_VIGIL_DEFINITELY_MISSING_9999".into());
-    cfg.send_info_fields.insert("team".into(), "env:_VIGIL_DEFINITELY_MISSING_9999".into());
+    cfg.headers.insert(
+        "X-Token".into(),
+        "env:_VIGIL_DEFINITELY_MISSING_9999".into(),
+    );
+    cfg.send_info_fields
+        .insert("team".into(), "env:_VIGIL_DEFINITELY_MISSING_9999".into());
     warn_unset_env_vars("test-alert", &cfg); // must not panic
 }
 

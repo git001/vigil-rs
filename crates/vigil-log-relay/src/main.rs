@@ -128,7 +128,10 @@ async fn main() -> Result<()> {
 
     let filter = LineFilter::new(&cli.include, &cli.exclude)?;
 
-    info!(version = env!("CARGO_PKG_VERSION"), "vigil-log-relay starting");
+    info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "vigil-log-relay starting"
+    );
 
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;

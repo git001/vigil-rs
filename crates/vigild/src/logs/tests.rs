@@ -248,19 +248,15 @@ async fn spawn_push_tcp_sends_entries() {
     store.push(entry("svc", "tcp-hello")).await;
 
     let mut line = String::new();
-    tokio::time::timeout(
-        Duration::from_secs(2),
-        reader.read_line(&mut line),
-    )
-    .await
-    .expect("timed out waiting for line")
-    .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), reader.read_line(&mut line))
+        .await
+        .expect("timed out waiting for line")
+        .unwrap();
     assert!(
         line.contains("tcp-hello"),
         "expected 'tcp-hello' in line: {line}"
     );
 }
-
 
 #[tokio::test]
 async fn spawn_push_tcp_exits_when_store_dropped() {
@@ -311,8 +307,7 @@ async fn spawn_push_unix_sends_entries() {
     let listener = UnixListener::bind(&socket_path).unwrap();
 
     let store = LogStore::new(100, 64);
-    let _handle =
-        spawn_push_unix("svc".to_string(), socket_path_str, Arc::clone(&store));
+    let _handle = spawn_push_unix("svc".to_string(), socket_path_str, Arc::clone(&store));
 
     // Accept the connection the push task will make
     let (socket, _) = listener.accept().await.unwrap();
@@ -325,13 +320,10 @@ async fn spawn_push_unix_sends_entries() {
     store.push(entry("svc", "unix-hello")).await;
 
     let mut line = String::new();
-    tokio::time::timeout(
-        Duration::from_secs(2),
-        reader.read_line(&mut line),
-    )
-    .await
-    .expect("timed out waiting for line")
-    .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), reader.read_line(&mut line))
+        .await
+        .expect("timed out waiting for line")
+        .unwrap();
     assert!(
         line.contains("unix-hello"),
         "expected 'unix-hello' in line: {line}"

@@ -57,5 +57,5 @@ async fn wait_for_requests(mock_server: &MockServer, min_count: usize, timeout: 
     }
 }
 
-mod alerts;
 mod alertmanager;
+mod alerts;

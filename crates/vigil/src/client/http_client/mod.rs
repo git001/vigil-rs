@@ -70,12 +70,9 @@ pub(super) fn build_reqwest_client(config: HttpConfig) -> anyhow::Result<reqwest
             .split_once(':')
             .with_context(|| format!("--user must be 'username:password', got: {user_pass}"))?;
         use base64::Engine as _;
-        let encoded = base64::engine::general_purpose::STANDARD
-            .encode(format!("{user}:{pass}"));
-        let header_value = reqwest::header::HeaderValue::from_str(
-            &format!("Basic {encoded}"),
-        )
-        .context("building Authorization header")?;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}"));
+        let header_value = reqwest::header::HeaderValue::from_str(&format!("Basic {encoded}"))
+            .context("building Authorization header")?;
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(reqwest::header::AUTHORIZATION, header_value);
         builder = builder.default_headers(headers);

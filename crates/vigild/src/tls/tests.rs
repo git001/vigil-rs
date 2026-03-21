@@ -33,7 +33,9 @@ fn gen_ca_and_client() -> (String, Vec<u8>, Vec<u8>) {
 
     let client_key = KeyPair::generate().unwrap();
     let client_params = CertificateParams::new(vec!["test-client".to_string()]).unwrap();
-    let client_cert = client_params.signed_by(&client_key, &ca_cert, &ca_key).unwrap();
+    let client_cert = client_params
+        .signed_by(&client_key, &ca_cert, &ca_key)
+        .unwrap();
     let client_der = client_cert.der().to_vec();
     let client_key_der = client_key.serialize_der();
 
@@ -117,7 +119,13 @@ fn load_or_generate_from_pem_files() {
     let mut key_file = NamedTempFile::new().unwrap();
     key_file.write_all(key_pem.as_bytes()).unwrap();
 
-    load_or_generate(Some(cert_file.path()), Some(key_file.path()), "localhost", None).unwrap();
+    load_or_generate(
+        Some(cert_file.path()),
+        Some(key_file.path()),
+        "localhost",
+        None,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -130,7 +138,12 @@ fn load_or_generate_empty_cert_file_errors() {
         .write_all(key_der_to_pem(&key_der).as_bytes())
         .unwrap();
 
-    let result = load_or_generate(Some(cert_file.path()), Some(key_file.path()), "localhost", None);
+    let result = load_or_generate(
+        Some(cert_file.path()),
+        Some(key_file.path()),
+        "localhost",
+        None,
+    );
     assert!(result.is_err());
     assert!(result.err().unwrap().to_string().contains("no certificate"));
 }
@@ -154,7 +167,11 @@ fn load_or_generate_empty_client_ca_file_errors() {
     let result = load_or_generate(None, None, "localhost", Some(empty_ca.path()));
     assert!(result.is_err());
     assert!(
-        result.err().unwrap().to_string().contains("no CA certificates")
+        result
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("no CA certificates")
     );
 }
 
