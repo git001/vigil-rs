@@ -50,7 +50,9 @@ pub struct Event {
 
 #[derive(Debug)]
 pub enum EventKind {
-    StateChanged { new_state: crate::state::ServiceState },
+    StateChanged {
+        new_state: crate::state::ServiceState,
+    },
     ProcessExited {
         #[allow(dead_code)]
         success: bool,

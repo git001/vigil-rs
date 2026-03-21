@@ -4,8 +4,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::sync::RwLock;
+use rustls::RootCertStore;
+use rustls::pki_types::{CertificateDer, UnixTime};
+use rustls::server::WebPkiClientVerifier;
 use sha_crypt::sha512_check;
+use tokio::sync::RwLock;
 use vigil_types::identity::{Identity, IdentityAccess, IdentitySpec};
 
 // ---------------------------------------------------------------------------
@@ -78,6 +81,24 @@ impl IdentityStore {
             .max()
     }
 
+    /// Verify a TLS client certificate against all registered TLS identities
+    /// and return the most-permissive matching access level, or `None` if no
+    /// identity's CA signed the certificate.
+    pub async fn tls_access(&self, cert_der: &[u8]) -> Option<IdentityAccess> {
+        let guard = self.inner.read().await;
+        guard
+            .values()
+            .filter_map(|id| {
+                let tls = id.tls.as_ref()?;
+                if verify_cert_against_ca(cert_der, &tls.ca_cert) {
+                    Some(id.access)
+                } else {
+                    None
+                }
+            })
+            .max()
+    }
+
     /// Verify an HTTP Basic Auth credential and return the access level,
     /// or `None` if the username is unknown or the password does not match.
     pub async fn basic_access(&self, username: &str, password: &str) -> Option<IdentityAccess> {
@@ -89,3 +110,36 @@ impl IdentityStore {
             .map(|_| identity.access)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Certificate verification helper
+// ---------------------------------------------------------------------------
+
+/// Returns `true` if `cert_der` is a valid end-entity certificate that was
+/// signed by one of the CA certificates in `ca_pem` (PEM, may be a chain).
+pub(crate) fn verify_cert_against_ca(cert_der: &[u8], ca_pem: &str) -> bool {
+    let Ok(ca_ders) = rustls_pemfile::certs(&mut ca_pem.as_bytes())
+        .collect::<Result<Vec<_>, _>>()
+    else {
+        return false;
+    };
+    if ca_ders.is_empty() {
+        return false;
+    }
+    let mut roots = RootCertStore::empty();
+    for ca_der in ca_ders {
+        if roots.add(ca_der).is_err() {
+            return false;
+        }
+    }
+    let Ok(verifier) = WebPkiClientVerifier::builder(Arc::new(roots)).build() else {
+        return false;
+    };
+    let cert = CertificateDer::from(cert_der.to_vec());
+    verifier
+        .verify_client_cert(&cert, &[], UnixTime::now())
+        .is_ok()
+}
+
+#[cfg(test)]
+mod tests;

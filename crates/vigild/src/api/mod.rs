@@ -3,12 +3,16 @@
 
 use std::sync::Arc;
 
-use axum::{Json, Router, response::{Html, IntoResponse}, routing::{get, post}};
 use axum::http::StatusCode;
+use axum::{
+    Json, Router,
+    response::{Html, IntoResponse},
+    routing::{get, post},
+};
 use utoipa::OpenApi;
 use vigil_types::api::{
-    ChangeInfo, CheckInfo, DaemonAction, DaemonActionRequest, LogEntry, Response, ServiceInfo,
-    ServicesAction, SystemInfo,
+    AlertCheckStatus, AlertInfo, ChangeInfo, CheckInfo, DaemonAction, DaemonActionRequest,
+    LogEntry, Response, ServiceInfo, ServicesAction, SystemInfo,
 };
 use vigil_types::identity::{
     AddIdentitiesRequest, Identity, IdentityAccess, IdentitySpec, LocalIdentity,
@@ -33,22 +37,23 @@ mod handlers;
     info(
         title = "vigil API",
         version = "1",
-        description = "HTTP API for the vigild service supervisor daemon.\n\nAll endpoints are served over a Unix socket (default `/run/vigil/vigild.sock`).\n\n**curl example:**\n```\ncurl --unix-socket /run/vigil/vigild.sock http://localhost/v1/system-info\n```"
+        description = "HTTP API for the vigild service supervisor daemon.\n\nEndpoints are available over two transports:\n- **Unix socket** (default `/run/vigil/vigild.sock`) — local access only\n- **HTTPS** (optional, enabled via `--tls-addr`) — network access with TLS\n\n**Unix socket example:**\n```\ncurl --unix-socket /run/vigil/vigild.sock http://localhost/v1/system-info\n```\n\n**HTTPS example** (self-signed cert):\n```\ncurl --insecure https://localhost:8443/v1/system-info\n```"
     ),
     paths(
-        handlers::system_info,
-        handlers::list_services,
-        handlers::services_action,
-        handlers::get_change,
-        handlers::list_checks,
-        handlers::get_logs,
-        handlers::follow_logs,
-        handlers::replan,
-        handlers::list_identities,
-        handlers::add_identities,
-        handlers::remove_identities,
-        handlers::get_metrics,
-        handlers::daemon_action,
+        handlers::system::system_info,
+        handlers::services::list_services,
+        handlers::services::services_action,
+        handlers::services::get_change,
+        handlers::checks::list_checks,
+        handlers::alerts::list_alerts,
+        handlers::logs::get_logs,
+        handlers::logs::follow_logs,
+        handlers::admin::replan,
+        handlers::identities::list_identities,
+        handlers::identities::add_identities,
+        handlers::identities::remove_identities,
+        handlers::metrics::get_metrics,
+        handlers::identities::daemon_action,
     ),
     components(schemas(
         SystemInfo,
@@ -59,6 +64,8 @@ mod handlers;
         ChangeInfo,
         CheckInfo,
         vigil_types::api::CheckStatus,
+        AlertInfo, AlertCheckStatus,
+        vigil_types::plan::AlertFormat,
         LogEntry,
         vigil_types::api::LogStream,
         Identity, IdentitySpec, IdentityAccess, LocalIdentity, TlsIdentity,
@@ -71,6 +78,7 @@ mod handlers;
         (name = "services"),
         (name = "changes"),
         (name = "checks"),
+        (name = "alerts"),
         (name = "logs"),
         (name = "replan"),
         (name = "identities"),
@@ -108,6 +116,10 @@ impl ApiError {
     /// Signature matches `Result::map_err`'s closure expectation.
     pub(super) fn forbidden_from(_: (axum::http::StatusCode, &'static str)) -> Self {
         Self::forbidden()
+    }
+
+    pub(super) fn not_found(msg: impl Into<String>) -> Self {
+        ApiError(StatusCode::NOT_FOUND, anyhow::anyhow!("{}", msg.into()))
     }
 }
 
@@ -150,22 +162,26 @@ pub(super) fn ok<T>(val: T) -> ApiResult<T> {
 
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .route("/v1/system-info",  get(handlers::system_info))
-        .route("/v1/metrics",      get(handlers::get_metrics))
-        .route("/v1/services",     get(handlers::list_services).post(handlers::services_action))
+        .route("/v1/system-info", get(handlers::system_info))
+        .route("/v1/metrics", get(handlers::get_metrics))
+        .route(
+            "/v1/services",
+            get(handlers::list_services).post(handlers::services_action),
+        )
         .route("/v1/changes/{id}", get(handlers::get_change))
-        .route("/v1/checks",       get(handlers::list_checks))
-        .route("/v1/logs",         get(handlers::get_logs))
-        .route("/v1/logs/follow",  get(handlers::follow_logs))
-        .route("/v1/replan",       post(handlers::replan))
-        .route("/v1/vigild",       post(handlers::daemon_action))
+        .route("/v1/checks", get(handlers::list_checks))
+        .route("/v1/alerts", get(handlers::list_alerts))
+        .route("/v1/logs", get(handlers::get_logs))
+        .route("/v1/logs/follow", get(handlers::follow_logs))
+        .route("/v1/replan", post(handlers::replan))
+        .route("/v1/vigild", post(handlers::daemon_action))
         .route(
             "/v1/identities",
             get(handlers::list_identities)
                 .post(handlers::add_identities)
                 .delete(handlers::remove_identities),
         )
-        .route("/docs",         get(swagger_ui))
+        .route("/docs", get(swagger_ui))
         .route("/openapi.json", get(openapi_json))
         .with_state(state)
 }
@@ -174,8 +190,14 @@ async fn openapi_json() -> impl IntoResponse {
     Json(ApiDoc::openapi())
 }
 
+// NOTE: Swagger UI assets are loaded from unpkg.com (CDN). This works for
+// development and internal networks with internet access. In air-gapped or
+// restricted environments /docs will not render; use /openapi.json directly
+// with a local Swagger/Redoc instance instead. Self-hosting the assets via
+// the `utoipa-swagger-ui` crate would be the robust alternative if needed.
 async fn swagger_ui() -> Html<&'static str> {
-    Html(r#"<!DOCTYPE html>
+    Html(
+        r#"<!DOCTYPE html>
 <html>
 <head>
   <title>vigil API</title>
@@ -195,5 +217,6 @@ async fn swagger_ui() -> Html<&'static str> {
   })
 </script>
 </body>
-</html>"#)
+</html>"#,
+    )
 }

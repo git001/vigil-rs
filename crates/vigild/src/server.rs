@@ -16,6 +16,18 @@ use tower::Service;
 use tracing::info;
 
 // ---------------------------------------------------------------------------
+// TLS peer certificate passed via request extension
+// ---------------------------------------------------------------------------
+
+/// DER-encoded end-entity certificate presented by the TLS client.
+///
+/// Injected into every request that arrives over the TLS listener when the
+/// client presents a certificate during the handshake.  Absent when no client
+/// cert was presented or on Unix-socket connections.
+#[derive(Clone)]
+pub struct TlsPeerCert(pub Vec<u8>);
+
+// ---------------------------------------------------------------------------
 // Unix peer credentials passed via ConnectInfo
 // ---------------------------------------------------------------------------
 
@@ -50,7 +62,11 @@ pub async fn serve_unix(socket_path: &Path, router: Router) -> anyhow::Result<()
     let listener = UnixListener::bind(socket_path)
         .with_context(|| format!("binding Unix socket {socket_path:?}"))?;
     info!("API listening on {socket_path:?}");
-    axum::serve(listener, router.into_make_service_with_connect_info::<UnixPeerInfo>()).await?;
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<UnixPeerInfo>(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -73,10 +89,25 @@ pub async fn serve_tls(addr: &str, acceptor: TlsAcceptor, router: Router) -> any
             match acceptor.accept(stream).await {
                 Err(e) => tracing::warn!("TLS handshake from {peer}: {e}"),
                 Ok(tls_stream) => {
+                    // Extract the peer's end-entity certificate (if any) so
+                    // that the auth layer can match it against TLS identities.
+                    let peer_cert: Option<TlsPeerCert> = tls_stream
+                        .get_ref()
+                        .1
+                        .peer_certificates()
+                        .and_then(|certs| certs.first())
+                        .map(|c| TlsPeerCert(c.to_vec()));
+
                     let io = TokioIo::new(tls_stream);
-                    let svc = hyper::service::service_fn(move |req: hyper::Request<Incoming>| {
+                    let svc = hyper::service::service_fn(move |mut req: hyper::Request<Incoming>| {
                         let mut r = router.clone();
-                        async move { r.call(req.map(Body::new)).await }
+                        let cert = peer_cert.clone();
+                        async move {
+                            if let Some(c) = cert {
+                                req.extensions_mut().insert(c);
+                            }
+                            r.call(req.map(Body::new)).await
+                        }
                     });
                     if let Err(e) = http1::Builder::new().serve_connection(io, svc).await {
                         tracing::debug!("HTTP/1 error from {peer}: {e}");

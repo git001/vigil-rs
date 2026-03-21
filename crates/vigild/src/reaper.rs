@@ -40,8 +40,7 @@ pub fn is_pid1() -> bool {
 #[cfg(target_os = "linux")]
 pub fn enable_subreaper() -> anyhow::Result<()> {
     use anyhow::Context;
-    nix::sys::prctl::set_child_subreaper(true)
-        .context("prctl PR_SET_CHILD_SUBREAPER")?;
+    nix::sys::prctl::set_child_subreaper(true).context("prctl PR_SET_CHILD_SUBREAPER")?;
     Ok(())
 }
 
@@ -64,9 +63,7 @@ pub fn enable_subreaper() -> anyhow::Result<()> {
 /// is about to wait on), but in the primary use-case — single-binary container
 /// init — the practical risk is negligible.
 pub fn spawn_reaper() -> anyhow::Result<()> {
-    let mut sigchld = tokio::signal::unix::signal(
-        tokio::signal::unix::SignalKind::child(),
-    )?;
+    let mut sigchld = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child())?;
     tokio::spawn(async move {
         loop {
             sigchld.recv().await;

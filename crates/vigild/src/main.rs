@@ -6,19 +6,7 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-mod api;
-mod check;
-mod duration;
-mod identity;
-mod logs;
-mod metrics;
-mod overlord;
-mod process_util;
-mod reaper;
-mod server;
-mod service;
-mod state;
-mod tls;
+use vigild::{api, identity, logs, overlord, reaper, server, tls};
 
 use clap::Parser;
 use nix::sys::signal::Signal;
@@ -41,6 +29,7 @@ use tracing::info;
     "  POST   /v1/services               start / stop / restart services\n",
     "  GET    /v1/changes/{id}           inspect a change record\n",
     "  GET    /v1/checks[?names=]        list health checks\n",
+    "  GET    /v1/alerts[?names=]        list alert configurations and check status\n",
     "  GET    /v1/logs[?services=&n=]    tail service stdout/stderr\n",
     "  GET    /v1/logs/follow[?services=] stream logs as SSE\n",
     "  POST   /v1/replan                 reload layers from disk\n",
@@ -75,6 +64,14 @@ struct Args {
     #[arg(long, env = "VIGIL_KEY")]
     key: Option<PathBuf>,
 
+    /// PEM file with one or more CA certificates used to verify TLS client
+    /// certificates (mTLS).  Supports chain files with multiple concatenated
+    /// PEM blocks.  Client certificates are **optional** — connections without
+    /// a client cert still work and fall back to Basic Auth or local UID auth.
+    /// Has no effect unless `--tls-addr` is also set.
+    #[arg(long, env = "VIGIL_TLS_CLIENT_CA")]
+    tls_client_ca: Option<PathBuf>,
+
     /// Enable init/subreaper mode: reap orphaned zombie processes.
     /// Automatically active when vigild runs as PID 1.
     #[arg(long, env = "VIGIL_REAPER")]
@@ -93,9 +90,7 @@ struct Args {
 }
 
 fn main() -> anyhow::Result<()> {
-    rustls::crypto::aws_lc_rs::default_provider()
-        .install_default()
-        .expect("failed to install rustls crypto provider");
+    vigild::install_crypto_provider();
 
     let args = Args::parse();
 
@@ -152,8 +147,12 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
 
     let http_address = args.socket.to_string_lossy().into_owned();
     let https_address = args.tls_addr.clone();
-    let (overlord, log_store, metrics, overlord_task) =
-        overlord::spawn(args.layers_dir, http_address, https_address, args.log_buffer)?;
+    let (overlord, log_store, metrics, overlord_task) = overlord::spawn(
+        args.layers_dir,
+        http_address,
+        https_address,
+        args.log_buffer,
+    )?;
     let identity_store = identity::IdentityStore::new();
 
     let (shutdown_tx, mut shutdown_rx) =
@@ -184,6 +183,7 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
             args.cert.as_deref(),
             args.key.as_deref(),
             &hostname,
+            args.tls_client_ca.as_deref(),
         )?;
         let tls_router = router.clone();
         let handle = tokio::spawn(async move {
@@ -203,9 +203,9 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
     // SIGHUP / SIGUSR1 / SIGUSR2  →  forward to all running service processes
     // -----------------------------------------------------------------------
     let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())?;
-    let mut sigint  = tokio::signal::unix::signal(SignalKind::interrupt())?;
+    let mut sigint = tokio::signal::unix::signal(SignalKind::interrupt())?;
     let mut sigquit = tokio::signal::unix::signal(SignalKind::quit())?;
-    let mut sighup  = tokio::signal::unix::signal(SignalKind::hangup())?;
+    let mut sighup = tokio::signal::unix::signal(SignalKind::hangup())?;
     let mut sigusr1 = tokio::signal::unix::signal(SignalKind::user_defined1())?;
     let mut sigusr2 = tokio::signal::unix::signal(SignalKind::user_defined2())?;
 

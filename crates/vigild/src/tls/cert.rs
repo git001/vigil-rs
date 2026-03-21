@@ -1,18 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 vigil-rs contributors
 
-use std::sync::Arc;
-
 use anyhow::Context;
 use rcgen::{CertificateParams, KeyPair};
-use rustls::ServerConfig;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-use tokio_rustls::TlsAcceptor;
-use tracing::info;
-
-// ---------------------------------------------------------------------------
-// Certificate generation
-// ---------------------------------------------------------------------------
 
 /// Generate a self-signed ECDSA P-256 certificate.
 /// Returns `(cert_chain, key_der)`.
@@ -26,42 +16,9 @@ pub fn generate_self_signed(hostnames: &[&str]) -> anyhow::Result<(Vec<Vec<u8>>,
     Ok((vec![cert.der().to_vec()], key_pair.serialize_der()))
 }
 
-// ---------------------------------------------------------------------------
-// TlsAcceptor construction
-// ---------------------------------------------------------------------------
-
-/// Build a `TlsAcceptor` from DER-encoded cert chain and key bytes.
-pub fn acceptor_from_der(cert_ders: Vec<Vec<u8>>, key_der: Vec<u8>) -> anyhow::Result<TlsAcceptor> {
-    let certs: Vec<CertificateDer> = cert_ders.into_iter().map(CertificateDer::from).collect();
-    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_der));
-    let config = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(certs, key)
-        .context("building rustls ServerConfig")?;
-    Ok(TlsAcceptor::from(Arc::new(config)))
-}
-
-/// Load cert + key from PEM files, or auto-generate self-signed.
-///
-/// If both paths are `None` a self-signed certificate is generated for
-/// `["localhost", hostname]`.  Both paths must be `Some` or both `None`.
-pub fn load_or_generate(
-    cert_path: Option<&std::path::Path>,
-    key_path: Option<&std::path::Path>,
-    hostname: &str,
-) -> anyhow::Result<TlsAcceptor> {
-    let (cert_der, key_der) = match (cert_path, key_path) {
-        (Some(c), Some(k)) => load_pem(c, k)?,
-        (None, None) => {
-            info!("generating self-signed TLS certificate for {hostname}");
-            generate_self_signed(&["localhost", hostname])?
-        }
-        _ => anyhow::bail!("--cert and --key must both be provided (or both omitted)"),
-    };
-    acceptor_from_der(cert_der, key_der)
-}
-
-fn load_pem(
+/// Load cert + key from PEM files.
+/// Returns `(cert_ders, key_der)`.
+pub fn load_pem(
     cert_path: &std::path::Path,
     key_path: &std::path::Path,
 ) -> anyhow::Result<(Vec<Vec<u8>>, Vec<u8>)> {
@@ -90,9 +47,28 @@ fn load_pem(
     Ok((cert_ders, key_der))
 }
 
-// ---------------------------------------------------------------------------
-// PEM export (for serving the CA cert to clients)
-// ---------------------------------------------------------------------------
+/// Load all PEM certificate blocks from `path` as reqwest `Certificate` objects.
+/// Supports chain files with multiple concatenated `-----BEGIN CERTIFICATE-----` blocks.
+pub fn load_pem_chain(path: &std::path::Path) -> anyhow::Result<Vec<reqwest::Certificate>> {
+    let pem = std::fs::read_to_string(path)?;
+    let mut certs = Vec::new();
+    let mut block = String::new();
+    for line in pem.lines() {
+        block.push_str(line);
+        block.push('\n');
+        if line.trim() == "-----END CERTIFICATE-----" {
+            certs.push(
+                reqwest::Certificate::from_pem(block.as_bytes())
+                    .map_err(|e| anyhow::anyhow!("invalid PEM block: {e}"))?,
+            );
+            block.clear();
+        }
+    }
+    if certs.is_empty() {
+        anyhow::bail!("no certificates found in {}", path.display());
+    }
+    Ok(certs)
+}
 
 /// Re-encode a DER cert as PEM so clients can pin it.
 #[allow(dead_code)]

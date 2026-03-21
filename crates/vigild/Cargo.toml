@@ -1,6 +1,6 @@
 [package]
 name        = "vigild"
-version     = "2.0.0"
+version     = "3.0.0"
 edition     = "2024"
 license     = "AGPL-3.0-only"
 description = "vigild — Rust service supervisor and container init daemon"
@@ -39,6 +39,10 @@ assets = [
     { source = "../../README.md", dest = "/usr/share/doc/vigild/README.md", mode = "0644" },
 ]
 [package.metadata.generate-rpm.requires]
+
+[lib]
+name = "vigild"
+path = "src/lib.rs"
 
 [[bin]]
 name = "vigild"
@@ -79,3 +83,11 @@ sha-crypt          = { workspace = true }
 prometheus-client  = { workspace = true }
 mimalloc           = { workspace = true }
 utoipa             = { workspace = true }
+minijinja          = { workspace = true }
+
+[dev-dependencies]
+tempfile           = { workspace = true }
+wiremock           = { workspace = true }
+serde_json         = { workspace = true }
+http-body-util     = { workspace = true }
+vigil-types        = { path = "../vigil-types" }

@@ -17,7 +17,9 @@ pub fn parse_duration(s: &str) -> Result<std::time::Duration, String> {
 
     while !rest.is_empty() {
         // Read digits
-        let num_end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+        let num_end = rest
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(rest.len());
         if num_end == 0 {
             return Err(format!("expected digit in duration: {:?}", rest));
         }
@@ -40,7 +42,10 @@ pub fn parse_duration(s: &str) -> Result<std::time::Duration, String> {
         };
 
         total_ms = total_ms
-            .checked_add(num.checked_mul(mult).ok_or_else(|| format!("overflow: {:?}", s))?)
+            .checked_add(
+                num.checked_mul(mult)
+                    .ok_or_else(|| format!("overflow: {:?}", s))?,
+            )
             .ok_or_else(|| format!("overflow: {:?}", s))?;
         rest = &rest[suffix_len..];
     }

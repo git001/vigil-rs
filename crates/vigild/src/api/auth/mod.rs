@@ -3,12 +3,12 @@
 
 use axum::extract::ConnectInfo;
 use axum::http::StatusCode;
-use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as B64;
 use vigil_types::identity::IdentityAccess;
 
 use crate::identity::IdentityStore;
-use crate::server::UnixPeerInfo;
+use crate::server::{TlsPeerCert, UnixPeerInfo};
 
 use super::AppState;
 
@@ -22,40 +22,43 @@ use super::AppState;
 /// 1. **Bootstrap** — if the identity store is empty, grant `Admin` so the
 ///    operator can add their first identity.
 /// 2. **HTTP Basic Auth** — `Authorization: Basic <base64(user:pass)>` header.
-/// 3. **Unix peer UID** — for connections over the Unix socket, match the
+/// 3. **TLS client certificate** — for connections over the TLS listener that
+///    present a client cert, match against TLS identities.
+/// 4. **Unix peer UID** — for connections over the Unix socket, match the
 ///    calling process's UID against local identities.
-/// 4. **Fallback** — `Open` (access only to endpoints that require no auth).
+/// 5. **Fallback** — `Open` (access only to endpoints that require no auth).
 async fn resolve_access(
     store: &IdentityStore,
     parts: &axum::http::request::Parts,
 ) -> IdentityAccess {
     // 1. HTTP Basic Auth
-    if let Some(auth_hdr) = parts.headers.get(axum::http::header::AUTHORIZATION) {
-        if let Ok(auth_str) = auth_hdr.to_str() {
-            if let Some(encoded) = auth_str.strip_prefix("Basic ") {
-                if let Ok(decoded) = B64.decode(encoded.trim()) {
-                    if let Ok(cred) = std::str::from_utf8(&decoded) {
-                        if let Some((user, pass)) = cred.split_once(':') {
-                            if let Some(level) = store.basic_access(user, pass).await {
-                                return level;
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    if let Some(auth_hdr) = parts.headers.get(axum::http::header::AUTHORIZATION)
+        && let Ok(auth_str) = auth_hdr.to_str()
+        && let Some(encoded) = auth_str.strip_prefix("Basic ")
+        && let Ok(decoded) = B64.decode(encoded.trim())
+        && let Ok(cred) = std::str::from_utf8(&decoded)
+        && let Some((user, pass)) = cred.split_once(':')
+        && let Some(level) = store.basic_access(user, pass).await
+    {
+        return level;
     }
 
-    // 2. Unix socket peer UID
-    if let Some(ConnectInfo(peer)) = parts.extensions.get::<ConnectInfo<UnixPeerInfo>>() {
-        if let Some(uid) = peer.uid {
-            if let Some(level) = store.local_access(uid).await {
-                return level;
-            }
-        }
+    // 2. TLS client certificate
+    if let Some(TlsPeerCert(cert_der)) = parts.extensions.get::<TlsPeerCert>()
+        && let Some(level) = store.tls_access(cert_der).await
+    {
+        return level;
     }
 
-    // 3. Fallback
+    // 3. Unix socket peer UID
+    if let Some(ConnectInfo(peer)) = parts.extensions.get::<ConnectInfo<UnixPeerInfo>>()
+        && let Some(uid) = peer.uid
+        && let Some(level) = store.local_access(uid).await
+    {
+        return level;
+    }
+
+    // 4. Fallback
     IdentityAccess::Open
 }
 
@@ -94,3 +97,6 @@ impl axum::extract::FromRequestParts<AppState> for Caller {
         Ok(Caller(access))
     }
 }
+
+#[cfg(test)]
+mod tests;

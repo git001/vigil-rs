@@ -36,3 +36,41 @@ impl ServiceState {
         matches!(self, ServiceState::Starting | ServiceState::Active)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vigil_types::api::ServiceStatus;
+
+    #[test]
+    fn to_api_status_all_variants() {
+        assert_eq!(
+            ServiceState::Inactive.to_api_status(),
+            ServiceStatus::Inactive
+        );
+        assert_eq!(
+            ServiceState::Starting.to_api_status(),
+            ServiceStatus::Active
+        );
+        assert_eq!(ServiceState::Active.to_api_status(), ServiceStatus::Active);
+        assert_eq!(
+            ServiceState::Stopping.to_api_status(),
+            ServiceStatus::Inactive
+        );
+        assert_eq!(
+            ServiceState::Backoff.to_api_status(),
+            ServiceStatus::Backoff
+        );
+        assert_eq!(ServiceState::Error.to_api_status(), ServiceStatus::Error);
+    }
+
+    #[test]
+    fn is_running_only_starting_and_active() {
+        assert!(ServiceState::Starting.is_running());
+        assert!(ServiceState::Active.is_running());
+        assert!(!ServiceState::Inactive.is_running());
+        assert!(!ServiceState::Stopping.is_running());
+        assert!(!ServiceState::Backoff.is_running());
+        assert!(!ServiceState::Error.is_running());
+    }
+}

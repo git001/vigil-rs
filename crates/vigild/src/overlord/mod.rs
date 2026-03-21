@@ -10,16 +10,21 @@ use indexmap::IndexMap;
 use tokio::sync::{mpsc, oneshot};
 use tracing::info;
 use uuid::Uuid;
-use vigil_types::api::{ChangeInfo, CheckInfo, ServiceInfo, SystemInfo};
+use vigil_types::api::{AlertInfo, ChangeInfo, CheckInfo, ServiceInfo, SystemInfo};
 use vigil_types::plan::Plan;
 
+use crate::alert::AlertSender;
 use crate::check::{self, CheckEvent};
 use crate::logs::LogStore;
 use crate::metrics::MetricsStore;
 use crate::service;
 
+mod events;
 mod handlers;
+mod lifecycle;
 pub mod plan;
+#[cfg(test)]
+mod tests;
 
 // ---------------------------------------------------------------------------
 // Commands
@@ -42,6 +47,10 @@ pub enum Cmd {
     GetChecks {
         names: Vec<String>,
         reply: oneshot::Sender<Vec<CheckInfo>>,
+    },
+    GetAlerts {
+        names: Vec<String>,
+        reply: oneshot::Sender<Vec<AlertInfo>>,
     },
     GetSystemInfo {
         reply: oneshot::Sender<SystemInfo>,
@@ -76,12 +85,14 @@ pub(super) struct ServiceEntry {
 
 pub(super) struct CheckEntry {
     pub(super) handle: check::Handle,
+    pub(super) config: vigil_types::plan::CheckConfig,
 }
 
 pub(super) struct Overlord {
     pub(super) plan: Plan,
     pub(super) services: IndexMap<String, ServiceEntry>,
     pub(super) checks: IndexMap<String, CheckEntry>,
+    pub(super) alert_sender: AlertSender,
     pub(super) changes: Vec<ChangeInfo>,
     pub(super) change_counter: u64,
     pub(super) boot_id: String,
@@ -105,12 +116,18 @@ pub(super) struct Overlord {
 // Spawn
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::type_complexity)]
 pub fn spawn(
     layers_dir: PathBuf,
     http_address: String,
     https_address: Option<String>,
     log_buffer: usize,
-) -> anyhow::Result<(Handle, Arc<LogStore>, Arc<MetricsStore>, tokio::task::JoinHandle<()>)> {
+) -> anyhow::Result<(
+    Handle,
+    Arc<LogStore>,
+    Arc<MetricsStore>,
+    tokio::task::JoinHandle<()>,
+)> {
     let (cmd_tx, cmd_rx) = mpsc::channel(128);
     let (event_tx, event_rx) = mpsc::channel(256);
     let (check_event_tx, check_event_rx) = mpsc::channel(256);
@@ -123,10 +140,23 @@ pub fn spawn(
     let metrics = MetricsStore::new();
     let plan_val = plan::load_plan(&layers_dir)?;
 
+    let queue_depth = plan_val
+        .alert_queue_depth
+        .unwrap_or(crate::alert::DEFAULT_DELIVERY_QUEUE);
+    let max_age = plan_val
+        .alert_max_queue_time
+        .as_deref()
+        .and_then(|s| crate::duration::parse_duration(s).ok())
+        .unwrap_or(crate::alert::DEFAULT_DELIVERY_AGE);
+    let mut alert_sender = AlertSender::with_queue_limits(queue_depth, max_age);
+    alert_sender.update_alerts(plan_val.alerts.clone());
+    alert_sender.spawn_worker();
+
     let ov = Overlord {
         plan: plan_val,
         services: IndexMap::new(),
         checks: IndexMap::new(),
+        alert_sender,
         changes: Vec::new(),
         change_counter: 0,
         boot_id: Uuid::new_v4().to_string(),
@@ -166,11 +196,11 @@ async fn run(mut ov: Overlord) {
             },
 
             event = ov.event_rx.recv() => {
-                if let Some(ev) = event {
-                    if let Some(exit_code) = ov.handle_svc_event(ev).await {
-                        ov.stop_all().await;
-                        process::exit(exit_code);
-                    }
+                if let Some(ev) = event
+                    && let Some(exit_code) = ov.handle_svc_event(ev).await
+                {
+                    ov.stop_all().await;
+                    process::exit(exit_code);
                 }
             },
 
