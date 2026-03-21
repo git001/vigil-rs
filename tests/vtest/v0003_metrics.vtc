@@ -1,0 +1,24 @@
+vtest "GET /v1/metrics returns OpenMetrics content-type"
+
+shell { mkdir -p ${tmpdir}/layers }
+
+process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+
+shell {
+	for i in $(seq 1 50); do
+		test -S ${tmpdir}/vigild.sock && break
+		sleep 0.1
+	done
+	test -S ${tmpdir}/vigild.sock
+}
+
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /v1/metrics -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	# Content-Type must be OpenMetrics (application/openmetrics-text or similar)
+	expect resp.http.Content-Type ~ openmetrics
+} -run
+
+process p1 -kill TERM
+process p1 -wait

@@ -1,0 +1,87 @@
+vtest "vigil-log-relay source-socket forwards logs to TCP sink"
+
+shell { mkdir -p ${tmpdir}/layers }
+
+process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+
+shell {
+	for i in $(seq 1 50); do
+		test -S ${tmpdir}/vigild.sock && break
+		sleep 0.1
+	done
+	test -S ${tmpdir}/vigild.sock
+}
+
+# Write a service that continuously emits log lines to stdout
+shell {
+	cat > ${tmpdir}/layers/log-svc.yaml <<'EOF'
+services:
+  log-svc:
+    command: "/bin/sh -c 'i=0; while true; do echo relay-test-line-$i; i=$((i+1)); sleep 0.2; done'"
+    startup: enabled
+EOF
+	${vigil} --socket ${tmpdir}/vigild.sock replan
+}
+
+# Let vigild start the service
+shell { sleep 0.5 }
+
+# Pick a free TCP port and start a socat TCP sink listener.
+# Redirect stdout→file, stderr→/dev/null, stdin←/dev/null so that socat
+# does not hold the VTest2 output pipe open.
+shell {
+	PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); p=s.getsockname()[1]; s.close(); print(p)")
+	echo "$PORT" > ${tmpdir}/sink_port.txt
+	socat TCP-LISTEN:$PORT,reuseaddr,fork - \
+		>> ${tmpdir}/relay-output.txt 2>/dev/null < /dev/null &
+	echo $! > ${tmpdir}/socat.pid
+}
+
+# Start vigil-log-relay in source-socket mode.
+# Same fd discipline: all three redirected so the VTest2 pipe gets no writers.
+shell {
+	PORT=$(cat ${tmpdir}/sink_port.txt)
+	${vigil_log_relay} \
+		--source-socket ${tmpdir}/vigild.sock \
+		--source-path "/v1/logs/follow?format=ndjson" \
+		--tcp-sink-host 127.0.0.1 \
+		--tcp-sink-port $PORT \
+		--healthcheck 127.0.0.1:9092 \
+		--source-reconnect-retries 5 \
+		>> ${tmpdir}/relay.log 2>&1 < /dev/null &
+	echo $! > ${tmpdir}/relay.pid
+}
+
+# Wait for at least one forwarded log line
+shell {
+	for i in $(seq 1 50); do
+		test -s ${tmpdir}/relay-output.txt && \
+			grep -q relay-test-line ${tmpdir}/relay-output.txt && break
+		sleep 0.2
+	done
+	grep -q relay-test-line ${tmpdir}/relay-output.txt
+}
+
+# Verify the forwarded JSON contains the service name and message
+shell {
+	grep relay-test-line ${tmpdir}/relay-output.txt | head -1 > ${tmpdir}/sample.txt
+	grep -q log-svc ${tmpdir}/sample.txt
+}
+
+# Healthcheck endpoint should respond 200
+shell {
+	for i in $(seq 1 20); do
+		curl -sf http://127.0.0.1:9092/healthz && break
+		sleep 0.2
+	done
+	curl -sf http://127.0.0.1:9092/healthz
+}
+
+# Tear down
+shell {
+	kill $(cat ${tmpdir}/relay.pid) 2>/dev/null || true
+	kill $(cat ${tmpdir}/socat.pid) 2>/dev/null || true
+}
+
+process p1 -kill TERM
+process p1 -wait

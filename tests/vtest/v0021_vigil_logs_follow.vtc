@@ -1,0 +1,104 @@
+vtest "vigil logs: --follow (SSE streaming), --services filter, -n limit, empty output"
+
+shell { mkdir -p ${tmpdir}/layers }
+
+process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+
+shell {
+	for i in $(seq 1 50); do
+		test -S ${tmpdir}/vigild.sock && break
+		sleep 0.1
+	done
+	test -S ${tmpdir}/vigild.sock
+}
+
+# ---------------------------------------------------------------------------
+# Part 1: vigil logs with empty store → "No log entries."
+# ---------------------------------------------------------------------------
+
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock logs > ${tmpdir}/logs_empty.txt
+	grep -q 'No log entries' ${tmpdir}/logs_empty.txt
+}
+
+# ---------------------------------------------------------------------------
+# Part 2: start a service that produces continuous log output
+# ---------------------------------------------------------------------------
+
+shell {
+	cat > ${tmpdir}/layers/logger.yaml <<'EOF'
+services:
+  logger:
+    command: "/bin/sh -c 'i=0; while true; do echo vigil-follow-line-$i; i=$((i+1)); sleep 0.05; done'"
+    startup: enabled
+EOF
+	${vigil} --socket ${tmpdir}/vigild.sock replan
+}
+
+# Wait for log entries to appear in the store.
+shell {
+	for i in $(seq 1 80); do
+		${vigil} --socket ${tmpdir}/vigild.sock logs 2>/dev/null \
+			| grep -q vigil-follow-line && break
+		sleep 0.1
+	done
+	${vigil} --socket ${tmpdir}/vigild.sock logs | grep -q vigil-follow-line
+}
+
+# ---------------------------------------------------------------------------
+# Part 3: vigil logs --services filter
+# ---------------------------------------------------------------------------
+
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock logs logger \
+		> ${tmpdir}/logs_svc.txt
+	grep -q vigil-follow-line ${tmpdir}/logs_svc.txt
+}
+
+# ---------------------------------------------------------------------------
+# Part 4: vigil logs -n 2  (at most 2 entries returned)
+# ---------------------------------------------------------------------------
+
+shell {
+	COUNT=$(${vigil} --socket ${tmpdir}/vigild.sock logs -n 2 | wc -l)
+	test "$COUNT" -le 2
+}
+
+# ---------------------------------------------------------------------------
+# Part 5: vigil logs --follow  (SSE streaming via Unix socket)
+#
+# Run follow in background, wait for output, then send SIGINT so the process
+# exits cleanly (ctrl_c() fires → select! exits → main returns → profraw flushed).
+# ---------------------------------------------------------------------------
+
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock logs --follow \
+		>> ${tmpdir}/follow.txt 2>/dev/null &
+	echo $! > ${tmpdir}/follow.pid
+}
+
+shell {
+	for i in $(seq 1 50); do
+		test -s ${tmpdir}/follow.txt && break
+		sleep 0.1
+	done
+	grep -q vigil-follow-line ${tmpdir}/follow.txt
+}
+
+# SIGINT → clean exit (atexit/profraw flush preserved for coverage)
+shell { kill -INT $(cat ${tmpdir}/follow.pid) 2>/dev/null || true }
+
+# Wait for the follow process to exit.
+shell {
+	for i in $(seq 1 30); do
+		kill -0 $(cat ${tmpdir}/follow.pid) 2>/dev/null || break
+		sleep 0.1
+	done
+}
+
+# ---------------------------------------------------------------------------
+# Tear down
+# ---------------------------------------------------------------------------
+
+process p1 -kill TERM
+process p1 -wait

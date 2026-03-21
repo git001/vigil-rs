@@ -1,0 +1,87 @@
+vtest "vigil alerts list — unknown / down / up status branches"
+
+shell { mkdir -p ${tmpdir}/layers }
+
+process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+
+shell {
+	for i in $(seq 1 50); do
+		test -S ${tmpdir}/vigild.sock && break
+		sleep 0.1
+	done
+	test -S ${tmpdir}/vigild.sock
+}
+
+# Write YAML — unquoted EOF so ${tmpdir} is expanded into the file.
+#
+# ghost-check: startup disabled → never spawned → status always null → "unknown"
+# flap-check:  test -f <marker>
+#              marker absent at start → fails → Down
+#              marker created later  → passes → Up (Down→Up transition)
+# retry-attempts: 1 on each alert so the HTTP call to nowhere fails fast
+#   (no 3-second backoff block inside the Overlord).
+shell {
+	cat > ${tmpdir}/layers/alerts.yaml <<EOF
+checks:
+  ghost-check:
+    level: alive
+    startup: disabled
+    period: 5s
+    exec:
+      command: "true"
+
+  flap-check:
+    level: alive
+    startup: enabled
+    delay: 0s
+    period: 1s
+    timeout: 2s
+    threshold: 1
+    exec:
+      command: "test -f ${tmpdir}/check_marker"
+
+alerts:
+  alert-ghost:
+    url: http://127.0.0.1:19999/noop
+    format: webhook
+    on-check: [ghost-check]
+    retry-attempts: 1
+
+  alert-flap:
+    url: http://127.0.0.1:19999/noop
+    format: webhook
+    on-check: [flap-check]
+    retry-attempts: 1
+EOF
+	${vigil} --socket ${tmpdir}/vigild.sock replan
+}
+
+# Poll until alert-ghost shows "unknown" AND alert-flap shows "down".
+# ghost-check is startup: disabled → always unknown.
+# flap-check fails on first run (no marker file) → Down.
+shell {
+	for i in $(seq 1 40); do
+		${vigil} --socket ${tmpdir}/vigild.sock alerts list > ${tmpdir}/alerts1.txt 2>&1
+		grep -q unknown ${tmpdir}/alerts1.txt && \
+			grep -q down    ${tmpdir}/alerts1.txt && break
+		sleep 0.3
+	done
+	grep -q unknown ${tmpdir}/alerts1.txt
+	grep -q down    ${tmpdir}/alerts1.txt
+}
+
+# Create the marker → flap-check passes → Down→Up transition → "up" status.
+shell { touch ${tmpdir}/check_marker }
+
+# Poll until alert-flap shows "up".
+shell {
+	for i in $(seq 1 40); do
+		${vigil} --socket ${tmpdir}/vigild.sock alerts list > ${tmpdir}/alerts2.txt 2>&1
+		grep -q ' up ' ${tmpdir}/alerts2.txt && break
+		sleep 0.3
+	done
+	grep -q ' up ' ${tmpdir}/alerts2.txt
+}
+
+process p1 -kill TERM
+process p1 -wait

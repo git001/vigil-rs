@@ -1,0 +1,56 @@
+vtest "Identity CRUD: add, list, remove"
+
+shell { mkdir -p ${tmpdir}/layers }
+
+process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+
+shell {
+	for i in $(seq 1 50); do
+		test -S ${tmpdir}/vigild.sock && break
+		sleep 0.1
+	done
+	test -S ${tmpdir}/vigild.sock
+}
+
+# Bootstrap mode: empty store → Admin for any caller
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /v1/identities -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	write_body empty.json
+	shell { grep -q '\[\]' empty.json }
+} -run
+
+# Add alice with local (any UID) so we stay authenticated after bootstrap ends
+client c2 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/identities -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"identities\":{\"alice\":{\"access\":\"admin\",\"local\":{}}}}"
+	rxresp
+	expect resp.status == 200
+} -run
+
+# Bootstrap ended — connecting via Unix socket provides UID-based auth;
+# the OS passes our real UID as the peer credential, and alice's "local: {}"
+# accepts any UID.
+client c3 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /v1/identities -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	write_body idents.json
+	shell { grep -q 'alice' idents.json }
+} -run
+
+# Remove alice
+client c4 -connect ${tmpdir}/vigild.sock {
+	txreq -method DELETE -url /v1/identities -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"identities\":[\"alice\"]}"
+	rxresp
+	expect resp.status == 200
+	write_body removed.json
+	shell { grep -q 'alice' removed.json }
+} -run
+
+process p1 -kill TERM
+process p1 -wait

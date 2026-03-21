@@ -1,0 +1,112 @@
+vtest "vigil checks list (formatting + next_run branches), logs, vigild status/stop"
+
+shell { mkdir -p ${tmpdir}/layers }
+
+process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+
+shell {
+	for i in $(seq 1 50); do
+		test -S ${tmpdir}/vigild.sock && break
+		sleep 0.1
+	done
+	test -S ${tmpdir}/vigild.sock
+}
+
+# --- vigil vigild status → VigilDCmd::Status branch ---
+
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock vigild status > ${tmpdir}/vstatus.txt
+	grep -q version ${tmpdir}/vstatus.txt
+	grep -q uptime  ${tmpdir}/vstatus.txt
+}
+
+# --- Add YAML: logger service + checks with different periods ---
+#
+# pending-check:  delay: 1h  → still in initial-delay loop → next_run_in_secs: None → "pending"
+# fast-check:     period: 30s, delay: 0s → after first tick: ~30s  → "Xs"   branch
+# medium-check:   period: 2m,  delay: 0s → after first tick: ~120s → "Xm Xs" branch
+# slow-check:     period: 2h,  delay: 0s → after first tick: ~7200s → "Xh Xm" branch
+#
+# logger: echoes a line, restarts → produces log entries for `vigil logs`.
+
+shell {
+	cat > ${tmpdir}/layers/checks.yaml <<'EOF'
+services:
+  logger:
+    command: "/bin/sh -c 'echo vigil-log-entry'"
+    startup: enabled
+    on-success: restart
+    backoff-delay: 100ms
+
+checks:
+  pending-check:
+    level: alive
+    startup: enabled
+    delay: 1h
+    period: 30s
+    timeout: 5s
+    exec:
+      command: "true"
+
+  fast-check:
+    level: alive
+    startup: enabled
+    delay: 0s
+    period: 30s
+    timeout: 5s
+    exec:
+      command: "true"
+
+  medium-check:
+    level: alive
+    startup: enabled
+    delay: 0s
+    period: 2m
+    timeout: 5s
+    exec:
+      command: "true"
+
+  slow-check:
+    level: alive
+    startup: enabled
+    delay: 0s
+    period: 2h
+    timeout: 5s
+    exec:
+      command: "true"
+EOF
+	${vigil} --socket ${tmpdir}/vigild.sock replan
+}
+
+# Give fast/medium/slow checks time to complete their first tick (delay: 0s →
+# interval fires immediately; exec "true" is nearly instant).
+shell { sleep 0.5 }
+
+# checks list — exercises the formatting loop and all four next_run_in_secs branches.
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock checks list > ${tmpdir}/checks.txt
+	grep -q fast-check    ${tmpdir}/checks.txt
+	grep -q medium-check  ${tmpdir}/checks.txt
+	grep -q slow-check    ${tmpdir}/checks.txt
+	grep -q pending-check ${tmpdir}/checks.txt
+	grep -q pending       ${tmpdir}/checks.txt
+}
+
+# Poll until the logger service has produced at least one log entry.
+shell {
+	for i in $(seq 1 30); do
+		${vigil} --socket ${tmpdir}/vigild.sock logs > ${tmpdir}/logs.txt 2>&1
+		grep -q vigil-log-entry ${tmpdir}/logs.txt && break
+		sleep 0.2
+	done
+	grep -q vigil-log-entry ${tmpdir}/logs.txt
+}
+
+# --- vigil vigild stop → VigilDCmd::Stop branch ---
+
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock vigild stop > ${tmpdir}/stop.txt
+	grep -q "stop initiated" ${tmpdir}/stop.txt
+}
+
+process p1 -wait

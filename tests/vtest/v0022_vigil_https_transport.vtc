@@ -1,0 +1,139 @@
+vtest "vigil CLI: Http transport branches via HTTPS (post, post_void, delete, follow_logs)"
+
+shell { mkdir -p ${tmpdir}/layers }
+
+shell {
+	PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); p=s.getsockname()[1]; s.close(); print(p)")
+	echo "$PORT" > ${tmpdir}/tls_port.txt
+}
+
+shell {
+	PORT=$(cat ${tmpdir}/tls_port.txt)
+	${vigild} \
+		--layers-dir ${tmpdir}/layers \
+		--socket     ${tmpdir}/vigild.sock \
+		--tls-addr   127.0.0.1:$PORT \
+		>> ${tmpdir}/vigild.log 2>&1 < /dev/null &
+	echo $! > ${tmpdir}/vigild.pid
+}
+
+shell {
+	for i in $(seq 1 50); do
+		test -S ${tmpdir}/vigild.sock && break
+		sleep 0.1
+	done
+	test -S ${tmpdir}/vigild.sock
+}
+
+shell {
+	PORT=$(cat ${tmpdir}/tls_port.txt)
+	for i in $(seq 1 30); do
+		curl -sf --insecure https://127.0.0.1:$PORT/v1/system-info > /dev/null 2>&1 && break
+		sleep 0.2
+	done
+}
+
+# Add a service that produces continuous log output (startup: enabled → auto-starts on replan)
+shell {
+	cat > ${tmpdir}/layers/svc.yaml <<'EOF'
+services:
+  https-svc:
+    command: "/bin/sh -c 'while true; do echo https-svc-log; sleep 0.05; done'"
+    startup: enabled
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# Bootstrap mode: identity store is empty → every caller gets Admin access.
+# All HTTPS calls below run without credentials.
+# ---------------------------------------------------------------------------
+
+# post_void Http branch: replan (loads the service config and starts https-svc)
+shell {
+	PORT=$(cat ${tmpdir}/tls_port.txt)
+	${vigil} --url https://127.0.0.1:$PORT --insecure replan
+}
+
+# Wait for log entries from https-svc
+shell {
+	for i in $(seq 1 80); do
+		${vigil} --socket ${tmpdir}/vigild.sock logs 2>/dev/null \
+			| grep -q https-svc-log && break
+		sleep 0.1
+	done
+	${vigil} --socket ${tmpdir}/vigild.sock logs | grep -q https-svc-log
+}
+
+# follow_logs Http branch: stream SSE while https-svc is running
+shell {
+	PORT=$(cat ${tmpdir}/tls_port.txt)
+	${vigil} --url https://127.0.0.1:$PORT --insecure logs --follow \
+		>> ${tmpdir}/follow_https.txt 2>/dev/null &
+	echo $! > ${tmpdir}/follow_pid.txt
+}
+
+shell {
+	for i in $(seq 1 50); do
+		test -s ${tmpdir}/follow_https.txt && break
+		sleep 0.1
+	done
+	grep -q https-svc-log ${tmpdir}/follow_https.txt
+}
+
+# SIGINT → clean exit so profraw is flushed for coverage
+shell { kill -INT $(cat ${tmpdir}/follow_pid.txt) 2>/dev/null || true }
+
+shell {
+	for i in $(seq 1 20); do
+		kill -0 $(cat ${tmpdir}/follow_pid.txt) 2>/dev/null || break
+		sleep 0.1
+	done
+}
+
+# post Http branch: services_action (stop then start)
+shell {
+	PORT=$(cat ${tmpdir}/tls_port.txt)
+	${vigil} --url https://127.0.0.1:$PORT --insecure services stop https-svc
+}
+
+shell {
+	PORT=$(cat ${tmpdir}/tls_port.txt)
+	${vigil} --url https://127.0.0.1:$PORT --insecure services start https-svc
+}
+
+# Register an Admin basic identity so we can test delete Http with credentials.
+# curl is used directly to keep the bootstrap window open until exactly this step.
+shell {
+	PORT=$(cat ${tmpdir}/tls_port.txt)
+	openssl passwd -6 -salt testhttps admpass > ${tmpdir}/hash.txt
+	python3 -c "
+import json
+h = open('${tmpdir}/hash.txt').read().strip()
+p = {'identities': {'admin-user': {'access': 'admin', 'basic': {'password-hash': h}}}}
+open('${tmpdir}/admin_payload.json', 'w').write(json.dumps(p))
+"
+	curl -sf --insecure \
+		-X POST https://127.0.0.1:$PORT/v1/identities \
+		-H "Content-Type: application/json" \
+		-d @${tmpdir}/admin_payload.json > /dev/null
+}
+
+# delete Http branch: remove_identities (needs Admin; bootstrap ended above)
+shell {
+	PORT=$(cat ${tmpdir}/tls_port.txt)
+	${vigil} --url https://127.0.0.1:$PORT --insecure \
+		--user admin-user:admpass \
+		identities remove admin-user
+}
+
+# ---------------------------------------------------------------------------
+# Tear down
+# ---------------------------------------------------------------------------
+
+shell {
+	kill $(cat ${tmpdir}/vigild.pid) 2>/dev/null || true
+	for i in $(seq 1 30); do
+		kill -0 $(cat ${tmpdir}/vigild.pid) 2>/dev/null || break
+		sleep 0.1
+	done
+}

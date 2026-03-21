@@ -1,0 +1,85 @@
+vtest "logs-push-addr: vigild reconnects TCP sink after disconnect"
+
+shell { mkdir -p ${tmpdir}/layers }
+
+process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+
+shell {
+	for i in $(seq 1 50); do
+		test -S ${tmpdir}/vigild.sock && break
+		sleep 0.1
+	done
+	test -S ${tmpdir}/vigild.sock
+}
+
+# Pick a free TCP port for the sink
+shell {
+	PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); p=s.getsockname()[1]; s.close(); print(p)")
+	echo "$PORT" > ${tmpdir}/sink_port.txt
+}
+
+# Write a service that emits log lines, with logs-push-addr pointing to the sink
+shell {
+	PORT=$(cat ${tmpdir}/sink_port.txt)
+	cat > ${tmpdir}/layers/log-svc.yaml <<EOF
+services:
+  log-svc:
+    command: "/bin/sh -c 'i=0; while true; do echo push-line-\$i; i=\$((i+1)); sleep 0.1; done'"
+    startup: enabled
+    logs-push-addr: "127.0.0.1:$PORT"
+EOF
+	${vigil} --socket ${tmpdir}/vigild.sock replan
+}
+
+shell { sleep 0.3 }
+
+# --- Round 1: start sink, verify logs arrive ---
+
+shell {
+	PORT=$(cat ${tmpdir}/sink_port.txt)
+	socat TCP-LISTEN:$PORT,reuseaddr - \
+		>> ${tmpdir}/sink1.txt 2>/dev/null < /dev/null &
+	echo $! > ${tmpdir}/socat1.pid
+}
+
+shell {
+	for i in $(seq 1 40); do
+		test -s ${tmpdir}/sink1.txt && \
+			grep -q push-line ${tmpdir}/sink1.txt && break
+		sleep 0.2
+	done
+	grep -q push-line ${tmpdir}/sink1.txt
+}
+
+# --- Kill the sink (simulates crash / network outage) ---
+
+shell { kill $(cat ${tmpdir}/socat1.pid) 2>/dev/null || true }
+
+# Give vigild time to notice the broken connection and enter backoff (500ms)
+shell { sleep 1 }
+
+# --- Round 2: restart sink, verify vigild reconnects and logs resume ---
+
+shell {
+	PORT=$(cat ${tmpdir}/sink_port.txt)
+	socat TCP-LISTEN:$PORT,reuseaddr - \
+		>> ${tmpdir}/sink2.txt 2>/dev/null < /dev/null &
+	echo $! > ${tmpdir}/socat2.pid
+}
+
+shell {
+	for i in $(seq 1 40); do
+		test -s ${tmpdir}/sink2.txt && \
+			grep -q push-line ${tmpdir}/sink2.txt && break
+		sleep 0.2
+	done
+	grep -q push-line ${tmpdir}/sink2.txt
+}
+
+# Tear down
+shell {
+	kill $(cat ${tmpdir}/socat2.pid) 2>/dev/null || true
+}
+
+process p1 -kill TERM
+process p1 -wait

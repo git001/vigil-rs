@@ -1,0 +1,197 @@
+vtest "mTLS client certificate authentication"
+
+shell { mkdir -p ${tmpdir}/layers ${tmpdir}/certs }
+
+# ---------------------------------------------------------------------------
+# Generate CA cert + client cert signed by that CA
+# ---------------------------------------------------------------------------
+
+shell {
+	# CA key + self-signed cert with basicConstraints + keyCertSign
+	openssl req -x509 \
+		-newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+		-keyout ${tmpdir}/certs/ca.key \
+		-out    ${tmpdir}/certs/ca.crt \
+		-days 1 -nodes \
+		-subj "/CN=test-ca" \
+		-addext "basicConstraints=critical,CA:true" \
+		-addext "keyUsage=critical,keyCertSign,cRLSign" \
+		2>/dev/null
+}
+
+shell {
+	# Client key + CSR
+	openssl req \
+		-newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+		-keyout ${tmpdir}/certs/client.key \
+		-out    ${tmpdir}/certs/client.csr \
+		-nodes \
+		-subj "/CN=test-client" \
+		2>/dev/null
+	# Sign client cert with extendedKeyUsage=clientAuth and SAN (required by webpki)
+	printf "subjectAltName=DNS:test-client\nextendedKeyUsage=clientAuth" \
+		> ${tmpdir}/certs/client_ext.cnf
+	openssl x509 -req \
+		-in     ${tmpdir}/certs/client.csr \
+		-CA     ${tmpdir}/certs/ca.crt \
+		-CAkey  ${tmpdir}/certs/ca.key \
+		-CAcreateserial \
+		-out    ${tmpdir}/certs/client.crt \
+		-days 1 \
+		-extfile ${tmpdir}/certs/client_ext.cnf \
+		2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# Pick a free TCP port and start vigild with mTLS
+# ---------------------------------------------------------------------------
+
+shell {
+	PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); p=s.getsockname()[1]; s.close(); print(p)")
+	echo "$PORT" > ${tmpdir}/tls_port.txt
+}
+
+shell {
+	PORT=$(cat ${tmpdir}/tls_port.txt)
+	${vigild} \
+		--layers-dir    ${tmpdir}/layers \
+		--socket        ${tmpdir}/vigild.sock \
+		--tls-addr      127.0.0.1:$PORT \
+		--tls-client-ca ${tmpdir}/certs/ca.crt \
+		>> ${tmpdir}/vigild.log 2>&1 < /dev/null &
+	echo $! > ${tmpdir}/vigild.pid
+}
+
+# Wait for Unix socket
+shell {
+	for i in $(seq 1 50); do
+		test -S ${tmpdir}/vigild.sock && break
+		sleep 0.1
+	done
+	test -S ${tmpdir}/vigild.sock
+}
+
+# Wait for TLS port
+shell {
+	PORT=$(cat ${tmpdir}/tls_port.txt)
+	for i in $(seq 1 30); do
+		curl -sf --insecure https://127.0.0.1:$PORT/v1/system-info > /dev/null 2>&1 && break
+		sleep 0.2
+	done
+}
+
+# ---------------------------------------------------------------------------
+# Register identities via Unix socket (bootstrap mode — first POST ends it)
+# 1. Add a local admin identity to retain Unix-socket access after bootstrap.
+# 2. Add the TLS identity for the ops principal.
+# ---------------------------------------------------------------------------
+
+# Step 1: add local admin (this ends bootstrap mode)
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/identities -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"identities\":{\"local-admin\":{\"access\":\"admin\",\"local\":{}}}}"
+	rxresp
+	expect resp.status == 200
+} -run
+
+# Step 2: add the TLS identity (Unix socket still works via local-admin)
+shell {
+	python3 -c "
+import json
+ca = open('${tmpdir}/certs/ca.crt').read()
+p = {'identities': {'ops': {'access': 'read', 'tls': {'ca-cert': ca}}}}
+open('${tmpdir}/identity_payload.json', 'w').write(json.dumps(p))
+"
+	curl -sf \
+		--unix-socket ${tmpdir}/vigild.sock \
+		-X POST http://localhost/v1/identities \
+		-H "Content-Type: application/json" \
+		-d @${tmpdir}/identity_payload.json \
+		> /dev/null
+}
+
+# Verify both identities are stored
+client c2 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /v1/identities -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	write_body ${tmpdir}/list_identities.json
+	shell { grep -q '"ops"' ${tmpdir}/list_identities.json }
+} -run
+
+# ---------------------------------------------------------------------------
+# WITH client cert → Read access → GET /v1/services returns 200
+# ---------------------------------------------------------------------------
+
+shell {
+	PORT=$(cat ${tmpdir}/tls_port.txt)
+	STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
+		--insecure \
+		--cert ${tmpdir}/certs/client.crt \
+		--key  ${tmpdir}/certs/client.key \
+		https://127.0.0.1:$PORT/v1/services)
+	[ "$STATUS" = "200" ]
+}
+
+# ---------------------------------------------------------------------------
+# WITHOUT client cert → Open access → GET /v1/services returns 403
+# ---------------------------------------------------------------------------
+
+shell {
+	PORT=$(cat ${tmpdir}/tls_port.txt)
+	STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
+		--insecure \
+		https://127.0.0.1:$PORT/v1/services)
+	[ "$STATUS" = "403" ]
+}
+
+# ---------------------------------------------------------------------------
+# Client cert signed by a DIFFERENT (untrusted) CA → TLS handshake rejected
+# ---------------------------------------------------------------------------
+
+shell {
+	# Generate an untrusted CA + client cert
+	openssl req -x509 \
+		-newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+		-keyout ${tmpdir}/certs/bad-ca.key \
+		-out    ${tmpdir}/certs/bad-ca.crt \
+		-days 1 -nodes \
+		-subj "/CN=bad-ca" 2>/dev/null
+	openssl req \
+		-newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+		-keyout ${tmpdir}/certs/bad-client.key \
+		-out    ${tmpdir}/certs/bad-client.csr \
+		-nodes -subj "/CN=bad-client" 2>/dev/null
+	openssl x509 -req \
+		-in     ${tmpdir}/certs/bad-client.csr \
+		-CA     ${tmpdir}/certs/bad-ca.crt \
+		-CAkey  ${tmpdir}/certs/bad-ca.key \
+		-CAcreateserial \
+		-out    ${tmpdir}/certs/bad-client.crt \
+		-days 1 2>/dev/null
+}
+
+shell {
+	PORT=$(cat ${tmpdir}/tls_port.txt)
+	# curl exits non-zero when the TLS handshake is rejected — that's expected.
+	STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
+		--insecure \
+		--cert ${tmpdir}/certs/bad-client.crt \
+		--key  ${tmpdir}/certs/bad-client.key \
+		https://127.0.0.1:$PORT/v1/services 2>/dev/null || true)
+	# TLS rejection → curl writes "000" for http_code; 403 if it got through.
+	[ "$STATUS" = "000" ] || [ "$STATUS" = "403" ]
+}
+
+# ---------------------------------------------------------------------------
+# Tear down
+# ---------------------------------------------------------------------------
+
+shell {
+	kill $(cat ${tmpdir}/vigild.pid) 2>/dev/null || true
+	for i in $(seq 1 30); do
+		kill -0 $(cat ${tmpdir}/vigild.pid) 2>/dev/null || break
+		sleep 0.1
+	done
+}

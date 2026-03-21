@@ -1,0 +1,40 @@
+vtest "GET /v1/logs supports ?n= and ?services= query parameters"
+
+shell { mkdir -p ${tmpdir}/layers }
+
+process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+
+shell {
+	for i in $(seq 1 50); do
+		test -S ${tmpdir}/vigild.sock && break
+		sleep 0.1
+	done
+	test -S ${tmpdir}/vigild.sock
+}
+
+client c1 -connect ${tmpdir}/vigild.sock {
+	# Default: no params
+	txreq -method GET -url /v1/logs -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+} -run
+
+client c2 -connect ${tmpdir}/vigild.sock {
+	# With n= param
+	txreq -method GET -url "/v1/logs?n=5" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+} -run
+
+client c3 -connect ${tmpdir}/vigild.sock {
+	# With services= filter
+	txreq -method GET -url "/v1/logs?services=nonexistent" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	write_body filtered.json
+	# Should still return a result array (just empty)
+	shell { grep -q '"result"' filtered.json }
+} -run
+
+process p1 -kill TERM
+process p1 -wait

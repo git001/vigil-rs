@@ -1,0 +1,28 @@
+vtest "GET /v1/system-info returns version, boot-id, start-time"
+
+shell { mkdir -p ${tmpdir}/layers }
+
+process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+
+# Wait until the Unix socket is ready (up to 5 s)
+shell {
+	for i in $(seq 1 50); do
+		test -S ${tmpdir}/vigild.sock && break
+		sleep 0.1
+	done
+	test -S ${tmpdir}/vigild.sock
+}
+
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /v1/system-info -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	write_body resp.json
+	shell { grep -q '"status"' resp.json }
+	shell { grep -q '"version"' resp.json }
+	shell { grep -q '"boot-id"' resp.json }
+	shell { grep -q '"start-time"' resp.json }
+} -run
+
+process p1 -kill TERM
+process p1 -wait

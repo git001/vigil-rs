@@ -1,0 +1,111 @@
+vtest "body_template: webhook alert uses Jinja2 template instead of default payload"
+
+shell { mkdir -p ${tmpdir}/layers }
+
+process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+
+shell {
+	for i in $(seq 1 50); do
+		test -S ${tmpdir}/vigild.sock && break
+		sleep 0.1
+	done
+	test -S ${tmpdir}/vigild.sock
+}
+
+# Pick a free TCP port for the mock webhook server
+shell {
+	PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); p=s.getsockname()[1]; s.close(); print(p)")
+	echo "$PORT" > ${tmpdir}/webhook_port.txt
+}
+
+# Start a minimal Python HTTP server that captures the first POST body
+shell {
+	PORT=$(cat ${tmpdir}/webhook_port.txt)
+	RECEIVED=${tmpdir}/received.json
+	python3 -c "
+import http.server
+
+RECEIVED = '$RECEIVED'
+
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        n = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(n)
+        with open(RECEIVED, 'ab') as f:
+            f.write(body + b'\n')
+        self.send_response(200)
+        self.end_headers()
+    def log_message(self, *a): pass
+
+srv = http.server.HTTPServer(('127.0.0.1', $PORT), H)
+srv.serve_forever()
+" > /dev/null 2>&1 &
+	echo $! > ${tmpdir}/webhook_server.pid
+	# Give the server a moment to start listening
+	sleep 0.2
+}
+
+# Write a layer with a check that fails immediately and a body_template alert.
+# The template produces a Slack-like payload: {"text": "…"}.
+shell {
+	PORT=$(cat ${tmpdir}/webhook_port.txt)
+	cat > ${tmpdir}/layers/tmpl-alert.yaml <<EOF
+checks:
+  tmpl-check:
+    level: alive
+    startup: enabled
+    delay: 0s
+    period: 1s
+    timeout: 2s
+    threshold: 1
+    exec:
+      command: "test -f ${tmpdir}/check_marker"
+
+alerts:
+  tmpl-webhook:
+    url: http://127.0.0.1:$PORT/webhook
+    format: webhook
+    on-check: [tmpl-check]
+    retry-attempts: 1
+    body-template: '{"text": "{{ check }} is {{ status }}", "check": "{{ check }}", "status": "{{ status }}"}'
+EOF
+	${vigil} --socket ${tmpdir}/vigild.sock replan
+}
+
+# Wait until vigild fires the alert (check fails → Down → POST sent).
+shell {
+	for i in $(seq 1 50); do
+		test -s ${tmpdir}/received.json && break
+		sleep 0.2
+	done
+	test -s ${tmpdir}/received.json
+}
+
+# Verify the received payload uses the template format (has "text" key) and
+# does NOT contain the default "check" + "status" + "timestamp" top-level keys
+# that the built-in webhook format emits.
+shell {
+	python3 -c "
+import json, sys
+with open('${tmpdir}/received.json') as f:
+    first_line = f.readline().strip()
+body = json.loads(first_line)
+
+# Template fields must be present
+assert 'text' in body, f'missing text field: {body}'
+assert body.get('check') == 'tmpl-check', f'unexpected check: {body}'
+assert body.get('status') == 'down', f'unexpected status: {body}'
+
+# Default webhook-only fields must NOT appear
+assert 'timestamp' not in body, f'unexpected timestamp in template output: {body}'
+assert 'labels' not in body, f'unexpected labels in template output: {body}'
+assert 'info' not in body, f'unexpected info in template output: {body}'
+print('body_template OK:', body)
+"
+}
+
+# Tear down
+shell { kill $(cat ${tmpdir}/webhook_server.pid) 2>/dev/null || true }
+
+process p1 -kill TERM
+process p1 -wait

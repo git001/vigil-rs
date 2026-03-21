@@ -1,0 +1,61 @@
+vtest "List endpoints return 200 and empty arrays on fresh daemon"
+
+shell { mkdir -p ${tmpdir}/layers }
+
+process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+
+shell {
+	for i in $(seq 1 50); do
+		test -S ${tmpdir}/vigild.sock && break
+		sleep 0.1
+	done
+	test -S ${tmpdir}/vigild.sock
+}
+
+client c1 -connect ${tmpdir}/vigild.sock {
+	# GET /v1/services
+	txreq -method GET -url /v1/services -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	write_body svc.json
+	shell { grep -q '"result"' svc.json }
+} -run
+
+client c2 -connect ${tmpdir}/vigild.sock {
+	# GET /v1/checks
+	txreq -method GET -url /v1/checks -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	write_body chk.json
+	shell { grep -q '"result"' chk.json }
+} -run
+
+client c3 -connect ${tmpdir}/vigild.sock {
+	# GET /v1/alerts
+	txreq -method GET -url /v1/alerts -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	write_body alt.json
+	shell { grep -q '"result"' alt.json }
+} -run
+
+client c4 -connect ${tmpdir}/vigild.sock {
+	# GET /v1/logs
+	txreq -method GET -url /v1/logs -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	write_body log.json
+	shell { grep -q '"result"' log.json }
+} -run
+
+client c5 -connect ${tmpdir}/vigild.sock {
+	# GET /v1/identities (bootstrap: empty store → Admin)
+	txreq -method GET -url /v1/identities -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	write_body ident.json
+	shell { grep -q '"result"' ident.json }
+} -run
+
+process p1 -kill TERM
+process p1 -wait

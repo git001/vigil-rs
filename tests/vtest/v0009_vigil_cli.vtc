@@ -1,0 +1,94 @@
+vtest "vigil CLI commands against a running vigild"
+
+shell { mkdir -p ${tmpdir}/layers }
+
+process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+
+shell {
+	for i in $(seq 1 50); do
+		test -S ${tmpdir}/vigild.sock && break
+		sleep 0.1
+	done
+	test -S ${tmpdir}/vigild.sock
+}
+
+# system-info
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock system-info > ${tmpdir}/sysinfo.txt
+	grep -q version ${tmpdir}/sysinfo.txt
+	grep -q boot-id ${tmpdir}/sysinfo.txt
+}
+
+# services list
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock services list
+}
+
+# checks list
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock checks list
+}
+
+# alerts list
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock alerts list
+}
+
+# logs
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock logs
+}
+
+# replan
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock replan
+}
+
+# Write a layer and replan — service should appear in list output
+shell {
+	cat > ${tmpdir}/layers/demo.yaml <<'EOF'
+services:
+  demo-svc:
+    command: "/bin/sleep 3600"
+    startup: disabled
+EOF
+	${vigil} --socket ${tmpdir}/vigild.sock replan
+	${vigil} --socket ${tmpdir}/vigild.sock services list > ${tmpdir}/svcs.txt
+	grep -q demo-svc ${tmpdir}/svcs.txt
+}
+
+# start the service and check its status
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock services start demo-svc
+	sleep 0.2
+	${vigil} --socket ${tmpdir}/vigild.sock services list > ${tmpdir}/svcs2.txt
+	grep -q demo-svc ${tmpdir}/svcs2.txt
+}
+
+# restart and stop
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock services restart demo-svc
+	sleep 0.2
+	${vigil} --socket ${tmpdir}/vigild.sock services stop demo-svc
+}
+
+# identities list (bootstrap mode — no auth needed)
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock identities list
+}
+
+# identities add-local, list, remove
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock identities add-local ci-user --access admin
+	${vigil} --socket ${tmpdir}/vigild.sock identities list > ${tmpdir}/ids.txt
+	grep -q ci-user ${tmpdir}/ids.txt
+}
+
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock identities remove ci-user
+	${vigil} --socket ${tmpdir}/vigild.sock identities list > ${tmpdir}/ids2.txt
+	grep -qv ci-user ${tmpdir}/ids2.txt
+}
+
+process p1 -kill TERM
+process p1 -wait

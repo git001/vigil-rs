@@ -1,0 +1,145 @@
+vtest "vigild metrics: service_active, alert_fire_count reflect runtime state"
+
+shell { mkdir -p ${tmpdir}/layers }
+
+process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+
+shell {
+	for i in $(seq 1 50); do
+		test -S ${tmpdir}/vigild.sock && break
+		sleep 0.1
+	done
+	test -S ${tmpdir}/vigild.sock
+}
+
+# ---------------------------------------------------------------------------
+# Part 1: vigil_service_active reflects a running service
+# ---------------------------------------------------------------------------
+
+shell {
+	cat > ${tmpdir}/layers/svc.yaml <<'EOF'
+services:
+  long-runner:
+    command: "/bin/sh -c 'while true; do sleep 1; done'"
+    startup: enabled
+EOF
+	${vigil} --socket ${tmpdir}/vigild.sock replan
+}
+
+# Wait for service to become active.
+shell {
+	for i in $(seq 1 50); do
+		${vigil} --socket ${tmpdir}/vigild.sock services list \
+			| grep -q 'long-runner' && break
+		sleep 0.1
+	done
+	sleep 0.3
+}
+
+shell {
+	curl -sf --unix-socket ${tmpdir}/vigild.sock \
+		http://localhost/v1/metrics > ${tmpdir}/metrics1.txt
+	grep -q 'vigil_service_active{service="long-runner"} 1' ${tmpdir}/metrics1.txt
+	grep -q 'vigil_service_info{service="long-runner"} 1'   ${tmpdir}/metrics1.txt
+	grep -qE 'vigil_services_count(_total)? [1-9]'          ${tmpdir}/metrics1.txt
+	grep -q 'vigil_service_start_count_total{service="long-runner"}' ${tmpdir}/metrics1.txt
+}
+
+# ---------------------------------------------------------------------------
+# Part 2: vigil_alert_fire_count increments when a check transitions Down
+# ---------------------------------------------------------------------------
+
+# Pick a free port for the mock alert receiver.
+shell {
+	PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); p=s.getsockname()[1]; s.close(); print(p)")
+	echo "$PORT" > ${tmpdir}/alert_port.txt
+}
+
+# Start minimal Python HTTP server to absorb alert POSTs.
+shell {
+	PORT=$(cat ${tmpdir}/alert_port.txt)
+	python3 -c "
+import http.server
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.send_response(200)
+        self.end_headers()
+    def log_message(self, *a): pass
+srv = http.server.HTTPServer(('127.0.0.1', $PORT), H)
+srv.serve_forever()
+" > /dev/null 2>&1 &
+	echo $! > ${tmpdir}/alert_srv.pid
+	sleep 0.2
+}
+
+shell {
+	PORT=$(cat ${tmpdir}/alert_port.txt)
+	cat > ${tmpdir}/layers/alert_check.yaml <<EOF
+checks:
+  dummy-check:
+    override: merge
+    startup: enabled
+    http:
+      url: "http://127.0.0.1:1/probe"
+      timeout: 100ms
+    period: 200ms
+    delay: 0s
+
+alerts:
+  test-alert:
+    override: merge
+    url: "http://127.0.0.1:$PORT/"
+    on-check: [dummy-check]
+EOF
+	${vigil} --socket ${tmpdir}/vigild.sock replan
+}
+
+# Wait for the check to fail and the alert to fire.
+shell {
+	for i in $(seq 1 80); do
+		curl -sf --unix-socket ${tmpdir}/vigild.sock \
+			http://localhost/v1/metrics 2>/dev/null \
+			| grep -qF 'vigil_alert_fire_count_total{alert="test-alert"}' && break
+		sleep 0.2
+	done
+}
+
+shell {
+	curl -sf --unix-socket ${tmpdir}/vigild.sock \
+		http://localhost/v1/metrics > ${tmpdir}/metrics2.txt
+	grep -qF 'vigil_alert_fire_count_total{alert="test-alert"}' ${tmpdir}/metrics2.txt
+	grep -qF 'vigil_check_failure_count_total{check="dummy-check"}' ${tmpdir}/metrics2.txt
+}
+
+shell {
+	python3 -c "
+import re, sys
+txt = open('${tmpdir}/metrics2.txt').read()
+m = re.search(r'vigil_alert_fire_count_total\{alert=\"test-alert\"\} (\d+)', txt)
+if not m:
+    sys.exit('vigil_alert_fire_count_total not found in: ' + txt[:500])
+v = int(m.group(1))
+assert v >= 1, f'expected >= 1, got {v}'
+print(f'alert_fire_count = {v}  OK')
+"
+}
+
+# ---------------------------------------------------------------------------
+# Part 3: /v1/metrics via VTest HTTP client — content-type and key names
+# ---------------------------------------------------------------------------
+
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /v1/metrics -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.http.Content-Type ~ openmetrics
+} -run
+
+# ---------------------------------------------------------------------------
+# Tear down
+# ---------------------------------------------------------------------------
+
+shell { kill $(cat ${tmpdir}/alert_srv.pid) 2>/dev/null || true }
+
+process p1 -kill TERM
+process p1 -wait

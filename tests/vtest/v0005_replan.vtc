@@ -1,0 +1,50 @@
+vtest "POST /v1/replan reloads layers and returns 200"
+
+shell { mkdir -p ${tmpdir}/layers }
+
+process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+
+shell {
+	for i in $(seq 1 50); do
+		test -S ${tmpdir}/vigild.sock && break
+		sleep 0.1
+	done
+	test -S ${tmpdir}/vigild.sock
+}
+
+client c1 -connect ${tmpdir}/vigild.sock {
+	# Empty body is fine — replan has no required parameters
+	txreq -method POST -url /v1/replan -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" -body "{}"
+	rxresp
+	expect resp.status == 200
+} -run
+
+# After replan, write a layer and replan again to verify hot-reload
+shell {
+	cat > ${tmpdir}/layers/demo.yaml <<'EOF'
+services:
+  echo-svc:
+    command: "/bin/echo hello"
+    startup: disabled
+EOF
+}
+
+client c2 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/replan -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" -body "{}"
+	rxresp
+	expect resp.status == 200
+} -run
+
+# The service should now appear in the list
+client c3 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /v1/services -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	write_body svcs.json
+	shell { grep -q 'echo-svc' svcs.json }
+} -run
+
+process p1 -kill TERM
+process p1 -wait

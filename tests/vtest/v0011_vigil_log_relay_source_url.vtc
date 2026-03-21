@@ -1,0 +1,57 @@
+vtest "vigil-log-relay --source-url forwards HTTP ndjson stream to TCP sink"
+
+# HTTP ndjson source: serve one line per connection, enough repeats for the test
+server s1 -repeat 20 {
+	rxreq
+	txresp \
+		-hdr "content-type: application/x-ndjson" \
+		-body "{\"service\":\"url-test\",\"message\":\"relay-url-test-line\"}\n"
+} -start
+
+# Free TCP port for the socat sink
+shell {
+	PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); p=s.getsockname()[1]; s.close(); print(p)")
+	echo "$PORT" > ${tmpdir}/sink_port.txt
+	socat TCP-LISTEN:$PORT,reuseaddr,fork - \
+		>> ${tmpdir}/relay-output.txt 2>/dev/null < /dev/null &
+	echo $! > ${tmpdir}/socat.pid
+}
+
+# Start relay in --source-url mode
+shell {
+	PORT=$(cat ${tmpdir}/sink_port.txt)
+	${vigil_log_relay} \
+		--source-url "http://${s1_sock}" \
+		--tcp-sink-host 127.0.0.1 \
+		--tcp-sink-port $PORT \
+		--healthcheck 127.0.0.1:9093 \
+		--source-reconnect-delay 100 \
+		--source-reconnect-retries 20 \
+		>> ${tmpdir}/relay.log 2>&1 < /dev/null &
+	echo $! > ${tmpdir}/relay.pid
+}
+
+# Wait for at least one forwarded line
+shell {
+	for i in $(seq 1 50); do
+		test -s ${tmpdir}/relay-output.txt && \
+			grep -q relay-url-test-line ${tmpdir}/relay-output.txt && break
+		sleep 0.2
+	done
+	grep -q relay-url-test-line ${tmpdir}/relay-output.txt
+}
+
+# Healthcheck must be alive
+shell {
+	for i in $(seq 1 20); do
+		curl -sf http://127.0.0.1:9093/healthz && break
+		sleep 0.2
+	done
+	curl -sf http://127.0.0.1:9093/healthz
+}
+
+# Tear down relay and socat sink first, then let VTest2 clean up the server
+shell {
+	kill $(cat ${tmpdir}/relay.pid) 2>/dev/null || true
+	kill $(cat ${tmpdir}/socat.pid) 2>/dev/null || true
+}

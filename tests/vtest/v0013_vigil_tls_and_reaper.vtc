@@ -1,0 +1,105 @@
+vtest "vigild TLS listener (server.rs) and subreaper (reaper.rs)"
+
+shell { mkdir -p ${tmpdir}/layers }
+
+# Pick a free TCP port for the TLS listener.
+shell {
+	PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); p=s.getsockname()[1]; s.close(); print(p)")
+	echo "$PORT" > ${tmpdir}/tls_port.txt
+}
+
+# Start vigild with TLS listener + subreaper mode.
+# --reaper calls prctl(PR_SET_CHILD_SUBREAPER) and spawns the SIGCHLD task.
+# Self-signed cert is auto-generated when --cert/--key are omitted.
+shell {
+	PORT=$(cat ${tmpdir}/tls_port.txt)
+	${vigild} \
+		--layers-dir ${tmpdir}/layers \
+		--socket     ${tmpdir}/vigild.sock \
+		--tls-addr   127.0.0.1:$PORT \
+		--reaper \
+		>> ${tmpdir}/vigild.log 2>&1 < /dev/null &
+	echo $! > ${tmpdir}/vigild.pid
+}
+
+# Wait for Unix socket (signals daemon is up, TLS listener starts at the same time).
+shell {
+	for i in $(seq 1 50); do
+		test -S ${tmpdir}/vigild.sock && break
+		sleep 0.1
+	done
+	test -S ${tmpdir}/vigild.sock
+}
+
+# Also wait briefly for the TLS port to open.
+shell {
+	PORT=$(cat ${tmpdir}/tls_port.txt)
+	for i in $(seq 1 30); do
+		${vigil} --url https://127.0.0.1:$PORT --insecure system-info \
+			> /dev/null 2>&1 && break
+		sleep 0.2
+	done
+}
+
+# --- server.rs: TLS accept loop coverage ---
+
+# system-info via HTTPS (self-signed → --insecure)
+shell {
+	PORT=$(cat ${tmpdir}/tls_port.txt)
+	${vigil} --url https://127.0.0.1:$PORT --insecure system-info \
+		> ${tmpdir}/sysinfo_tls.txt
+	grep -q version ${tmpdir}/sysinfo_tls.txt
+}
+
+# services list via HTTPS
+shell {
+	PORT=$(cat ${tmpdir}/tls_port.txt)
+	${vigil} --url https://127.0.0.1:$PORT --insecure services list
+}
+
+# checks list via HTTPS
+shell {
+	PORT=$(cat ${tmpdir}/tls_port.txt)
+	${vigil} --url https://127.0.0.1:$PORT --insecure checks list
+}
+
+# logs via HTTPS
+shell {
+	PORT=$(cat ${tmpdir}/tls_port.txt)
+	${vigil} --url https://127.0.0.1:$PORT --insecure logs
+}
+
+# --- reaper.rs: subreaper + SIGCHLD coverage ---
+
+# Add a service that exits immediately (on-success: restart) so that
+# SIGCHLD fires repeatedly → reap_children() is called.
+shell {
+	cat > ${tmpdir}/layers/quick.yaml <<'EOF'
+services:
+  quick-exit:
+    command: "/bin/true"
+    startup: enabled
+    on-success: restart
+    backoff-delay: 100ms
+EOF
+	${vigil} --socket ${tmpdir}/vigild.sock replan
+}
+
+# Give the service a moment to start and exit a few times → SIGCHLD fires.
+shell { sleep 0.5 }
+
+# Verify service is cycling (state is active or restarting).
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock services list > ${tmpdir}/svcs.txt
+	grep -q quick-exit ${tmpdir}/svcs.txt
+}
+
+# Tear down.
+shell {
+	kill $(cat ${tmpdir}/vigild.pid) 2>/dev/null || true
+	# Wait for vigild to exit
+	for i in $(seq 1 30); do
+		kill -0 $(cat ${tmpdir}/vigild.pid) 2>/dev/null || break
+		sleep 0.1
+	done
+}

@@ -1,0 +1,28 @@
+vtest "GET /openapi.json returns the OpenAPI spec"
+
+shell { mkdir -p ${tmpdir}/layers }
+
+process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+
+shell {
+	for i in $(seq 1 50); do
+		test -S ${tmpdir}/vigild.sock && break
+		sleep 0.1
+	done
+	test -S ${tmpdir}/vigild.sock
+}
+
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /openapi.json -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	write_body openapi.json
+	# Must contain the API title
+	shell { grep -q '"vigil API"' openapi.json }
+	# Must contain info and paths objects
+	shell { grep -q '"info"' openapi.json }
+	shell { grep -q '"paths"' openapi.json }
+} -run
+
+process p1 -kill TERM
+process p1 -wait
