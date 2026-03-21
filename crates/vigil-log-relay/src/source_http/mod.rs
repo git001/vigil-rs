@@ -130,8 +130,8 @@ pub fn spawn_liveness_ticker(liveness: Arc<Liveness>) {
 /// counter.
 ///
 /// * `idle_timeout_ms` — per-line timeout in milliseconds; 0 disables it.
-/// * `source_label`    — human-readable name used in log messages
-///                       (e.g. the URL string or socket path).
+/// * `source_label` — human-readable name used in log messages
+///   (e.g. the URL string or socket path).
 pub async fn stream_loop<R>(
     mut lines: tokio::io::Lines<BufReader<R>>,
     tx: &mpsc::Sender<String>,

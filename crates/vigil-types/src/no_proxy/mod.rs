@@ -50,10 +50,10 @@ pub fn no_proxy_matches(host: &str, entries: &[String]) -> bool {
         let e = entry.strip_prefix('.').unwrap_or(entry.as_str());
 
         // 1. CIDR match (only when the host is an IP address).
-        if let Some(ip) = host_ip {
-            if let Some(matched) = cidr_matches(ip, e) {
-                return matched;
-            }
+        if let Some(ip) = host_ip
+            && let Some(matched) = cidr_matches(ip, e)
+        {
+            return matched;
         }
 
         // 2. Exact hostname / domain suffix match.
@@ -71,10 +71,10 @@ pub fn no_proxy_matches(host: &str, entries: &[String]) -> bool {
 /// Strip a trailing `:port` from `host`, handling IPv6 bracket notation.
 fn strip_port(host: &str) -> &str {
     // IPv6 bracketed: "[::1]:443" → "::1"
-    if let Some(rest) = host.strip_prefix('[') {
-        if let Some(close) = rest.find(']') {
-            return &rest[..close];
-        }
+    if let Some(rest) = host.strip_prefix('[')
+        && let Some(close) = rest.find(']')
+    {
+        return &rest[..close];
     }
     // Bare IPv6 address (multiple colons) — no port to strip.
     if host.chars().filter(|&c| c == ':').count() > 1 {
