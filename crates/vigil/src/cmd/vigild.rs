@@ -31,7 +31,13 @@ pub async fn run(client: &VigilClient, sub: VigilDCmd) -> anyhow::Result<()> {
             let s = uptime.as_secs();
             println!("version:      {}", info.version);
             println!("boot-id:      {}", info.boot_id);
-            println!("uptime:       {}d {}h {}m {}s", s / 86400, (s % 86400) / 3600, (s % 3600) / 60, s % 60);
+            println!(
+                "uptime:       {}d {}h {}m {}s",
+                s / 86400,
+                (s % 86400) / 3600,
+                (s % 3600) / 60,
+                s % 60
+            );
             println!("http-address: {}", info.http_address);
             if let Some(addr) = &info.https_address {
                 println!("https-address: {}", addr);

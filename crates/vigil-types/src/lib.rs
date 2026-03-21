@@ -3,5 +3,6 @@
 
 pub mod api;
 pub mod identity;
+pub mod no_proxy;
 pub mod plan;
 pub mod signal;

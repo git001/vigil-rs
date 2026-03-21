@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 vigil-rs contributors
 
+pub mod alerts;
 pub mod checks;
 pub mod identities;
 pub mod logs;

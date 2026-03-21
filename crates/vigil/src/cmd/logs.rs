@@ -9,27 +9,26 @@ pub async fn run(
     n: Option<usize>,
     follow: bool,
 ) -> anyhow::Result<()> {
-    if follow {
-        tokio::select! {
-            res = client.follow_logs(services) => res?,
-            _ = tokio::signal::ctrl_c() => {},
-        }
-        return Ok(());
-    }
-
     let entries = client.list_logs(services, n).await?;
-    if entries.is_empty() {
+    if entries.is_empty() && !follow {
         println!("No log entries.");
         return Ok(());
     }
     for e in entries {
         println!(
             "{} [{}] [{}] {}",
-            e.timestamp.format("%H:%M:%S%.3f"),
+            e.timestamp.format("%Y-%m-%d %H:%M:%S%.3f"),
             e.service,
             format!("{:?}", e.stream).to_lowercase(),
             e.message,
         );
+    }
+
+    if follow {
+        tokio::select! {
+            res = client.follow_logs(services) => res?,
+            _ = tokio::signal::ctrl_c() => {},
+        }
     }
     Ok(())
 }

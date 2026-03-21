@@ -3,24 +3,27 @@
 
 //! vigild HTTP client — public API surface.
 
-mod proxy;
+mod http_client;
 mod transport;
 
-pub use proxy::HttpConfig;
+pub use http_client::HttpConfig;
 
 use std::path::PathBuf;
 
 use bytes::Bytes;
 use http_body_util::Full;
+use http_client::build_reqwest_client;
 use transport::{
     Transport, drain_sse_buf, http_parse, http_parse_void, names_query, unix_send, unix_send_void,
     unix_uri,
 };
 use vigil_types::api::{
-    ChangeInfo, CheckInfo, DaemonAction, DaemonActionRequest, LogEntry, ServiceAction, ServiceInfo,
-    ServicesAction, SystemInfo,
+    AlertInfo, ChangeInfo, CheckInfo, DaemonAction, DaemonActionRequest, LogEntry, ServiceAction,
+    ServiceInfo, ServicesAction, SystemInfo,
 };
-use vigil_types::identity::{AddIdentitiesRequest, Identity, IdentitySpec, RemoveIdentitiesRequest};
+use vigil_types::identity::{
+    AddIdentitiesRequest, Identity, IdentitySpec, RemoveIdentitiesRequest,
+};
 
 // ---------------------------------------------------------------------------
 // VigilClient
@@ -33,14 +36,18 @@ pub struct VigilClient {
 impl VigilClient {
     /// Connect via Unix domain socket (default transport).
     pub fn new_unix(socket_path: PathBuf) -> Self {
-        VigilClient { transport: Transport::new_unix(socket_path) }
+        VigilClient {
+            transport: Transport::new_unix(socket_path),
+        }
     }
 
     /// Connect via HTTP or HTTPS URL with full proxy and TLS configuration.
     pub fn new_http(base_url: String, config: HttpConfig) -> anyhow::Result<Self> {
-        let client = proxy::build_reqwest_client(config)?;
+        let client = build_reqwest_client(config)?;
         let base_url = base_url.trim_end_matches('/').to_string();
-        Ok(VigilClient { transport: Transport::Http { client, base_url } })
+        Ok(VigilClient {
+            transport: Transport::Http { client, base_url },
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -79,8 +86,11 @@ impl VigilClient {
                 unix_send(c, req).await
             }
             Transport::Http { client, base_url } => {
-                let resp =
-                    client.post(format!("{}{}", base_url, path)).json(body).send().await?;
+                let resp = client
+                    .post(format!("{}{}", base_url, path))
+                    .json(body)
+                    .send()
+                    .await?;
                 http_parse(resp).await
             }
         }
@@ -99,8 +109,11 @@ impl VigilClient {
                 unix_send_void(c, req).await
             }
             Transport::Http { client, base_url } => {
-                let resp =
-                    client.post(format!("{}{}", base_url, path)).json(body).send().await?;
+                let resp = client
+                    .post(format!("{}{}", base_url, path))
+                    .json(body)
+                    .send()
+                    .await?;
                 http_parse_void(resp).await
             }
         }
@@ -122,8 +135,11 @@ impl VigilClient {
                 unix_send(c, req).await
             }
             Transport::Http { client, base_url } => {
-                let resp =
-                    client.delete(format!("{}{}", base_url, path)).json(body).send().await?;
+                let resp = client
+                    .delete(format!("{}{}", base_url, path))
+                    .json(body)
+                    .send()
+                    .await?;
                 http_parse(resp).await
             }
         }
@@ -138,7 +154,8 @@ impl VigilClient {
     }
 
     pub async fn list_services(&self, names: &[String]) -> anyhow::Result<Vec<ServiceInfo>> {
-        self.get(&format!("/v1/services{}", names_query(names))).await
+        self.get(&format!("/v1/services{}", names_query(names)))
+            .await
     }
 
     pub async fn services_action(
@@ -146,11 +163,16 @@ impl VigilClient {
         action: ServiceAction,
         services: Vec<String>,
     ) -> anyhow::Result<ChangeInfo> {
-        self.post("/v1/services", &ServicesAction { action, services }).await
+        self.post("/v1/services", &ServicesAction { action, services })
+            .await
     }
 
     pub async fn list_checks(&self, names: &[String]) -> anyhow::Result<Vec<CheckInfo>> {
         self.get(&format!("/v1/checks{}", names_query(names))).await
+    }
+
+    pub async fn list_alerts(&self, names: &[String]) -> anyhow::Result<Vec<AlertInfo>> {
+        self.get(&format!("/v1/alerts{}", names_query(names))).await
     }
 
     pub async fn list_logs(
@@ -165,8 +187,11 @@ impl VigilClient {
         if let Some(n) = n {
             params.push(format!("n={}", n));
         }
-        let query =
-            if params.is_empty() { String::new() } else { format!("?{}", params.join("&")) };
+        let query = if params.is_empty() {
+            String::new()
+        } else {
+            format!("?{}", params.join("&"))
+        };
         self.get(&format!("/v1/logs{}", query)).await
     }
 
@@ -239,21 +264,28 @@ impl VigilClient {
     }
 
     pub async fn daemon_action(&self, action: DaemonAction) -> anyhow::Result<()> {
-        self.post_void("/v1/vigild", &DaemonActionRequest { action }).await
+        self.post_void("/v1/vigild", &DaemonActionRequest { action })
+            .await
     }
 
     pub async fn list_identities(&self, names: &[String]) -> anyhow::Result<Vec<Identity>> {
-        self.get(&format!("/v1/identities{}", names_query(names))).await
+        self.get(&format!("/v1/identities{}", names_query(names)))
+            .await
     }
 
     pub async fn add_identities(
         &self,
         identities: std::collections::HashMap<String, IdentitySpec>,
     ) -> anyhow::Result<()> {
-        self.post_void("/v1/identities", &AddIdentitiesRequest { identities }).await
+        self.post_void("/v1/identities", &AddIdentitiesRequest { identities })
+            .await
     }
 
     pub async fn remove_identities(&self, names: Vec<String>) -> anyhow::Result<Vec<String>> {
-        self.delete("/v1/identities", &RemoveIdentitiesRequest { identities: names }).await
+        self.delete(
+            "/v1/identities",
+            &RemoveIdentitiesRequest { identities: names },
+        )
+        .await
     }
 }

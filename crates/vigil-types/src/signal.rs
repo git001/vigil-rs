@@ -39,6 +39,49 @@ impl TryFrom<String> for StopSignal {
     type Error = UnknownSignal;
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
-        Signal::from_str(&s).map(StopSignal).map_err(|_| UnknownSignal(s))
+        Signal::from_str(&s)
+            .map(StopSignal)
+            .map_err(|_| UnknownSignal(s))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_is_sigterm() {
+        assert_eq!(StopSignal::default().0, Signal::SIGTERM);
+    }
+
+    #[test]
+    fn display_shows_signal_name() {
+        assert_eq!(StopSignal(Signal::SIGTERM).to_string(), "SIGTERM");
+        assert_eq!(StopSignal(Signal::SIGUSR1).to_string(), "SIGUSR1");
+        assert_eq!(StopSignal(Signal::SIGKILL).to_string(), "SIGKILL");
+    }
+
+    #[test]
+    fn try_from_valid_string() {
+        let s = StopSignal::try_from("SIGTERM".to_string()).unwrap();
+        assert_eq!(s.0, Signal::SIGTERM);
+        let s2 = StopSignal::try_from("SIGUSR2".to_string()).unwrap();
+        assert_eq!(s2.0, Signal::SIGUSR2);
+    }
+
+    #[test]
+    fn try_from_invalid_string() {
+        let err = StopSignal::try_from("NOSUCHSIGNAL".to_string()).unwrap_err();
+        assert!(err.to_string().contains("unknown signal"));
+        assert!(err.to_string().contains("NOSUCHSIGNAL"));
+    }
+
+    #[test]
+    fn into_string_roundtrip() {
+        let original = StopSignal(Signal::SIGUSR2);
+        let s: String = original.into();
+        assert_eq!(s, "SIGUSR2");
+        let back = StopSignal::try_from(s).unwrap();
+        assert_eq!(back.0, Signal::SIGUSR2);
     }
 }

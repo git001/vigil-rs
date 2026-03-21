@@ -61,7 +61,9 @@ pub async fn run(client: &VigilClient, sub: ServicesCmd) -> anyhow::Result<()> {
         }
         ServicesCmd::Restart { names } => {
             crate::cmd::print_change(
-                &client.services_action(ServiceAction::Restart, names).await?,
+                &client
+                    .services_action(ServiceAction::Restart, names)
+                    .await?,
             );
         }
     }

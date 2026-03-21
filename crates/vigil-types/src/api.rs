@@ -150,6 +150,34 @@ pub struct CheckInfo {
     pub failures: u32,
     /// Failures required to declare the check down.
     pub threshold: u32,
+    /// Seconds until the next scheduled check run. `null` during initial delay.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_run_in_secs: Option<u64>,
+}
+
+// ---------------------------------------------------------------------------
+// Alerts
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub struct AlertCheckStatus {
+    pub check: String,
+    /// Last known status (`null` = no event observed yet).
+    pub status: Option<CheckStatus>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub struct AlertInfo {
+    pub name: String,
+    /// Raw URL from config (may contain `"env:VAR"` placeholder).
+    pub url: String,
+    pub format: crate::plan::AlertFormat,
+    /// Check names that trigger this alert.
+    pub on_check: Vec<String>,
+    /// Last known status per watched check.
+    pub check_status: Vec<AlertCheckStatus>,
 }
 
 // ---------------------------------------------------------------------------
