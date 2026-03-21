@@ -37,6 +37,7 @@ output.console:
   codec.json:
     pretty: false
 
-logging.level: warning
+logging.level: info
 logging.to_stderr: true
 logging.to_files: false
+logging.json: true

@@ -473,6 +473,32 @@ Key parameters:
 --reconnect-retries N      Max failures before exit, 0 = unlimited (default: 0)
 --healthcheck HOST:PORT    Address for GET /healthz endpoint (default: 127.0.0.1:9091)
 --healthcheck-max-age SECS Seconds without tick before /healthz returns 503 (default: 90)
+--include REGEX            Forward a line only if it matches this regex (repeatable)
+--exclude REGEX            Drop a line if it matches this regex (applied after --include, repeatable)
+```
+
+**Line filtering** — `--include` and `--exclude` accept Go-compatible regular expressions
+and can be repeated any number of times. Evaluation order:
+
+1. If any `--include` pattern is given, a line must match at least one to proceed.
+2. If the line then matches any `--exclude` pattern, it is dropped.
+3. Otherwise the line is forwarded to the TCP sink.
+
+```yaml
+# Only forward ERROR and WARN lines, suppress noisy health-check pings
+services:
+  vigil-log-relay:
+    command: >
+      vigil-log-relay
+      --source-socket /tmp/vigild.sock
+      --source-path /v1/logs/follow?format=ndjson
+      --include '"level":"(error|warn)"'
+      --exclude '"path":"/healthz"'
+      --tcp-sink-host 127.0.0.1
+      --tcp-sink-port 5170
+    startup: enabled
+    on-failure: restart
+    logs-forward: disabled
 ```
 
 #### Kubernetes pod log collector

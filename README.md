@@ -23,10 +23,11 @@ socket for programmatic control.
 | **Startup ordering** | `after:` / `before:` / `requires:` dependency graph |
 | **Health checks** | HTTP, TCP, and exec checks with configurable period/timeout/threshold/delay |
 | **on-check-failure** | Automatic service restart (or shutdown) when a check goes down |
+| **Alerting** | HTTP(S) notifications on check state transitions — Alertmanager, CloudEvents, OTLP logs, or generic webhook; `env:VAR` resolution for `url`/headers/labels/proxy; proxy support; configurable retry with backoff; startup warning for unset env vars; `body-template` uses [minijinja](https://github.com/mitsuhiko/minijinja) (Jinja2-compatible) for custom webhook payloads |
 | **on-success / on-failure** | Per-service exit policies: `restart`, `ignore`, `shutdown`, `failure-shutdown`, `success-shutdown` |
 | **Exit-code propagation** | vigild exits with the managed service's actual exit code |
 | **Log streaming** | stdout/stderr captured per service; `vigil logs` and SSE follow (`vigil logs -f`) |
-| **REST API** | Full HTTP API over Unix socket; Swagger UI at `/docs` |
+| **REST API** | Full HTTP API over Unix socket; Swagger UI at `/docs` (assets loaded from unpkg.com — requires internet access; use `/openapi.json` in air-gapped environments) |
 | **OpenAPI** | Auto-generated spec via utoipa; served at `/openapi.json` |
 | **TLS listener** | Optional HTTPS API (`--tls-addr`); auto-generates self-signed cert |
 | **Identity management** | Named principals with `read`/`write`/`admin` access levels |
@@ -162,9 +163,11 @@ checks:
 ```yaml
 # HTTP check
 http:
-  url: http://localhost:8080/healthz
-  headers:
+  url: https://localhost:8080/healthz
+  headers:                              # optional — arbitrary key/value map
     Authorization: "Bearer token"
+  # insecure: true                      # skip TLS verification (self-signed / dev)
+  # ca: /etc/vigil/internal-ca.pem      # custom CA chain for TLS verification
 
 # TCP check
 tcp:
@@ -213,6 +216,7 @@ See the [examples/](examples/) directory for complete, buildable examples.
 | Health checks | ❌ | ✅ HTTP / TCP / exec |
 | HTTP check headers | ❌ | ✅ arbitrary key/value map |
 | HTTP check TLS (`insecure` / `ca`) | ❌ | ✅ skip verification or custom CA |
+| Alerting (Alertmanager / CloudEvents / OTLP) | ❌ | ✅ |
 | Runtime API | ❌ | ✅ Unix-socket REST |
 | Configuration | None (CLI args) | YAML layers |
 | Signal forwarding | ✅ | ✅ |
@@ -236,6 +240,7 @@ automatic restarts, and programmatic control.
 | Health checks | ❌ (external tooling) | ✅ built-in |
 | HTTP check headers | ❌ | ✅ arbitrary key/value map |
 | HTTP check TLS (`insecure` / `ca`) | ❌ | ✅ skip verification or custom CA |
+| Alerting (Alertmanager / CloudEvents / OTLP) | ❌ | ✅ |
 | Runtime API | ❌ | ✅ REST over Unix socket |
 | Log routing | ✅ (dedicated log daemon) | stdout/stderr → log store |
 | Dependency ordering | ✅ (`dependencies.d/`) | ✅ (`after:`) |
@@ -261,6 +266,7 @@ from outside the container.
 | Health checks | ❌ | ✅ |
 | HTTP check headers | ❌ | ✅ arbitrary key/value map |
 | HTTP check TLS (`insecure` / `ca`) | ❌ | ✅ skip verification or custom CA |
+| Alerting (Alertmanager / CloudEvents / OTLP) | ❌ | ✅ |
 | REST API | XML-RPC | JSON over Unix socket |
 | Memory footprint | ~30 MB (Python) | ~10 MB |
 | PID 1 safe | ❌ (not designed for it) | ✅ |
@@ -281,6 +287,7 @@ vigil-rs is a Rust rewrite of Pebble with the following differences:
 | Check `delay` field | ❌ | ✅ (vigil extension) |
 | HTTP check headers | ✅ | ✅ arbitrary key/value map |
 | HTTP check TLS (`insecure` / `ca`) | ❌ | ✅ skip verification or custom CA |
+| Alerting (Alertmanager / CloudEvents / OTLP) | ❌ | ✅ |
 | Memory footprint | ~20 MB | ~10 MB |
 | API compatibility | Pebble API | Pebble-compatible |
 | OpenAPI / Swagger UI | ❌ | ✅ |
@@ -306,6 +313,39 @@ podman build -f examples/full-container/Containerfile -t vigil-h2o .
 podman run --rm --network host --name vigil-h2o vigil-h2o
 ```
 
+### `examples/kubernetes-pod-logs` — vigil-log-relay + Filebeat on Kubernetes
+
+Runs vigild (service supervisor) and vigil-log-relay (K8s pod log forwarder)
+as sidecars alongside Filebeat in a single pod. vigil-log-relay watches a
+namespace via the K8s Watch API, streams pod logs, and forwards them as ndjson
+to Filebeat over a local TCP connection.
+
+**K8s `stream` query parameter (stdout/stderr separation)**
+
+Kubernetes ≥ 1.32 supports a `stream=Stdout` / `stream=Stderr` query parameter
+on the pod log endpoint, allowing stdout and stderr to be collected as separate
+labeled streams. vigil-log-relay detects the API server version at startup and
+enables this automatically.
+
+Some distributions forbid the `stream=` parameter via
+admission control even when running K8s 1.32+. In that case the log stream open
+fails with HTTP 422 `"stream: Forbidden: may not be specified"`. Set the
+`--no-stream-param` flag (or `NO_STREAM_PARAM=true` env var) to fall back to the
+combined stdout+stderr stream:
+
+```yaml
+env:
+  - name: NO_STREAM_PARAM
+    value: "true"
+```
+
+**HTTP/2 multiplexing**
+
+The kube client (hyper + rustls-tls) currently uses HTTP/1.1 — one TCP
+connection per pod stream. HTTP/2 multiplexing is tracked in
+[kube-rs PR #1823](https://github.com/kube-rs/kube/pull/1823) (draft). Use
+`--max-log-requests` to cap concurrent connections when watching large namespaces.
+
 ### `examples/hug` — vigild + HAProxy + controller
 
 Two services: HAProxy (with graceful SIGUSR1 drain) and a controller that
@@ -328,6 +368,50 @@ podman exec vigil-hug vigil --socket /run/vigil/vigild.sock services
 podman exec vigil-hug vigil --socket /run/vigil/vigild.sock checks
 podman exec vigil-hug vigil --socket /run/vigil/vigild.sock logs
 ```
+
+---
+
+## Testing
+
+### Unit and integration tests
+
+```sh
+cargo test --workspace
+```
+
+### VTest2 end-to-end tests
+
+End-to-end integration tests are written in the [VTest2](https://code.vinyl-cache.org/vtest/VTest2)
+`.vtc` format — the same test framework used by the Varnish HTTP cache. Each
+test starts a real `vigild` process (and sometimes `vigil-log-relay`) with a
+temporary layers directory and Unix socket, drives it through the HTTP API and
+the `vigil` CLI, and asserts on the responses.
+
+22 test files cover: system info, service/check/alert/identity CRUD, log
+streaming, TLS listener, reaper, mTLS, alert body templates, log-relay socket
+and URL sources, TCP reconnect, JSON log format, HTTPS transport, and more.
+
+```sh
+# Run all VTest2 tests (requires VTest2 binary)
+tests/vtest/run.sh
+
+# Single test, verbose
+tests/vtest/run.sh -v tests/vtest/v0001_system_info.vtc
+
+# Combined coverage report (unit + integration + VTest2)
+tests/vtest/run.sh --coverage          # text summary
+tests/vtest/run.sh --coverage --html   # HTML report
+```
+
+See [`tests/vtest/README.md`](tests/vtest/README.md) for prerequisites,
+patterns, and gotchas.
+
+### Coverage
+
+Line coverage across all crates: **~91 %** (measured with
+`llvm-cov` via `tests/vtest/run.sh --coverage`).
+The `source_k8s` module (live Kubernetes streams) is excluded from automated
+coverage — it requires a real cluster.
 
 ---
 

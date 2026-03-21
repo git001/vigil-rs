@@ -34,6 +34,29 @@ vigil --socket /tmp/vigild.sock logs -f
 
 ---
 
+## alerts-webhook — Slack, Teams, and generic webhook alerts
+
+**Features:** `body-template` · Jinja2 templating · conditional formatting · `env:` resolution
+
+Shows how to deliver vigild check alerts to chat platforms and webhook
+receivers that require a specific JSON shape.
+
+| Alert | Target | Key technique |
+|---|---|---|
+| `slack` | Slack incoming webhook | Emoji toggle with `{% if status == 'down' %}` |
+| `teams` | Microsoft Teams MessageCard | `themeColor` + `potentialAction` runbook link |
+| `generic` | Any receiver | Default webhook format (no template) |
+
+```bash
+export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+export TEAMS_WEBHOOK_URL=https://your-org.webhook.office.com/webhookb2/...
+export CLUSTER_NAME=prod-eu-1
+vigild --layers-dir examples/alerts-webhook/layers --socket /tmp/vigild.sock
+vigil --socket /tmp/vigild.sock alerts list
+```
+
+---
+
 ## layers — multi-layer configuration reference
 
 **Features:** layer merge · `override: replace` · `after:` · environment · disabled-by-default services · dev/prod split

@@ -1,0 +1,137 @@
+summary: Webhook alert examples — Slack, Microsoft Teams, generic
+
+# This layer demonstrates body-template: how to deliver vigild check alerts
+# to chat/ops platforms that expect a specific JSON structure.
+#
+# The template engine is Jinja2-compatible (minijinja).
+# Available variables:
+#   {{ check }}     — check name (string)
+#   {{ status }}    — "up" or "down" (string)
+#   {{ timestamp }} — RFC 3339 timestamp (string)
+#   {{ labels }}    — resolved labels map
+#   {{ info }}      — resolved send_info_fields map
+#
+# body-template is only used with format: webhook.
+# All other formats (alertmanager, cloud-events, otlp-logs) ignore it.
+#
+# To use:
+#   export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+#   export TEAMS_WEBHOOK_URL=https://your-org.webhook.office.com/webhookb2/...
+#   export CLUSTER_NAME=prod-eu-1
+#   vigild --layers-dir examples/alerts-webhook/layers --socket /tmp/vigild.sock
+
+checks:
+
+  website-alive:
+    level: alive
+    startup: enabled
+    period: 1m
+    timeout: 3s
+    threshold: 3
+    http:
+      url: https://example.com/
+
+alerts:
+
+  # ---------------------------------------------------------------------------
+  # Slack — incoming webhook
+  #
+  # Produces: {"text": "…"}
+  # Slack documentation: https://api.slack.com/messaging/webhooks
+  #
+  # For richer formatting with Block Kit, extend the template with
+  # "blocks": [...] — see commented variant below.
+  # ---------------------------------------------------------------------------
+  slack:
+    url: "env:SLACK_WEBHOOK_URL"
+    format: webhook
+    on-check: [website-alive]
+    retry-attempts: 3
+    retry-backoff: ["1s", "5s"]
+    body-template: >-
+      {"text": ":{% if status == 'down' %}red_circle{% else %}large_green_circle{% endif %} *{{ check }}* is *{{ status }}* on `{{ labels.cluster }}`"}
+
+  # Slack with Block Kit attachment (richer layout):
+  # slack-blocks:
+  #   url: "env:SLACK_WEBHOOK_URL"
+  #   format: webhook
+  #   on-check: [website-alive]
+  #   labels:
+  #     cluster: "env:CLUSTER_NAME"
+  #   body-template: |
+  #     {
+  #       "blocks": [
+  #         {
+  #           "type": "section",
+  #           "text": {
+  #             "type": "mrkdwn",
+  #             "text": "{% if status == 'down' %}:red_circle:{% else %}:large_green_circle:{% endif %} *{{ check }}* changed to *{{ status }}*"
+  #           }
+  #         },
+  #         {
+  #           "type": "context",
+  #           "elements": [
+  #             { "type": "plain_text", "text": "cluster: {{ labels.cluster }} • {{ timestamp }}" }
+  #           ]
+  #         }
+  #       ]
+  #     }
+
+  # ---------------------------------------------------------------------------
+  # Microsoft Teams — Incoming Webhook (Legacy connector)
+  #
+  # Produces a MessageCard payload.
+  # Teams documentation: https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook
+  # ---------------------------------------------------------------------------
+  teams:
+    url: "env:TEAMS_WEBHOOK_URL"
+    format: webhook
+    on-check: [website-alive]
+    labels:
+      cluster: "env:CLUSTER_NAME"
+    send_info_fields:
+      runbook: "https://wiki.example.com/runbooks/website-down"
+    retry-attempts: 3
+    retry-backoff: ["1s", "5s"]
+    body-template: |
+      {
+        "@type": "MessageCard",
+        "@context": "https://schema.org/extensions",
+        "summary": "{{ check }} is {{ status }}",
+        "themeColor": "{% if status == 'down' %}FF0000{% else %}00CC00{% endif %}",
+        "title": "Vigil Alert — {{ check }}",
+        "text": "Check **{{ check }}** transitioned to **{{ status }}** on `{{ labels.cluster }}`.",
+        "potentialAction": [
+          {
+            "@type": "OpenUri",
+            "name": "Open Runbook",
+            "targets": [{ "os": "default", "uri": "{{ info.runbook }}" }]
+          }
+        ]
+      }
+
+  # ---------------------------------------------------------------------------
+  # Generic webhook — minimal payload for custom receivers, n8n, Zapier, …
+  #
+  # Uses the default webhook format (no body-template needed).
+  # The default payload always includes: check, status, timestamp, labels, info.
+  # ---------------------------------------------------------------------------
+  generic:
+    url: "env:WEBHOOK_URL"
+    format: webhook
+    on-check: [website-alive]
+    headers:
+      Authorization: "Bearer env:WEBHOOK_TOKEN"
+    labels:
+      cluster: "env:CLUSTER_NAME"
+      env:     production
+    send_info_fields:
+      runbook: "https://wiki.example.com/runbooks/website-down"
+    # No body-template → default payload:
+    # {
+    #   "check": "website-alive",
+    #   "status": "down",
+    #   "timestamp": "2026-03-21T12:00:00Z",
+    #   "labels": { "cluster": "prod-eu-1", "env": "production" },
+    #   "info":   { "runbook": "https://..." }
+    # }

@@ -30,6 +30,10 @@ checks:
   <check-name>:
     ...
 
+alerts:
+  <alert-name>:
+    ...
+
 identities:
   <identity-name>:
     ...
@@ -375,10 +379,354 @@ directory from the named service. Individual fields (`user`, `user-id`, `group`,
 
 ---
 
+## Alerts
+
+Alerts send HTTP(S) notifications when a check changes state. They fire on
+**state transitions only** — not on every check cycle — and support four
+wire formats to integrate with common observability stacks.
+
+### Firing and recovery behaviour
+
+| Transition | Alert sent? |
+|---|---|
+| First check result: Up | **No** — suppressed to avoid spurious recovery on startup |
+| First check result: Down | **Yes** — firing |
+| Up → Down | **Yes** — firing |
+| Down → Up | **Yes** — resolved / recovered |
+| Down → Down | **No** — deduplicated |
+| Up → Up | **No** — deduplicated |
+
+### Full reference
+
+```yaml
+alerts:
+
+  # --- Global queue settings (apply to ALL alerts in this block) ---
+  # Maximum number of delivery jobs that may be pending at once.
+  # New jobs are dropped (with a warning) when the queue is full.
+  # Default: 256
+  max-queue-depth: 256
+
+  # Maximum time a delivery job may wait before being silently discarded.
+  # Prevents a flood of stale alerts when an endpoint comes back online
+  # after a long outage. Default: 60s
+  max-queue-time: 60s
+
+  my-alert:
+    # --- Endpoint ---
+    # Supports "env:VAR" — resolved at send time. Empty result → ERROR, alert dropped.
+    url: "env:ALERTMANAGER_URL"              # or a literal URL
+    format: alertmanager   # webhook | alertmanager | cloud-events | otlp-logs
+
+    on-check: [website-alive]   # checks that trigger this alert
+
+    # --- Payload ---
+    # Extra HTTP headers (e.g. authentication).
+    headers:
+      Authorization: "Bearer env:ALERTMANAGER_TOKEN"
+
+    # Labels added to the alert payload.
+    # Values prefixed with "env:" are resolved from the process environment
+    # at send time. vigild warns at startup/replan for each unset env var.
+    labels:
+      severity: critical
+      env: production
+      cluster: "env:CLUSTER_NAME"
+
+    # Arbitrary key/value fields included in the alert body.
+    # Placement depends on format (annotations in Alertmanager, attributes
+    # in OTLP, info object in webhook/CloudEvents).
+    # Values prefixed with "env:" are resolved from the process environment.
+    send_info_fields:
+      k8s_namespace: "env:KUBERNETES_NAMESPACE"
+      k8s_service:   "env:KUBERNETES_SERVICE_NAME"
+      runbook: "https://wiki.example.com/runbooks/website-down"
+
+    # --- TLS ---
+    tls_insecure: false              # skip cert verification (self-signed)
+    tls_ca: /etc/vigil/certs/ca.pem # PEM CA cert or chain file
+
+    # --- Proxy ---
+    # If omitted, HTTPS_PROXY / ALL_PROXY / HTTP_PROXY env vars are used
+    # automatically (same precedence as the vigil CLI).
+    proxy:    "env:HTTPS_PROXY"      # explicit proxy URL (overrides env vars)
+    proxy_ca: /etc/vigil/certs/proxy-ca.pem  # CA cert to verify proxy TLS
+    no_proxy: "env:NO_PROXY"         # comma-separated bypass list
+
+    # --- Retry ---
+    retry_attempts: 3                # total attempts including first (default: 3)
+    retry_backoff: ["1s", "2s"]      # delays between attempts (default: ["1s", "2s"])
+                                     # last entry is reused if list is shorter than
+                                     # retry_attempts - 1
+
+    # --- Custom body template (webhook format only) ---
+    # Jinja2-style template rendered instead of the default webhook payload.
+    # The rendered string must be valid JSON.
+    # Variables: check, status, timestamp, labels (map), info (map)
+    # Ignored for formats other than webhook.
+    body-template: '{"text": "Check {{ check }} is {{ status }}"}'
+
+    # --- Layer merging ---
+    override: merge   # merge (default) | replace
+```
+
+### Field reference
+
+#### `url`
+
+Required. HTTP or HTTPS endpoint to POST alerts to. Supports `"env:VAR"` —
+the environment variable is resolved at send time. If the resolved value is
+empty (variable unset or empty), the alert is dropped with an ERROR log.
+
+#### `format`
+
+| Value | Wire format | Content-Type |
+|---|---|---|
+| `webhook` | Generic JSON object | `application/json` |
+| `alertmanager` | Prometheus Alertmanager v2 API array | `application/json` |
+| `cloud-events` | CNCF CloudEvents 1.0 structured JSON | `application/cloudevents+json` |
+| `otlp-logs` | OpenTelemetry OTLP HTTP/JSON log record | `application/json` |
+
+Default: `webhook`
+
+#### `on-check`
+
+List of check names whose state changes trigger this alert. The alert is sent
+when any of the listed checks transitions between `Up` and `Down`.
+
+#### `env:` value resolution
+
+Any string field that accepts `"env:VAR"` resolves the named environment
+variable at send time. This applies to: `url`, `headers` values, `labels`
+values, `send_info_fields` values, `proxy`, `no_proxy`.
+
+vigild logs a **WARNING** at startup and after every `replan` for each
+`env:VAR` reference where the variable is unset or empty — so misconfiguration
+is visible immediately without waiting for the first alert:
+
+```
+WARN vigild::alert: alert config references unset env var — field will be empty
+  alert=my-alert field=url env_var=ALERTMANAGER_URL
+```
+
+For `url` specifically an empty resolved value causes the alert to be dropped
+with an ERROR rather than silently sending to a blank URL.
+
+#### `labels` / `send_info_fields`
+
+Both accept a key/value map with optional `env:` resolution.
+They differ in placement within the payload:
+
+| Format | `labels` | `send_info_fields` |
+|---|---|---|
+| `webhook` | `labels` object | `info` object |
+| `alertmanager` | Alertmanager `labels` map (+ `alertname`, `check` added automatically) | `annotations` map |
+| `cloud-events` | `data.labels` object | `data.info` object |
+| `otlp-logs` | LogRecord `attributes` | LogRecord `attributes` |
+
+#### `body-template`
+
+A [Jinja2](https://jinja.palletsprojects.com/)-compatible template string
+(rendered by [minijinja](https://github.com/mitsuhiko/minijinja)) that replaces
+the default webhook payload when `format: webhook` is configured.
+
+The rendered string **must be valid JSON**. On template parse errors, render
+errors, or invalid JSON output vigild logs a `WARN` and falls back to the
+default webhook payload — the alert is never silently dropped.
+
+**Available template variables:**
+
+| Variable | Type | Value |
+|---|---|---|
+| `check` | string | Name of the check that triggered the alert |
+| `status` | string | `"down"` (firing) or `"up"` (recovery) |
+| `timestamp` | string | RFC 3339 timestamp of the event |
+| `labels` | object | Resolved `labels` map |
+| `info` | object | Resolved `send_info_fields` map |
+
+**Ignored** for `alertmanager`, `cloud-events`, and `otlp-logs` formats.
+
+Example — Slack incoming webhook:
+
+```yaml
+body-template: '{"text": "{% if status == \"down\" %}:red_circle:{% else %}:large_green_circle:{% endif %} *{{ check }}* is *{{ status }}*"}'
+```
+
+Example — Microsoft Teams MessageCard:
+
+```yaml
+body-template: |
+  {
+    "@type": "MessageCard",
+    "@context": "https://schema.org/extensions",
+    "themeColor": "{% if status == 'down' %}FF0000{% else %}00CC00{% endif %}",
+    "title": "Vigil Alert — {{ check }}",
+    "text": "Check **{{ check }}** is **{{ status }}** on `{{ labels.cluster }}`."
+  }
+```
+
+#### `tls_insecure` / `tls_ca`
+
+Same semantics as the [HTTP check TLS options](#http-check). `tls_ca` supports
+chain files (multiple concatenated PEM blocks).
+
+#### `proxy` / `proxy_ca` / `no_proxy`
+
+| Field | Description |
+|---|---|
+| `proxy` | Explicit proxy URL. Overrides `HTTPS_PROXY` / `ALL_PROXY` / `HTTP_PROXY` env vars. Supports `env:`. |
+| `proxy_ca` | PEM CA cert (or chain) to verify the proxy's TLS connection. |
+| `no_proxy` | Comma-separated bypass list. Supports hostnames, domain suffixes, IPv4 CIDRs (`192.168.0.0/16`), and IPv6 CIDRs (`fd00::/8`). Supports `env:`. |
+
+If `proxy` is omitted, vigild automatically reads `HTTPS_PROXY`, `ALL_PROXY`,
+and `HTTP_PROXY` env vars (in that order) — the same behaviour as the vigil CLI.
+
+#### `retry_attempts` / `retry_backoff`
+
+| Field | Default | Description |
+|---|---|---|
+| `retry_attempts` | `3` | Total number of send attempts (1 = no retry) |
+| `retry_backoff` | `["1s", "2s"]` | Delays between attempts as duration strings. If shorter than `retry_attempts - 1`, the last entry is reused. |
+
+Retries are performed on connection errors and `5xx` responses. Client errors
+(`4xx`) are not retried.
+
+### Format details
+
+#### `webhook` — generic JSON
+
+Default payload (no `body-template`):
+
+```json
+{
+  "check": "website-alive",
+  "status": "down",
+  "timestamp": "2026-03-21T12:00:00Z",
+  "labels": { "env": "production" },
+  "info":   { "k8s_namespace": "prod" }
+}
+```
+
+`status` is `"down"` on firing, `"up"` on recovery.
+
+When `body-template` is set, vigild renders the template and sends the result
+instead. This lets you produce any JSON shape required by the target system
+(Slack, Teams, PagerDuty, n8n, Zapier, …). See [`body-template`](#body-template)
+for the full variable reference.
+
+#### `alertmanager` — Prometheus Alertmanager v2
+
+```json
+[{
+  "labels":      { "alertname": "website-alive", "check": "website-alive", "env": "production" },
+  "annotations": { "runbook": "https://wiki.example.com/…" },
+  "startsAt":    "2026-03-21T12:00:00Z",
+  "endsAt":      "0001-01-01T00:00:00Z"
+}]
+```
+
+On recovery `endsAt` is set to the current time — this is the native
+Alertmanager mechanism for marking an alert as resolved.
+
+#### `cloud-events` — CNCF CloudEvents 1.0
+
+```json
+{
+  "specversion": "1.0",
+  "id": "<uuid>",
+  "source": "vigild",
+  "type": "io.vigil.check.failed",
+  "time": "2026-03-21T12:00:00Z",
+  "datacontenttype": "application/json",
+  "data": {
+    "check": "website-alive",
+    "status": "down",
+    "labels": { "env": "production" },
+    "info":   { "k8s_namespace": "prod" }
+  }
+}
+```
+
+`type` is `io.vigil.check.failed` on firing, `io.vigil.check.recovered` on recovery.
+
+#### `otlp-logs` — OpenTelemetry OTLP HTTP/JSON
+
+Compatible with `POST /v1/logs` on any OpenTelemetry Collector.
+`severityNumber` is `17` (ERROR) on Down and `9` (INFO) on Up.
+`labels` and `send_info_fields` are added as LogRecord `attributes`.
+
+### Example
+
+```yaml
+alerts:
+
+  # Alertmanager — URL and token from environment, custom retry
+  alertmanager-prod:
+    url: "env:ALERTMANAGER_URL"
+    format: alertmanager
+    on-check: [website-alive]
+    headers:
+      Authorization: "Bearer env:ALERTMANAGER_TOKEN"
+    labels:
+      severity: critical
+      cluster:  "env:CLUSTER_NAME"
+    send_info_fields:
+      runbook: "https://wiki.example.com/runbooks/website-down"
+    retry_attempts: 5
+    retry_backoff: ["1s", "2s", "5s", "10s"]
+
+  # OTLP — via corporate proxy
+  otlp-prod:
+    url: http://otel-collector:4318/v1/logs
+    format: otlp-logs
+    on-check: [website-alive]
+    proxy:    "http://corp-proxy:3128"
+    no_proxy: "localhost, .internal, 10.0.0.0/8"
+    labels:
+      service.name:            vigild
+      service.namespace:       "env:KUBERNETES_NAMESPACE"
+      deployment.environment:  production
+
+  # Slack — body-template produces the incoming-webhook JSON shape
+  slack:
+    url: "env:SLACK_WEBHOOK_URL"
+    format: webhook
+    on-check: [website-alive]
+    labels:
+      cluster: "env:CLUSTER_NAME"
+    body-template: >-
+      {"text": ":{% if status == 'down' %}red_circle{% else %}large_green_circle{% endif %} *{{ check }}* is *{{ status }}* on `{{ labels.cluster }}`"}
+
+  # Microsoft Teams — MessageCard format via body-template
+  teams:
+    url: "env:TEAMS_WEBHOOK_URL"
+    format: webhook
+    on-check: [website-alive]
+    labels:
+      cluster: "env:CLUSTER_NAME"
+    send_info_fields:
+      runbook: "https://wiki.example.com/runbooks/website-down"
+    body-template: |
+      {
+        "@type": "MessageCard",
+        "@context": "https://schema.org/extensions",
+        "themeColor": "{% if status == 'down' %}FF0000{% else %}00CC00{% endif %}",
+        "title": "Vigil Alert — {{ check }}",
+        "text": "Check **{{ check }}** is **{{ status }}** on `{{ labels.cluster }}`.",
+        "potentialAction": [{
+          "@type": "OpenUri",
+          "name": "Open Runbook",
+          "targets": [{ "os": "default", "uri": "{{ info.runbook }}" }]
+        }]
+      }
+```
+
+---
+
 ## Duration format
 
 All duration fields (e.g. `kill-delay`, `period`, `timeout`, `backoff-delay`,
-`backoff-limit`, `delay`) accept strings like:
+`backoff-limit`, `delay`, `retry_backoff` entries) accept strings like:
 
 | Example | Meaning |
 |---|---|
@@ -451,6 +799,19 @@ checks:
     threshold: 3
     http:
       url: http://localhost:8080/healthz
+
+alerts:
+
+  alertmanager:
+    url: http://alertmanager:9093/api/v2/alerts
+    format: alertmanager
+    on-check: [postgres-ready, myapp-alive]
+    labels:
+      severity: critical
+      env:      production
+      cluster:  "env:CLUSTER_NAME"
+    send_info_fields:
+      k8s_namespace: "env:KUBERNETES_NAMESPACE"
 ```
 
 ---
@@ -530,6 +891,16 @@ curl -u deploy:secret https://vigild.example.com/v1/services
 
 Trusts connections presenting a client certificate signed by the specified CA.
 
+**Prerequisite:** vigild must be started with `--tls-client-ca <CA-PEM>` (or
+`VIGIL_TLS_CLIENT_CA`).  This flag enables mTLS on the TLS listener — the server
+sends a `CertificateRequest` during the TLS handshake and verifies any presented
+certificate against the supplied CA.  Connections without a client certificate
+are still accepted but fall through to Open access unless another auth method
+matches.
+
+`ca-cert` must be an inline PEM string (a single CA cert, or a chain of
+concatenated PEM blocks):
+
 ```yaml
 identities:
 
@@ -544,8 +915,14 @@ identities:
   prometheus:
     access: metrics
     tls:
-      ca-cert: /etc/vigil/certs/monitoring-ca.pem   # path also accepted
+      ca-cert: |
+        -----BEGIN CERTIFICATE-----
+        MIIBxTCC...
+        -----END CERTIFICATE-----
 ```
+
+See [Mutual TLS (mTLS)](../operator-guide/tls.md#mutual-tls-mtls) in the
+operator guide for a complete setup walkthrough.
 
 ### Full identities example
 

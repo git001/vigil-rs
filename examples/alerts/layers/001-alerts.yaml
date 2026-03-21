@@ -1,0 +1,138 @@
+summary: website health check with multi-format alerting
+
+# ---------------------------------------------------------------------------
+# Checks
+# ---------------------------------------------------------------------------
+checks:
+
+  website-alive:
+    level: alive
+    startup: enabled
+    delay: 5s
+    period: 1m
+    timeout: 5s
+    threshold: 3
+    http:
+      url: https://example.com/
+
+# ---------------------------------------------------------------------------
+# Alerts
+#
+# All alert formats support:
+#
+#   labels / send_info_fields:
+#     Static values  →  key: "value"
+#     Env-resolved   →  key: "env:ENV_VAR_NAME"
+#
+# Alerts fire on state transitions only (Up→Down = firing, Down→Up = resolved).
+# ---------------------------------------------------------------------------
+alerts:
+
+  # ---- Generic JSON webhook (default format) --------------------------------
+  # POST body:
+  #   { "check": "website-alive", "status": "down",
+  #     "timestamp": "2026-…", "labels": {…}, "info": {…} }
+  #
+  webhook-example:
+    url: http://my-webhook-endpoint:8080/alert
+    format: webhook
+    on-check: [website-alive]
+    headers:
+      Authorization: "Bearer env:WEBHOOK_TOKEN"
+    labels:
+      env: production
+      cluster: "env:CLUSTER_NAME"
+    send_info_fields:
+      k8s_namespace: "env:KUBERNETES_NAMESPACE"
+      k8s_service:   "env:KUBERNETES_SERVICE_NAME"
+
+  # ---- Prometheus Alertmanager ---------------------------------------------
+  # Compatible with POST /api/v2/alerts.
+  # Sends a "firing" alert on Down; sends a "resolved" alert (endsAt=now) on Up.
+  # "alertname" and "check" labels are added automatically.
+  #
+  alertmanager-example:
+    url: http://alertmanager:9093/api/v2/alerts
+    format: alertmanager
+    on-check: [website-alive]
+    labels:
+      severity:  critical
+      env:       production
+      cluster:   "env:CLUSTER_NAME"
+    send_info_fields:
+      description: "website-alive check failed"
+      runbook:     "https://wiki.example.com/runbooks/website-down"
+
+  # ---- CNCF CloudEvents 1.0 -----------------------------------------------
+  # Content-Type: application/cloudevents+json
+  # type: "io.vigil.check.failed" / "io.vigil.check.recovered"
+  #
+  cloudevents-example:
+    url: http://knative-broker/default/broker
+    format: cloud-events
+    on-check: [website-alive]
+    labels:
+      env: production
+    send_info_fields:
+      service: "env:KUBERNETES_SERVICE_NAME"
+
+  # ---- OpenTelemetry OTLP HTTP/JSON logs -----------------------------------
+  # Compatible with POST /v1/logs (OTLP HTTP JSON).
+  # severityNumber: 17 (ERROR) on Down, 9 (INFO) on Up.
+  # Labels and send_info_fields are added as LogRecord attributes.
+  #
+  otlp-example:
+    url: http://otel-collector:4318/v1/logs
+    format: otlp-logs
+    on-check: [website-alive]
+    labels:
+      service.name:      vigild
+      service.namespace: "env:KUBERNETES_NAMESPACE"
+      deployment.environment: production
+    send_info_fields:
+      check.description: "website reachability"
+
+  # ---- Custom CA / self-signed TLS endpoint --------------------------------
+  alertmanager-custom-tls:
+    url: https://alertmanager-internal:9093/api/v2/alerts
+    format: alertmanager
+    on-check: [website-alive]
+    tls_ca: /etc/vigil/certs/internal-ca.pem
+    # tls_insecure: true   # alternatively: skip cert verification entirely
+    labels:
+      cluster: "env:CLUSTER_NAME"
+
+  # ---- Via HTTP proxy -------------------------------------------------------
+  # Proxy URL can also be set via HTTPS_PROXY / HTTP_PROXY / ALL_PROXY env vars
+  # (same precedence as the vigil CLI). Explicit config below overrides env vars.
+  alertmanager-via-proxy:
+    url: http://alertmanager.internal:9093/api/v2/alerts
+    format: alertmanager
+    on-check: [website-alive]
+    proxy: "http://corp-proxy.example.com:3128"
+    proxy_ca: /etc/vigil/certs/proxy-ca.pem   # optional: CA for the proxy's TLS
+    no_proxy: "localhost, .internal, 10.0.0.0/8"
+    labels:
+      cluster: "env:CLUSTER_NAME"
+
+  # ---- All new parameters combined -----------------------------------------
+  # url        resolved from env at send time (empty env var → ERROR, alert dropped)
+  # retry_attempts / retry_backoff — override the defaults (3 / ["1s", "2s"])
+  # proxy, no_proxy — can also come from HTTPS_PROXY / HTTP_PROXY env vars
+  full-example:
+    url: "env:ALERTMANAGER_URL"           # e.g. http://alertmanager:9093/api/v2/alerts
+    format: alertmanager
+    on-check: [website-alive]
+    headers:
+      Authorization: "Bearer env:ALERTMANAGER_TOKEN"
+    labels:
+      severity: critical
+      cluster:  "env:CLUSTER_NAME"
+    send_info_fields:
+      k8s_namespace: "env:KUBERNETES_NAMESPACE"
+      runbook: "https://wiki.example.com/runbooks/website-down"
+    retry_attempts: 5
+    retry_backoff: ["1s", "2s", "5s", "10s"]
+    proxy: "env:HTTPS_PROXY"              # or omit to auto-detect from env
+    no_proxy: "env:NO_PROXY"
+    tls_ca: /etc/vigil/certs/internal-ca.pem

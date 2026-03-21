@@ -1,0 +1,28 @@
+summary: website health check
+
+checks:
+
+  website-alive:
+    level: alive
+    startup: enabled
+    # delay: 5s      # suppress first N seconds (default: 3s)
+    period: 1m
+    timeout: 3s
+    threshold: 3
+    http:
+      url: https://example.com/
+      # Custom request headers (e.g. auth tokens, tenant IDs):
+      # headers:
+      #   Authorization: "Bearer mytoken"
+      #   X-Tenant-ID: "prod"
+      #
+      # TLS options — choose one or neither:
+      # insecure: true                       # skip certificate verification (self-signed / dev)
+      # ca: /etc/vigil/internal-ca.pem       # verify against a custom CA chain
+
+alerts:
+
+  website-down:
+    url: http://localhost:8000
+    format: alertmanager #webhook
+    on-check: [website-alive]

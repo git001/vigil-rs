@@ -119,9 +119,134 @@ curl -k https://myhost:8443/v1/services
 # With a custom CA
 curl --cacert /path/to/ca.pem https://myhost:8443/v1/services
 
-# With a client certificate (mTLS — if you implement auth middleware)
-curl --cacert ca.pem --cert client.pem --key client.key \
+# With a client certificate (mTLS — see section below)
+curl --insecure --cert client.crt --key client.key \
      https://myhost:8443/v1/services
+```
+
+## Mutual TLS (mTLS)
+
+mTLS lets vigild authenticate callers by verifying the TLS client certificate
+they present during the handshake.  It is **optional** at the transport level —
+connections without a client certificate are accepted but treated as
+unauthenticated (Open access) unless another auth method matches.
+
+### How it works
+
+1. **vigild is started with `--tls-client-ca`** — this loads a CA certificate
+   and configures the TLS listener to request (but not require) a client cert.
+2. **A TLS identity is registered** via `POST /v1/identities` — it stores the
+   CA's PEM and the access level to grant when a cert signed by that CA is
+   presented.
+3. **At request time:** if a client cert is present, vigild verifies it
+   cryptographically against every registered TLS identity.  The most-permissive
+   matching level is used.  No match → Open (fallback).
+
+### Step 1 — Start vigild with `--tls-client-ca`
+
+```bash
+vigild \
+  --layers-dir /etc/vigil/layers \
+  --socket     /run/vigil/vigild.sock \
+  --tls-addr   0.0.0.0:8443 \
+  --tls-client-ca /etc/vigil/certs/client-ca.pem
+```
+
+Or via environment variable:
+
+```bash
+VIGIL_TLS_ADDR=0.0.0.0:8443 \
+VIGIL_TLS_CLIENT_CA=/etc/vigil/certs/client-ca.pem \
+vigild --layers-dir /etc/vigil/layers
+```
+
+`--tls-client-ca` accepts a PEM file with one or more CA certificates
+(concatenated chain).
+
+### Step 2 — Register a TLS identity
+
+Add an identity whose `tls.ca-cert` matches the CA that signed the client
+certificate.  This can be done via the Unix socket (no auth required during
+bootstrap, or with an existing admin identity):
+
+```bash
+curl --unix-socket /run/vigil/vigild.sock \
+  -X POST http://localhost/v1/identities \
+  -H "Content-Type: application/json" \
+  -d '{
+    "identities": {
+      "ci-pipeline": {
+        "access": "write",
+        "tls": {
+          "ca-cert": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"
+        }
+      }
+    }
+  }'
+```
+
+Or embed the CA cert inline in the JSON by reading the file:
+
+```bash
+CA=$(python3 -c "import json,sys; print(json.dumps(open('/etc/vigil/certs/client-ca.pem').read()))")
+curl --unix-socket /run/vigil/vigild.sock \
+  -X POST http://localhost/v1/identities \
+  -H "Content-Type: application/json" \
+  -d "{\"identities\":{\"ci-pipeline\":{\"access\":\"write\",\"tls\":{\"ca-cert\":$CA}}}}"
+```
+
+### Step 3 — Connect with a client certificate
+
+```bash
+# vigil CLI — present client cert
+vigil --url https://myhost:8443 --insecure \
+      --cert /path/to/client.crt \
+      --key  /path/to/client.key \
+      services list
+
+# curl — present client cert signed by the registered CA
+curl --insecure \
+     --cert /path/to/client.crt \
+     --key  /path/to/client.key \
+     https://myhost:8443/v1/services
+
+# Without client cert → Open access → 403 on protected endpoints
+vigil --url https://myhost:8443 --insecure services list
+curl --insecure https://myhost:8443/v1/services
+```
+
+### Certificate requirements
+
+Client certificates must satisfy the requirements of `rustls`/`webpki`:
+
+- The CA cert must have `basicConstraints=CA:true` and
+  `keyUsage=keyCertSign,cRLSign`.
+- The client cert must have `extendedKeyUsage=clientAuth` and a
+  `subjectAltName` extension.
+
+Example with `openssl`:
+
+```bash
+# CA key + self-signed cert
+openssl req -x509 \
+  -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+  -keyout ca.key -out ca.crt -days 365 -nodes \
+  -subj "/CN=my-ca" \
+  -addext "basicConstraints=critical,CA:true" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign"
+
+# Client key + CSR
+openssl req \
+  -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+  -keyout client.key -out client.csr -nodes \
+  -subj "/CN=my-client"
+
+# Sign client cert with required extensions
+printf "subjectAltName=DNS:my-client\nextendedKeyUsage=clientAuth" \
+  > client_ext.cnf
+openssl x509 -req \
+  -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -out client.crt -days 365 -extfile client_ext.cnf
 ```
 
 ## Both transports active simultaneously

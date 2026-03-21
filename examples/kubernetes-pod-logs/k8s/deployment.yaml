@@ -56,6 +56,8 @@ spec:
             # Enable vigild HTTPS API listener for Kubernetes probes
             - name: VIGIL_TLS_ADDR
               value: "0.0.0.0:8443"
+            - name: NO_STREAM_PARAM
+              value: "true"
 
           ports:
             - name: vigild-api

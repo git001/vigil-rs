@@ -1,0 +1,49 @@
+# kubernetes-pod-logs — vigil-rs + Filebeat + pod-log-collector
+#
+# Containerfile.build — builds vigil binaries from local source.
+# Use this during development to test unreleased changes.
+# For production, use Containerfile (pulls from ghcr.io/git001/vigil-rs).
+#
+# Build (from repo root):
+#   oc new-build --name=vigil-k8s-pod-logs --strategy=docker \
+#     --dockerfile="$(cat examples/kubernetes-pod-logs/Containerfile.build)"
+#   oc start-build vigil-k8s-pod-logs --from-dir=. --follow
+#
+# Or with podman:
+#   podman build -f examples/kubernetes-pod-logs/Containerfile.build \
+#                -t vigil-k8s-pod-logs .
+
+# Stage 1 — build vigil binaries from local source
+FROM rust:1-slim-bookworm AS builder
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+RUN cargo build --release \
+    --bin vigild \
+    --bin vigil \
+    --bin vigil-log-relay
+
+# Stage 2 — final image: Filebeat (Ubuntu) + vigil binaries
+FROM docker.elastic.co/beats/filebeat:8.17.0
+USER root
+
+COPY --from=builder /build/target/release/vigild           /usr/local/bin/vigild
+COPY --from=builder /build/target/release/vigil            /usr/local/bin/vigil
+COPY --from=builder /build/target/release/vigil-log-relay  /usr/local/bin/vigil-log-relay
+COPY examples/kubernetes-pod-logs/filebeat.yml             /usr/share/filebeat/vigil-filebeat.yml
+COPY examples/kubernetes-pod-logs/layers/                  /etc/vigil/layers/
+
+RUN chmod 644 /usr/share/filebeat/vigil-filebeat.yml \
+ && chown -R 1001:0 /etc/vigil \
+ && chmod -R g=u   /etc/vigil
+
+# Use /tmp for the socket: /run is a root-owned tmpfs on OpenShift and
+# any chmod done in the image layer is lost at runtime.
+WORKDIR /tmp
+
+ENV VIGIL_LAYERS=/etc/vigil/layers \
+    VIGIL_SOCKET=/tmp/vigild.sock
+
+USER 1001
+
+ENTRYPOINT ["/usr/local/bin/vigild"]

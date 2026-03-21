@@ -28,8 +28,8 @@ FILEBEAT_HOST="${FILEBEAT_HOST:-127.0.0.1}"
 FILEBEAT_PORT="${FILEBEAT_PORT:-5170}"
 WATCH_INTERVAL="${WATCH_INTERVAL:-30}"
 
-CA=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-TOKEN_FILE=/var/run/secrets/kubernetes.io/serviceaccount/token
+export CA=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+export TOKEN_FILE=/var/run/secrets/kubernetes.io/serviceaccount/token
 
 # vigild prefixes output with [pod-log-collector] automatically.
 log() { printf '%s\n' "$*"; }
@@ -43,7 +43,7 @@ if [[ ! -f "$TOKEN_FILE" ]] || [[ -z "${KUBERNETES_SERVICE_HOST:-}" ]]; then
     exit 1
 fi
 
-API="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}"
+export API="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}"
 
 PID_DIR=$(mktemp -d /tmp/k8s-log-pids.XXXXXX)
 trap 'kill $(cat "$PID_DIR"/*.pid 2>/dev/null) 2>/dev/null; rm -rf "$PID_DIR"' EXIT
