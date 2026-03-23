@@ -279,6 +279,7 @@ checks:
       headers:
         Authorization: "Bearer secret"
         Content-Type: "application/json"
+      no-follow-redirects: true              # do not follow HTTP redirects (default: true)
       insecure: false                        # skip TLS verification (default: false)
       insecure-proxy: false                  # skip TLS verification for HTTPS proxy (default: false)
       ca: /etc/vigil/certs/internal-ca.pem  # custom CA for TLS verification (optional)
@@ -337,6 +338,7 @@ http:
   headers:
     Authorization: "Bearer secret"
     Content-Type: "application/json"
+  no-follow-redirects: true               # do not follow HTTP redirects (default: true)
   insecure: true                          # skip TLS certificate verification
   insecure-proxy: true                    # skip TLS verification for HTTPS proxy
   ca: /etc/vigil/certs/internal-ca.pem   # PEM CA cert (or chain) to verify the server
@@ -351,6 +353,7 @@ codes listed in `success-statuses`. The `url` field supports `http://` and
 |-------|---------|-------------|
 | `url` | — | HTTP or HTTPS URL to request |
 | `headers` | `{}` | Extra request headers (repeatable key/value map) |
+| `no-follow-redirects` | `true` | Do not follow HTTP redirects. When `true`, the probe sees the raw redirect response (e.g. 301, 302, 303) instead of the final destination. |
 | `insecure` | `false` | Skip TLS certificate verification (self-signed certs) |
 | `insecure-proxy` | `false` | Skip TLS certificate verification for the HTTPS proxy itself. See note below. |
 | `ca` | — | PEM file with CA certificate(s) to verify the server's TLS. Supports chain files with multiple concatenated PEM blocks. |
