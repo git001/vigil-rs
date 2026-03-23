@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use clap::Parser;
+use tokio::io::AsyncWriteExt;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 use tracing::info;
@@ -87,17 +88,29 @@ async fn main() -> Result<()> {
     let addr = format!("{}:{}", cli.tcp_sink_host, cli.tcp_sink_port);
     let (tx, rx) = mpsc::channel::<String>(8192);
 
-    // TCP sink — single task owning the connection
-    let sink_cfg = SinkConfig {
-        connect_timeout_ms: cli.dest_connect_timeout,
-        write_timeout_ms: cli.dest_read_timeout,
-        idle_timeout_ms: cli.dest_idle_timeout,
-        keepalive_interval_secs: cli.dest_keepalive_interval,
-        keepalive_timeout_secs: cli.dest_keepalive_timeout,
-        reconnect_delay_ms: cli.dest_reconnect_delay,
-        reconnect_max_ms: cli.dest_reconnect_max,
-    };
-    tokio::spawn(tcp_sink::run(addr.clone(), rx, sink_cfg));
+    if cli.stdout_sink {
+        // Stdout sink — write each line to stdout
+        tokio::spawn(async move {
+            let mut out = tokio::io::stdout();
+            let mut rx = rx;
+            while let Some(line) = rx.recv().await {
+                let _ = out.write_all(line.as_bytes()).await;
+                let _ = out.write_all(b"\n").await;
+            }
+        });
+    } else {
+        // TCP sink — single task owning the connection
+        let sink_cfg = SinkConfig {
+            connect_timeout_ms: cli.dest_connect_timeout,
+            write_timeout_ms: cli.dest_read_timeout,
+            idle_timeout_ms: cli.dest_idle_timeout,
+            keepalive_interval_secs: cli.dest_keepalive_interval,
+            keepalive_timeout_secs: cli.dest_keepalive_timeout,
+            reconnect_delay_ms: cli.dest_reconnect_delay,
+            reconnect_max_ms: cli.dest_reconnect_max,
+        };
+        tokio::spawn(tcp_sink::run(addr.clone(), rx, sink_cfg));
+    }
 
     // Healthcheck HTTP server
     let liveness = Liveness::new(cli.healthcheck_max_age);
@@ -128,6 +141,12 @@ async fn main() -> Result<()> {
 
     let filter = LineFilter::new(&cli.include, &cli.exclude)?;
 
+    let sink_label = if cli.stdout_sink {
+        "stdout".to_string()
+    } else {
+        addr.clone()
+    };
+
     info!(
         version = env!("CARGO_PKG_VERSION"),
         "vigil-log-relay starting"
@@ -140,7 +159,7 @@ async fn main() -> Result<()> {
         info!(
             namespace   = %cli.namespace,
             selector    = cli.pod_selector.as_str(),
-            tcp         = %addr,
+            sink        = %sink_label,
             interval_s  = cli.watch_interval,
             healthcheck = %cli.healthcheck,
             "source: kubernetes pod logs",
@@ -152,7 +171,7 @@ async fn main() -> Result<()> {
             _ = sigint.recv()   => { info!("received SIGINT");  }
         }
     } else if let Some(url) = cli.source_url.clone() {
-        info!(url = %url, tcp = %addr, healthcheck = %cli.healthcheck, "source: http url");
+        info!(url = %url, sink = %sink_label, healthcheck = %cli.healthcheck, "source: http url");
         let source = tokio::spawn(source_url::run(
             url,
             tx,
@@ -170,7 +189,7 @@ async fn main() -> Result<()> {
         info!(
             socket      = %socket.display(),
             path        = %cli.source_path,
-            tcp         = %addr,
+            sink        = %sink_label,
             healthcheck = %cli.healthcheck,
             "source: unix socket",
         );

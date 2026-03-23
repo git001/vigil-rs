@@ -466,6 +466,7 @@ Key parameters:
 ```
 --source-socket PATH       Unix socket to connect to
 --source-path PATH         HTTP path (default: /v1/logs/follow?format=ndjson)
+--stdout-sink              Write to stdout instead of TCP (ignores all TCP sink options)
 --tcp-sink-host HOST       TCP sink host (default: 127.0.0.1)
 --tcp-sink-port PORT       TCP sink port (default: 5170)
 --reconnect-delay MS       Initial backoff delay in ms (default: 500)
@@ -477,12 +478,19 @@ Key parameters:
 --exclude REGEX            Drop a line if it matches this regex (applied after --include, repeatable)
 ```
 
+**Stdout sink** — `--stdout-sink` writes all forwarded lines directly to stdout instead of
+opening a TCP connection. Useful for debugging or piping output to another process:
+
+```
+vigil-log-relay --source-socket /tmp/vigild.sock --stdout-sink
+```
+
 **Line filtering** — `--include` and `--exclude` accept Go-compatible regular expressions
 and can be repeated any number of times. Evaluation order:
 
 1. If any `--include` pattern is given, a line must match at least one to proceed.
 2. If the line then matches any `--exclude` pattern, it is dropped.
-3. Otherwise the line is forwarded to the TCP sink.
+3. Otherwise the line is forwarded to the TCP sink (or stdout).
 
 ```yaml
 # Only forward ERROR and WARN lines, suppress noisy health-check pings

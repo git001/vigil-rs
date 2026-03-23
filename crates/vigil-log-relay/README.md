@@ -111,6 +111,21 @@ vigil-log-relay --source-url https://host/logs \
 
 ---
 
+## Stdout sink
+
+Pass `--stdout-sink` to write forwarded lines to stdout instead of a TCP socket. All TCP sink options are ignored when this flag is set. Useful for debugging or piping output to another process.
+
+```
+vigil-log-relay --source-url https://vigild.example.com/v1/logs/follow?format=ndjson \
+  --stdout-sink
+```
+
+| Flag | Env | Default | Description |
+|------|-----|---------|-------------|
+| `--stdout-sink` | `STDOUT_SINK` | `false` | Write to stdout instead of TCP |
+
+---
+
 ## TCP sink
 
 All source modes write to the same TCP sink. The sink reconnects with exponential backoff if the connection drops.

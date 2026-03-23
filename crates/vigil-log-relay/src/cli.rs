@@ -301,6 +301,14 @@ pub struct Cli {
     #[arg(long, value_name = "REGEX", help_heading = "Filter")]
     pub exclude: Vec<String>,
 
+    // ---- Sink -------------------------------------------------------------
+    /// Write forwarded lines to stdout instead of a TCP socket.
+    ///
+    /// When set, all TCP sink options are ignored and no TCP connection is made.
+    /// Useful for debugging or piping output to another process.
+    #[arg(long, env = "STDOUT_SINK", help_heading = "Sink")]
+    pub stdout_sink: bool,
+
     // ---- TCP Sink ---------------------------------------------------------
     /// Sink host. Output is ndjson only (one JSON object per line).
     #[arg(
