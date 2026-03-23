@@ -70,6 +70,7 @@ fn make_check(url: String) -> HttpCheck {
     HttpCheck {
         url,
         headers: IndexMap::new(),
+        no_follow_redirects: true,
         insecure: false,
         insecure_proxy: false,
         ca: None,

@@ -15,12 +15,20 @@ pub enum CheckLevel {
     Ready,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct HttpCheck {
     pub url: String,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub headers: IndexMap<String, String>,
+    /// Do not follow HTTP redirects (default: true).
+    /// Set to false to follow redirects transparently.
+    #[serde(default = "default_true", skip_serializing_if = "std::ops::Not::not")]
+    pub no_follow_redirects: bool,
     /// Skip TLS certificate verification (useful for self-signed certs).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub insecure: bool,
@@ -35,6 +43,20 @@ pub struct HttpCheck {
     /// Example: [200, 204, 301]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub success_statuses: Vec<u16>,
+}
+
+impl Default for HttpCheck {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            headers: IndexMap::new(),
+            no_follow_redirects: true,
+            insecure: false,
+            insecure_proxy: false,
+            ca: None,
+            success_statuses: vec![],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

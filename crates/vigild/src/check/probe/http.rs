@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use reqwest::Client as HttpClient;
 use tokio::time::timeout;
-use tracing::warn;
+use tracing::{debug, warn};
 use vigil_types::plan::HttpCheck;
 
 use crate::tls::load_pem_chain;
@@ -21,12 +21,18 @@ pub(super) async fn probe_http(
     let effective_client: &HttpClient = if check.insecure
         || check.insecure_proxy
         || check.ca.is_some()
+        || check.no_follow_redirects
     {
         // Note: reqwest has no per-proxy TLS config; danger_accept_invalid_certs
         // disables verification for all TLS connections in this client (proxy + target).
         let mut b = HttpClient::builder()
             .timeout(timeout_dur)
-            .danger_accept_invalid_certs(check.insecure || check.insecure_proxy);
+            .danger_accept_invalid_certs(check.insecure || check.insecure_proxy)
+            .redirect(if check.no_follow_redirects {
+                reqwest::redirect::Policy::none()
+            } else {
+                reqwest::redirect::Policy::default()
+            });
         if let Some(ca_path) = &check.ca {
             match load_pem_chain(ca_path) {
                 Ok(certs) => {
@@ -53,12 +59,21 @@ pub(super) async fn probe_http(
     match timeout(timeout_dur, req.send()).await {
         Ok(Ok(resp)) => {
             let code = resp.status().as_u16();
-            if check.success_statuses.is_empty() {
+            let passed = if check.success_statuses.is_empty() {
                 resp.status().is_success()
             } else {
                 check.success_statuses.contains(&code)
-            }
+            };
+            debug!(url = %check.url, status = code, passed, "http probe");
+            passed
         }
-        _ => false,
+        Ok(Err(e)) => {
+            debug!(url = %check.url, error = %e, "http probe failed");
+            false
+        }
+        Err(_) => {
+            debug!(url = %check.url, "http probe timed out");
+            false
+        }
     }
 }
