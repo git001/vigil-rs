@@ -46,7 +46,14 @@ pub(super) async fn probe_http(
         req = req.header(name.as_str(), value.as_str());
     }
     match timeout(timeout_dur, req.send()).await {
-        Ok(Ok(resp)) => resp.status().is_success(),
+        Ok(Ok(resp)) => {
+            let code = resp.status().as_u16();
+            if check.success_statuses.is_empty() {
+                resp.status().is_success()
+            } else {
+                check.success_statuses.contains(&code)
+            }
+        }
         _ => false,
     }
 }

@@ -28,6 +28,10 @@ pub struct HttpCheck {
     /// Supports chain files with multiple concatenated PEM blocks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ca: Option<std::path::PathBuf>,
+    /// HTTP status codes that count as success. Default (empty): 200–299.
+    /// Example: [200, 204, 301]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub success_statuses: Vec<u16>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

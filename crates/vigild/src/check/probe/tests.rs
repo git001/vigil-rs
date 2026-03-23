@@ -72,6 +72,7 @@ fn make_check(url: String) -> HttpCheck {
         headers: IndexMap::new(),
         insecure: false,
         ca: None,
+        success_statuses: vec![],
     }
 }
 
@@ -108,6 +109,24 @@ async fn http_5xx_fails() {
     let port = spawn_http_server(app).await;
     let check = make_check(format!("http://127.0.0.1:{port}/err"));
     assert!(!probe_http(&shared_client(), &check, Duration::from_secs(5)).await);
+}
+
+#[tokio::test]
+async fn success_statuses_override_default() {
+    let app = Router::new()
+        .route("/redir", get(|| async { StatusCode::MOVED_PERMANENTLY }))
+        .route("/nf", get(|| async { StatusCode::NOT_FOUND }));
+    let port = spawn_http_server(app).await;
+
+    // 301 passes when explicitly listed
+    let mut check = make_check(format!("http://127.0.0.1:{port}/redir"));
+    check.success_statuses = vec![301];
+    assert!(probe_http(&shared_client(), &check, Duration::from_secs(5)).await);
+
+    // 200 fails when not in the explicit list
+    let mut check2 = make_check(format!("http://127.0.0.1:{port}/nf"));
+    check2.success_statuses = vec![301];
+    assert!(!probe_http(&shared_client(), &check2, Duration::from_secs(5)).await);
 }
 
 #[tokio::test]
