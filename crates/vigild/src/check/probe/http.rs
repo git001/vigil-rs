@@ -18,10 +18,15 @@ pub(super) async fn probe_http(
     // Build a per-check client only when TLS options require it; reuse the
     // shared client for the common case (no insecure / no custom CA).
     let owned;
-    let effective_client: &HttpClient = if check.insecure || check.ca.is_some() {
+    let effective_client: &HttpClient = if check.insecure
+        || check.insecure_proxy
+        || check.ca.is_some()
+    {
+        // Note: reqwest has no per-proxy TLS config; danger_accept_invalid_certs
+        // disables verification for all TLS connections in this client (proxy + target).
         let mut b = HttpClient::builder()
             .timeout(timeout_dur)
-            .danger_accept_invalid_certs(check.insecure);
+            .danger_accept_invalid_certs(check.insecure || check.insecure_proxy);
         if let Some(ca_path) = &check.ca {
             match load_pem_chain(ca_path) {
                 Ok(certs) => {

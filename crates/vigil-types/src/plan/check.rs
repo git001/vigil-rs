@@ -24,6 +24,9 @@ pub struct HttpCheck {
     /// Skip TLS certificate verification (useful for self-signed certs).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub insecure: bool,
+    /// Skip TLS certificate verification for the HTTPS proxy itself.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub insecure_proxy: bool,
     /// PEM file with a CA certificate (or chain) to verify the server's TLS.
     /// Supports chain files with multiple concatenated PEM blocks.
     #[serde(default, skip_serializing_if = "Option::is_none")]

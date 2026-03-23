@@ -71,6 +71,7 @@ fn make_check(url: String) -> HttpCheck {
         url,
         headers: IndexMap::new(),
         insecure: false,
+        insecure_proxy: false,
         ca: None,
         success_statuses: vec![],
     }

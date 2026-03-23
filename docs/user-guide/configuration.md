@@ -280,6 +280,7 @@ checks:
         Authorization: "Bearer secret"
         Content-Type: "application/json"
       insecure: false                        # skip TLS verification (default: false)
+      insecure-proxy: false                  # skip TLS verification for HTTPS proxy (default: false)
       ca: /etc/vigil/certs/internal-ca.pem  # custom CA for TLS verification (optional)
       # success-statuses: [200, 204, 301]   # default: any 2xx
 
@@ -337,6 +338,7 @@ http:
     Authorization: "Bearer secret"
     Content-Type: "application/json"
   insecure: true                          # skip TLS certificate verification
+  insecure-proxy: true                    # skip TLS verification for HTTPS proxy
   ca: /etc/vigil/certs/internal-ca.pem   # PEM CA cert (or chain) to verify the server
   success-statuses: [200, 204, 301]       # optional; default: any 2xx
 ```
@@ -350,11 +352,18 @@ codes listed in `success-statuses`. The `url` field supports `http://` and
 | `url` | — | HTTP or HTTPS URL to request |
 | `headers` | `{}` | Extra request headers (repeatable key/value map) |
 | `insecure` | `false` | Skip TLS certificate verification (self-signed certs) |
+| `insecure-proxy` | `false` | Skip TLS certificate verification for the HTTPS proxy itself. See note below. |
 | `ca` | — | PEM file with CA certificate(s) to verify the server's TLS. Supports chain files with multiple concatenated PEM blocks. |
 | `success-statuses` | `[]` | Explicit list of status codes that count as success. Empty = any 2xx. Example: `[200, 204, 301]` |
 
 `insecure` and `ca` are mutually exclusive in intent — `ca` verifies with a
 custom root, `insecure` skips verification entirely.
+
+> **Note on `insecure-proxy`:** The HTTP client library (reqwest) does not
+> support separate TLS configurations for proxy and target connections.
+> Setting `insecure-proxy: true` therefore disables TLS certificate
+> verification for **all** connections in that check client (proxy and target
+> server). Use only when the proxy uses a self-signed or untrusted certificate.
 
 #### TCP check
 
