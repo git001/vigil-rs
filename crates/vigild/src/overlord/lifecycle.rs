@@ -173,24 +173,39 @@ impl Overlord {
         let dir = self.layers_dir.clone();
         let old_plan = std::mem::replace(&mut self.plan, super::plan::load_plan(&dir)?);
 
-        let services_changed = self.plan.services.iter().filter(|(n, c)| {
-            old_plan.services.get(*n).map_or(false, |o| {
-                serde_json::to_string(o).unwrap_or_default()
-                    != serde_json::to_string(*c).unwrap_or_default()
+        let services_changed = self
+            .plan
+            .services
+            .iter()
+            .filter(|(n, c)| {
+                old_plan.services.get(*n).is_some_and(|o| {
+                    serde_json::to_string(o).unwrap_or_default()
+                        != serde_json::to_string(*c).unwrap_or_default()
+                })
             })
-        }).count();
-        let checks_changed = self.plan.checks.iter().filter(|(n, c)| {
-            old_plan.checks.get(*n).map_or(false, |o| {
-                serde_json::to_string(o).unwrap_or_default()
-                    != serde_json::to_string(*c).unwrap_or_default()
+            .count();
+        let checks_changed = self
+            .plan
+            .checks
+            .iter()
+            .filter(|(n, c)| {
+                old_plan.checks.get(*n).is_some_and(|o| {
+                    serde_json::to_string(o).unwrap_or_default()
+                        != serde_json::to_string(*c).unwrap_or_default()
+                })
             })
-        }).count();
-        let alerts_changed = self.plan.alerts.iter().filter(|(n, c)| {
-            old_plan.alerts.get(*n).map_or(false, |o| {
-                serde_json::to_string(o).unwrap_or_default()
-                    != serde_json::to_string(*c).unwrap_or_default()
+            .count();
+        let alerts_changed = self
+            .plan
+            .alerts
+            .iter()
+            .filter(|(n, c)| {
+                old_plan.alerts.get(*n).is_some_and(|o| {
+                    serde_json::to_string(o).unwrap_or_default()
+                        != serde_json::to_string(*c).unwrap_or_default()
+                })
             })
-        }).count();
+            .count();
         info!(
             services = self.plan.services.len(),
             checks = self.plan.checks.len(),

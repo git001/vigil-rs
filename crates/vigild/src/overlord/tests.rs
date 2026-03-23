@@ -748,7 +748,10 @@ async fn sync_actors_restarts_check_on_success_statuses_change() {
     ov.reload_layers().await.unwrap();
 
     let stored = serde_json::to_string(&ov.checks.get("my-check").unwrap().config).unwrap();
-    assert!(stored.contains("301"), "stored config should have 301, got: {stored}");
+    assert!(
+        stored.contains("301"),
+        "stored config should have 301, got: {stored}"
+    );
 
     std::fs::write(
         dir.path().join("001.yaml"),
@@ -758,5 +761,8 @@ async fn sync_actors_restarts_check_on_success_statuses_change() {
     ov.reload_layers().await.unwrap();
 
     let updated = serde_json::to_string(&ov.checks.get("my-check").unwrap().config).unwrap();
-    assert!(updated.contains("303"), "updated config should have 303, got: {updated}");
+    assert!(
+        updated.contains("303"),
+        "updated config should have 303, got: {updated}"
+    );
 }
