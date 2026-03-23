@@ -94,22 +94,22 @@ fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
+    let env_filter = if std::env::var("RUST_LOG").is_ok() {
+        tracing_subscriber::EnvFilter::from_default_env()
+    } else {
+        tracing_subscriber::EnvFilter::from_default_env()
+            .add_directive(tracing::Level::INFO.into())
+    };
     match args.log_format.as_str() {
         "json" => {
             tracing_subscriber::fmt()
                 .json()
-                .with_env_filter(
-                    tracing_subscriber::EnvFilter::from_default_env()
-                        .add_directive(tracing::Level::INFO.into()),
-                )
+                .with_env_filter(env_filter)
                 .init();
         }
         _ => {
             tracing_subscriber::fmt()
-                .with_env_filter(
-                    tracing_subscriber::EnvFilter::from_default_env()
-                        .add_directive(tracing::Level::INFO.into()),
-                )
+                .with_env_filter(env_filter)
                 .init();
         }
     }

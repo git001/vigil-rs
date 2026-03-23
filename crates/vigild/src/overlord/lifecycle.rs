@@ -171,11 +171,33 @@ impl Overlord {
 
     pub(super) async fn reload_layers(&mut self) -> anyhow::Result<()> {
         let dir = self.layers_dir.clone();
-        self.plan = super::plan::load_plan(&dir)?;
+        let old_plan = std::mem::replace(&mut self.plan, super::plan::load_plan(&dir)?);
+
+        let services_changed = self.plan.services.iter().filter(|(n, c)| {
+            old_plan.services.get(*n).map_or(false, |o| {
+                serde_json::to_string(o).unwrap_or_default()
+                    != serde_json::to_string(*c).unwrap_or_default()
+            })
+        }).count();
+        let checks_changed = self.plan.checks.iter().filter(|(n, c)| {
+            old_plan.checks.get(*n).map_or(false, |o| {
+                serde_json::to_string(o).unwrap_or_default()
+                    != serde_json::to_string(*c).unwrap_or_default()
+            })
+        }).count();
+        let alerts_changed = self.plan.alerts.iter().filter(|(n, c)| {
+            old_plan.alerts.get(*n).map_or(false, |o| {
+                serde_json::to_string(o).unwrap_or_default()
+                    != serde_json::to_string(*c).unwrap_or_default()
+            })
+        }).count();
         info!(
             services = self.plan.services.len(),
             checks = self.plan.checks.len(),
             alerts = self.plan.alerts.len(),
+            services_changed,
+            checks_changed,
+            alerts_changed,
             "plan reloaded"
         );
         self.alert_sender.update_alerts(self.plan.alerts.clone());

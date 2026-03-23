@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use indexmap::IndexMap;
 use tokio::time::timeout;
-use tracing::warn;
+use tracing::{debug, warn};
 use vigil_types::plan::{ExecCheck, ServiceConfig};
 
 use crate::process_util::{resolve_gid, resolve_uid};
@@ -96,7 +96,18 @@ pub(super) async fn probe_exec(
     })
     .await
     {
-        Ok(Some(status)) => status.success(),
-        _ => false,
+        Ok(Some(status)) => {
+            let passed = status.success();
+            debug!(command = %exec.command, exit_code = ?status.code(), passed, "exec probe");
+            passed
+        }
+        Ok(None) => {
+            debug!(command = %exec.command, "exec probe: process did not start");
+            false
+        }
+        Err(_) => {
+            debug!(command = %exec.command, "exec probe timed out");
+            false
+        }
     }
 }

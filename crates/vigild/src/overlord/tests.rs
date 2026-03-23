@@ -731,3 +731,32 @@ async fn error_state_warns_blocked_pending_services() {
     // svc remains in pending_autostart (it will never start, but that's expected)
     assert!(ov.pending_autostart.contains(&"svc".to_string()));
 }
+
+#[tokio::test]
+async fn sync_actors_restarts_check_on_success_statuses_change() {
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+
+    std::fs::write(
+        dir.path().join("001.yaml"),
+        "checks:\n  my-check:\n    startup: enabled\n    http:\n      url: http://localhost:8080/healthz\n      success-statuses: [301]\n",
+    ).unwrap();
+
+    let mut ov = make_overlord(&[], &[]);
+    ov.alert_sender.spawn_worker();
+    ov.layers_dir = dir.path().to_path_buf();
+    ov.reload_layers().await.unwrap();
+
+    let stored = serde_json::to_string(&ov.checks.get("my-check").unwrap().config).unwrap();
+    assert!(stored.contains("301"), "stored config should have 301, got: {stored}");
+
+    std::fs::write(
+        dir.path().join("001.yaml"),
+        "checks:\n  my-check:\n    startup: enabled\n    http:\n      url: http://localhost:8080/healthz\n      success-statuses: [303]\n",
+    ).unwrap();
+
+    ov.reload_layers().await.unwrap();
+
+    let updated = serde_json::to_string(&ov.checks.get("my-check").unwrap().config).unwrap();
+    assert!(updated.contains("303"), "updated config should have 303, got: {updated}");
+}
