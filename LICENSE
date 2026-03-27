@@ -1,10 +1,14 @@
-vigil-rs is dual-licensed:
+vigil-rs is dual-licensed under:
 
-  * GNU Affero General Public License v3.0 or later (AGPL-3.0-only)
-    for open-source and non-commercial use.
+1. GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later)
+   - for open-source use
+   - requires source code disclosure for network use (SaaS)
 
-  * A commercial license for proprietary / closed-source use.
-    Contact: <al-virgilrs@none.at>
+2. Commercial License
+   - for proprietary / closed-source use
+   - available upon request
+
+Contact: al-virgilrs@none.at
 
 -------------------------------------------------------------------------------
 
