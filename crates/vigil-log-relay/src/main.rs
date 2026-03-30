@@ -49,30 +49,34 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    let level = if cli.debug {
-        tracing::Level::DEBUG
+    let env_filter = if std::env::var("RUST_LOG").is_ok() {
+        tracing_subscriber::EnvFilter::from_default_env()
+    } else if cli.debug {
+        tracing_subscriber::EnvFilter::from_default_env()
+            .add_directive(tracing::Level::DEBUG.into())
     } else {
-        tracing::Level::INFO
+        tracing_subscriber::EnvFilter::from_default_env()
+            .add_directive(tracing::Level::INFO.into())
     };
     match cli.log_format.as_str() {
         "json" => {
             tracing_subscriber::fmt()
                 .json()
-                .with_max_level(level)
+                .with_env_filter(env_filter)
                 .init();
         }
         _ => {
-            if cli.debug {
+            if cli.debug || std::env::var("RUST_LOG").is_ok() {
                 tracing_subscriber::fmt()
                     .with_target(true)
                     .with_timer(tracing_subscriber::fmt::time::SystemTime)
-                    .with_max_level(level)
+                    .with_env_filter(env_filter)
                     .init();
             } else {
                 tracing_subscriber::fmt()
                     .with_target(false)
                     .without_time()
-                    .with_max_level(level)
+                    .with_env_filter(env_filter)
                     .init();
             }
         }
