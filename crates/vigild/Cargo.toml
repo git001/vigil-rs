@@ -1,6 +1,6 @@
 [package]
 name        = "vigild"
-version     = "3.1.1"
+version     = "3.1.2"
 edition     = "2024"
 license     = "AGPL-3.0-only"
 description = "vigild — Rust service supervisor and container init daemon"

@@ -1,6 +1,6 @@
 [package]
 name        = "vigil-log-relay"
-version     = "3.1.1"
+version     = "3.1.2"
 edition     = "2024"
 license     = "AGPL-3.0-only"
 description = "Reads ndjson log streams from Kubernetes pods, HTTP endpoints, or Unix sockets and forwards them to a TCP sink"
