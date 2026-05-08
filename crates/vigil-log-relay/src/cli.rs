@@ -233,7 +233,12 @@ pub struct Cli {
     /// Container(s) to stream. Use "all" for every container in the pod,
     /// or a comma-separated list of names, e.g. "app,sidecar".
     /// Omit to stream the default container (K8s picks first / annotated).
-    #[arg(long, env = "CONTAINER_SELECTOR", value_name = "NAME|all|n1,n2,...", help_heading = "Kubernetes")]
+    #[arg(
+        long,
+        env = "CONTAINER_SELECTOR",
+        value_name = "NAME|all|n1,n2,...",
+        help_heading = "Kubernetes"
+    )]
     pub container: Option<String>,
 
     /// Emit the last N log lines on (re)connect before going live (0 = disabled).
