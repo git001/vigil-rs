@@ -21,30 +21,34 @@ struct LogEntry<'a> {
     timestamp: &'a str,
     namespace: &'a str,
     pod: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    container: Option<&'a str>,
     stream: &'static str,
     message: &'a str,
 }
 
 // ---------------------------------------------------------------------------
-// Start a stream task if none is active for this pod.
+// Start a stream task if none is active for this (pod, container_key) pair.
+// container_key="" means no &container= param (K8s picks the default).
 // Returns true if a new task was spawned.
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
 pub fn try_start(
     pod: &str,
-    active: &mut HashMap<String, tokio::task::JoinHandle<()>>,
+    container_key: &str,
+    active: &mut HashMap<(String, String), tokio::task::JoinHandle<()>>,
     semaphore: &Option<Arc<tokio::sync::Semaphore>>,
     kube_client: &Client,
     namespace: &Arc<String>,
-    container: &Option<Arc<String>>,
     tail_lines: i64,
     since_seconds: i64,
     use_stream_param: bool,
     filter: &Arc<LineFilter>,
     tx: &mpsc::Sender<String>,
 ) -> bool {
-    if active.contains_key(pod) {
+    let key = (pod.to_owned(), container_key.to_owned());
+    if active.contains_key(&key) {
         return false;
     }
 
@@ -52,22 +56,31 @@ pub fn try_start(
         Some(sem) => match sem.clone().try_acquire_owned() {
             Ok(p) => Some(p),
             Err(_) => {
-                warn!(pod = %pod, "at max-log-requests capacity — deferring to next reconcile");
+                warn!(pod = %pod, container = %container_key, "at max-log-requests capacity — deferring to next reconcile");
                 return false;
             }
         },
         None => None,
     };
 
-    let container_name = container.as_deref().map(|s| s.as_str());
-    info!(pod = %pod, "starting log stream");
+    let container_name: Option<Arc<String>> = if container_key.is_empty() {
+        None
+    } else {
+        Some(Arc::new(container_key.to_owned()))
+    };
+
+    if let Some(ref cname) = container_name {
+        info!(pod = %pod, container = %cname.as_str(), "starting log stream");
+    } else {
+        info!(pod = %pod, "starting log stream");
+    }
 
     let handle = if use_stream_param {
         // K8s ≥ 1.32: request stdout and stderr as separate streams.
         let url_out = log_url(
             namespace,
             pod,
-            container_name,
+            container_key,
             tail_lines,
             since_seconds,
             Some("Stdout"),
@@ -75,7 +88,7 @@ pub fn try_start(
         let url_err = log_url(
             namespace,
             pod,
-            container_name,
+            container_key,
             tail_lines,
             since_seconds,
             Some("Stderr"),
@@ -83,6 +96,8 @@ pub fn try_start(
         let client = kube_client.clone();
         let pod_str = pod.to_owned();
         let ns = Arc::clone(namespace);
+        let cname_out = container_name.clone();
+        let cname_err = container_name.clone();
         let filter_out = Arc::clone(filter);
         let filter_err = Arc::clone(filter);
         let tx_out = tx.clone();
@@ -95,12 +110,13 @@ pub fn try_start(
                 url_out,
                 pod_str.clone(),
                 Arc::clone(&ns),
+                cname_out,
                 filter_out,
                 tx_out,
                 "stdout",
             ));
             let mut h_err = tokio::spawn(stream_pod(
-                client, url_err, pod_str, ns, filter_err, tx_err, "stderr",
+                client, url_err, pod_str, ns, cname_err, filter_err, tx_err, "stderr",
             ));
             // When either stream closes (K8s API server timeout), abort the sibling.
             tokio::select! {
@@ -113,7 +129,7 @@ pub fn try_start(
         let url = log_url(
             namespace,
             pod,
-            container_name,
+            container_key,
             tail_lines,
             since_seconds,
             None,
@@ -126,11 +142,21 @@ pub fn try_start(
 
         tokio::spawn(async move {
             let _permit = permit;
-            stream_pod(client, url, pod_str, ns, filter, tx, "output").await;
+            stream_pod(
+                client,
+                url,
+                pod_str,
+                ns,
+                container_name,
+                filter,
+                tx,
+                "output",
+            )
+            .await;
         })
     };
 
-    active.insert(pod.to_owned(), handle);
+    active.insert(key, handle);
     true
 }
 
@@ -141,15 +167,15 @@ pub fn try_start(
 fn log_url(
     namespace: &str,
     pod: &str,
-    container: Option<&str>,
+    container_key: &str,
     tail_lines: i64,
     since_seconds: i64,
     stream: Option<&str>,
 ) -> String {
     let mut url =
         format!("/api/v1/namespaces/{namespace}/pods/{pod}/log?follow=true&timestamps=true");
-    if let Some(c) = container {
-        url.push_str(&format!("&container={c}"));
+    if !container_key.is_empty() {
+        url.push_str(&format!("&container={container_key}"));
     }
     if tail_lines > 0 {
         url.push_str(&format!("&tailLines={tail_lines}"));
@@ -166,15 +192,19 @@ fn log_url(
 // Per-pod streaming task
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 async fn stream_pod(
     client: Client,
     url: String,
     pod: String,
     namespace: Arc<String>,
+    container: Option<Arc<String>>,
     filter: Arc<LineFilter>,
     tx: mpsc::Sender<String>,
     stream_name: &'static str,
 ) {
+    let container_str = container.as_deref().map(|s| s.as_str());
+
     let req = match http::Request::get(&url).body(vec![]) {
         Ok(r) => r,
         Err(e) => {
@@ -224,6 +254,7 @@ async fn stream_pod(
                     timestamp: ts,
                     namespace: &namespace,
                     pod: &pod,
+                    container: container_str,
                     stream: stream_name,
                     message: msg,
                 };

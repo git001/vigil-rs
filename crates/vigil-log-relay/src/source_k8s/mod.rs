@@ -5,8 +5,10 @@
 //! closed by the API server (typically every ~5 minutes).
 //!
 //! Design:
-//!   running_pods  — source of truth: pods known to be in Running phase
-//!   active        — pods with a currently running stream JoinHandle
+//!   running_pods  — source of truth: pods known to be in Running phase,
+//!                   mapped to the container keys to stream for each pod
+//!   active        — (pod, container_key) pairs with a currently running
+//!                   stream JoinHandle; container_key="" means K8s default
 //!
 //!   Watcher events update running_pods and start/stop streams immediately.
 //!   The reconcile ticker (--watch-interval) cleans up finished handles and
@@ -29,6 +31,49 @@ use tokio::time::{MissedTickBehavior, interval};
 use tracing::{info, warn};
 
 use crate::{LineFilter, Liveness, cli::Cli};
+
+// ---------------------------------------------------------------------------
+// Container selector
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+enum ContainerSelector {
+    /// No --container flag: K8s picks the default container.
+    Default,
+    /// --container all: stream every container listed in pod.spec.containers.
+    All,
+    /// --container app,sidecar: stream exactly these named containers.
+    Named(Vec<String>),
+}
+
+impl ContainerSelector {
+    fn from_cli(s: Option<&str>) -> Self {
+        match s {
+            None => Self::Default,
+            Some("all") => Self::All,
+            Some(s) => Self::Named(
+                s.split(',')
+                    .map(|n| n.trim().to_owned())
+                    .filter(|n| !n.is_empty())
+                    .collect(),
+            ),
+        }
+    }
+
+    /// Returns the container keys to stream for a given pod.
+    /// An empty string key means "no container= param" (K8s default).
+    fn keys_for_pod(&self, pod: &Pod) -> Vec<String> {
+        match self {
+            Self::Default => vec![String::new()],
+            Self::Named(names) => names.clone(),
+            Self::All => pod
+                .spec
+                .as_ref()
+                .map(|spec| spec.containers.iter().map(|c| c.name.clone()).collect())
+                .unwrap_or_else(|| vec![String::new()]),
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Main event loop
@@ -58,7 +103,7 @@ pub async fn run(
     let kube_client = client::build(&cli).await?;
     let pods_api: Api<Pod> = Api::namespaced(kube_client.clone(), &cli.namespace);
     let namespace = Arc::new(cli.namespace.clone());
-    let container = cli.container.map(Arc::new);
+    let selector = ContainerSelector::from_cli(cli.container.as_deref());
 
     let use_stream_param = !cli.no_stream_param && detect_stream_param_support(&kube_client).await;
 
@@ -69,10 +114,10 @@ pub async fn run(
     };
     let mut pod_events = watcher(pods_api, watcher_config).boxed();
 
-    // running_pods: pods known to be in Running phase (from watcher events)
-    let mut running_pods: HashSet<String> = HashSet::new();
-    // active: pods with a currently running stream task
-    let mut active: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
+    // running_pods: pods known to be in Running phase → container keys to stream
+    let mut running_pods: HashMap<String, Vec<String>> = HashMap::new();
+    // active: (pod, container_key) → stream task handle
+    let mut active: HashMap<(String, String), tokio::task::JoinHandle<()>> = HashMap::new();
     // initialized: pods that have already had their first stream started.
     // First stream uses --tail-lines; reconnects use --since-seconds instead.
     let mut initialized: HashSet<String> = HashSet::new();
@@ -96,7 +141,7 @@ pub async fn run(
                     watcher::Event::Apply(pod) | watcher::Event::InitApply(pod) => {
                         let is_running = pod.status.as_ref()
                             .and_then(|s| s.phase.as_deref()) == Some("Running");
-                        let name = match pod.metadata.name {
+                        let name = match pod.metadata.name.clone() {
                             Some(n) => n,
                             None    => continue,
                         };
@@ -105,21 +150,37 @@ pub async fn run(
                             if exclude_pod_re.iter().any(|re| re.is_match(&name)) {
                                 continue;
                             }
-                            running_pods.insert(name.clone());
+                            let container_keys = selector.keys_for_pod(&pod);
+                            running_pods.insert(name.clone(), container_keys.clone());
                             let (tail, since) = stream_params(&name, &initialized, cli.tail_lines, cli.since_seconds);
-                            if stream::try_start(
-                                &name, &mut active, &semaphore,
-                                &kube_client, &namespace, &container,
-                                tail, since, use_stream_param,
-                                &filter, &tx,
-                            ) {
+                            let mut any_started = false;
+                            for ck in &container_keys {
+                                if stream::try_start(
+                                    &name, ck, &mut active, &semaphore,
+                                    &kube_client, &namespace,
+                                    tail, since, use_stream_param,
+                                    &filter, &tx,
+                                ) {
+                                    any_started = true;
+                                }
+                            }
+                            if any_started {
                                 initialized.insert(name.clone());
                             }
-                        } else if running_pods.remove(&name)
-                            && let Some(handle) = active.remove(&name)
-                        {
-                            info!(pod = %name, "pod no longer running — aborting stream");
-                            handle.abort();
+                        } else if running_pods.remove(&name).is_some() {
+                            let mut aborted = 0usize;
+                            active.retain(|(pod, _), handle| {
+                                if *pod == name {
+                                    handle.abort();
+                                    aborted += 1;
+                                    false
+                                } else {
+                                    true
+                                }
+                            });
+                            if aborted > 0 {
+                                info!(pod = %name, "pod no longer running — aborting streams");
+                            }
                         }
                     }
 
@@ -127,10 +188,14 @@ pub async fn run(
                         if let Some(name) = pod.metadata.name {
                             running_pods.remove(&name);
                             initialized.remove(&name);
-                            if let Some(handle) = active.remove(&name) {
-                                info!(pod = %name, "pod deleted — aborting stream");
-                                handle.abort();
-                            }
+                            active.retain(|(pod, _), handle| {
+                                if *pod == name {
+                                    handle.abort();
+                                    false
+                                } else {
+                                    true
+                                }
+                            });
                         }
                     }
 
@@ -144,24 +209,29 @@ pub async fn run(
             }
 
             _ = reconcile.tick() => {
-                active.retain(|pod, handle| {
+                active.retain(|(pod, container), handle| {
                     if handle.is_finished() {
-                        info!(pod = %pod, "stream finished — scheduling restart");
+                        info!(pod = %pod, container = %container, "stream finished — scheduling restart");
                         false
                     } else {
                         true
                     }
                 });
 
-                let pods: Vec<String> = running_pods.iter().cloned().collect();
-                for name in &pods {
+                for (name, container_keys) in &running_pods {
                     let (tail, since) = stream_params(name, &initialized, cli.tail_lines, cli.since_seconds);
-                    if stream::try_start(
-                        name, &mut active, &semaphore,
-                        &kube_client, &namespace, &container,
-                        tail, since, use_stream_param,
-                        &filter, &tx,
-                    ) {
+                    let mut any_started = false;
+                    for ck in container_keys {
+                        if stream::try_start(
+                            name, ck, &mut active, &semaphore,
+                            &kube_client, &namespace,
+                            tail, since, use_stream_param,
+                            &filter, &tx,
+                        ) {
+                            any_started = true;
+                        }
+                    }
+                    if any_started {
                         initialized.insert(name.clone());
                     }
                 }
