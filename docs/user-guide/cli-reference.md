@@ -424,14 +424,23 @@ Each log line is emitted as an ndjson object:
 {"timestamp":"2026-03-21T21:09:29.722Z","namespace":"my-ns","pod":"myapp-abc","stream":"stdout","message":"..."}
 ```
 
-`stream` is `stdout`, `stderr` (K8s ≥ 1.32 with stream param enabled), or
-`output` (combined, fallback for older clusters or when `--no-stream-param` is set).
+When streaming a specific container (`--container NAME`, `,`-list, or `all`),
+a `container` field is added:
+
+```json
+{"timestamp":"2026-03-21T21:09:29.722Z","namespace":"my-ns","pod":"myapp-abc","container":"sidecar","stream":"stdout","message":"..."}
+```
+
+The `container` field is **omitted** when no `--container` flag is given (K8s
+default container). `stream` is `stdout`, `stderr` (K8s ≥ 1.32 with stream
+param enabled), or `output` (combined, fallback for older clusters or when
+`--no-stream-param` is set).
 
 | Flag | Env var | Default | Description |
 |---|---|---|---|
 | `--namespace NS` | `NAMESPACE` | `default` | Kubernetes namespace to watch |
 | `--pod-selector SELECTOR` | `POD_SELECTOR` | _(all pods)_ | Label selector, e.g. `app=myapp` |
-| `--container NAME` | — | _(first container)_ | Stream only this container |
+| `--container NAME\|all\|n1,n2,...` | `CONTAINER_SELECTOR` | _(first / annotated container)_ | Container(s) to stream. `all` streams every container listed in `pod.spec.containers`; a comma-separated list (e.g. `app,sidecar`) streams exactly those containers. Omit to let K8s pick the default container. |
 | `--tail-lines N` | `TAIL_LINES` | `0` | Lines to fetch on first connect (`0` = from start) |
 | `--since-seconds N` | `SINCE_SECONDS` | `10` | Look-back window in seconds on reconnect |
 | `--watch-interval SECS` | `WATCH_INTERVAL` | `10` | Seconds between reconcile ticks (restart finished streams) |

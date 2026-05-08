@@ -522,6 +522,12 @@ restarting it if the watch loop stalls. Configure which pods to watch via
 environment variables in the Kubernetes Deployment — no layer-level
 `environment:` block so operator settings are not overridden.
 
+**Multi-container pods:** by default vigil-log-relay streams the first (or
+annotated) container only. Pass `--container all` to stream every container in
+`pod.spec.containers`, or `--container app,sidecar` for a comma-separated
+subset. When a container name is set, each ndjson record gains a `"container"`
+field so downstream systems can distinguish the sources.
+
 ```
 podman build -f examples/kubernetes-pod-logs/Containerfile -t vigil-k8s-pod-logs .
 kubectl apply -f examples/kubernetes-pod-logs/k8s/rbac.yaml

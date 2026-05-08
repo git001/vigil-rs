@@ -28,6 +28,14 @@ Each log line is wrapped in a JSON envelope:
 {"timestamp":"2026-03-19T10:23:45.123Z","namespace":"default","pod":"api-xyz","stream":"stdout","message":"..."}
 ```
 
+When streaming a named container (`--container NAME`, list, or `all`), a
+`"container"` field is added. The field is omitted when using the K8s default
+container (no `--container` flag):
+
+```json
+{"timestamp":"2026-03-19T10:23:45.123Z","namespace":"default","pod":"api-xyz","container":"sidecar","stream":"stdout","message":"..."}
+```
+
 Requires an in-cluster service account with `get`, `list`, `watch` on `pods` and `get` on `pods/log`. See [`examples/kubernetes-pod-logs/k8s/rbac.yaml`](../../examples/kubernetes-pod-logs/k8s/rbac.yaml).
 
 ```
@@ -48,7 +56,7 @@ vigil-log-relay --kubernetes \
 | `--namespace` | `NAMESPACE` | `default` | Namespace to watch |
 | `--pod-selector` | `POD_SELECTOR` | _(all pods)_ | Label selector, e.g. `app=myapp` |
 | `--watch-interval` | `WATCH_INTERVAL` | `10` | Seconds between stream-reconnect checks |
-| `--container` | — | _(first container)_ | Container name to stream |
+| `--container NAME\|all\|n1,n2,...` | `CONTAINER_SELECTOR` | _(first / annotated container)_ | Container(s) to stream. `all` = every container in `pod.spec.containers`; comma-separated list = exactly those containers; omit = K8s default. |
 | `--tail-lines` | `TAIL_LINES` | `0` | Lines to emit on first connect (0 = disabled) |
 | `--since-seconds` | `SINCE_SECONDS` | `10` | Seconds back to start on reconnect |
 | `--exclude-pod` | — | — | Exclude pods by name regex (repeatable) |
