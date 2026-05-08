@@ -62,10 +62,8 @@ pub(super) fn find_unquoted(s: &str, needle: &str) -> Option<usize> {
             '\\' if !in_single => escaped = true,
             '\'' if !in_double => in_single = !in_single,
             '"' if !in_single => in_double = !in_double,
-            _ if !in_single && !in_double => {
-                if sb[i..].starts_with(nb) {
-                    return Some(i);
-                }
+            _ if !in_single && !in_double && sb[i..].starts_with(nb) => {
+                return Some(i);
             }
             _ => {}
         }
