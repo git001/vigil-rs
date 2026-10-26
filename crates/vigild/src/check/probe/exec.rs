@@ -92,7 +92,8 @@ pub(super) async fn probe_exec(
 
         cmd.stdout(std::process::Stdio::null());
         cmd.stderr(std::process::Stdio::null());
-        cmd.spawn().ok()?.wait().await.ok()
+        let mut child = cmd.spawn().ok()?;
+        crate::reaper::wait_child(&mut child).await.ok()
     })
     .await
     {
