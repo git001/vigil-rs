@@ -52,6 +52,12 @@ struct Args {
     #[arg(long, env = "VIGIL_SOCKET", default_value = "/run/vigil/vigild.sock")]
     socket: PathBuf,
 
+    /// Permission bits of the Unix socket (octal). Default 600: owner only.
+    /// Widen (e.g. 660 or 666) only together with local identities, because
+    /// without identities every caller that can connect is admin.
+    #[arg(long, env = "VIGIL_SOCKET_MODE", default_value = "600", value_parser = parse_octal_mode)]
+    socket_mode: u32,
+
     /// Address for the HTTPS API (e.g. "0.0.0.0:8443"). Disabled if not set.
     #[arg(long, env = "VIGIL_TLS_ADDR")]
     tls_addr: Option<String>,
@@ -142,6 +148,10 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
         reaper::spawn_reaper()?;
     }
 
+    // Bind the control socket before any service starts: a bind failure is
+    // fatal and must not leave already spawned services behind.
+    let unix_listener = server::bind_unix(&args.socket, args.socket_mode)?;
+
     let http_address = args.socket.to_string_lossy().into_owned();
     let https_address = args.tls_addr.clone();
     let (overlord, log_store, metrics, overlord_task) = overlord::spawn(
@@ -164,11 +174,10 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
     };
     let router = api::router(app_state);
 
-    // Unix socket server
-    let socket = args.socket.clone();
+    // Unix socket server.
     let unix_router = router.clone();
     let unix_task = tokio::spawn(async move {
-        if let Err(e) = server::serve_unix(&socket, unix_router).await {
+        if let Err(e) = server::serve_unix(unix_listener, unix_router).await {
             tracing::error!(%e, "Unix API server error");
         }
     });
@@ -264,4 +273,14 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
 
     info!("vigild exited");
     Ok(())
+}
+
+fn parse_octal_mode(s: &str) -> Result<u32, String> {
+    let digits = s.strip_prefix("0o").unwrap_or(s);
+    let mode =
+        u32::from_str_radix(digits, 8).map_err(|e| format!("invalid octal mode {s:?}: {e}"))?;
+    if mode > 0o777 {
+        return Err(format!("mode {s:?} out of range (max 777)"));
+    }
+    Ok(mode)
 }

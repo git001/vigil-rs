@@ -30,6 +30,13 @@ struct Args {
 
     #[arg(
         long,
+        env = "VIGIL_SOCKET_UID",
+        help = "Also trust a daemon socket owned by this UID.\nBy default only root or your own UID is accepted, so a socket\nplaced by another user is never talked to."
+    )]
+    socket_uid: Option<u32>,
+
+    #[arg(
+        long,
         env = "VIGIL_URL",
         help = "HTTP or HTTPS base URL of the vigild daemon\n(e.g. https://host:8443). When set, --socket is ignored."
     )]
@@ -167,7 +174,7 @@ async fn main() -> anyhow::Result<()> {
             },
         )?
     } else {
-        VigilClient::new_unix(args.socket)
+        VigilClient::new_unix_trusting(args.socket, args.socket_uid)
     };
 
     match args.cmd {

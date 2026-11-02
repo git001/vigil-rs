@@ -35,9 +35,19 @@ pub struct VigilClient {
 
 impl VigilClient {
     /// Connect via Unix domain socket (default transport).
+    ///
+    /// The daemon must run as root or as our own euid; see
+    /// [`VigilClient::new_unix_trusting`] for daemons running as another UID.
     pub fn new_unix(socket_path: PathBuf) -> Self {
+        Self::new_unix_trusting(socket_path, None)
+    }
+
+    /// Like [`VigilClient::new_unix`], but additionally trusts a daemon
+    /// running as `trusted_uid` (e.g. a non-root vigild that grants this user
+    /// access through a local identity).
+    pub fn new_unix_trusting(socket_path: PathBuf, trusted_uid: Option<u32>) -> Self {
         VigilClient {
-            transport: Transport::new_unix(socket_path),
+            transport: Transport::new_unix(socket_path, trusted_uid),
         }
     }
 
