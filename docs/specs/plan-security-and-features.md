@@ -86,9 +86,9 @@ gesetzt, schlägt `setuid` heute schon mit `EPERM` fehl.
 `id -G` im Kindprozess. Ein Test ohne Root und ohne `user:` stellt sicher,
 dass kein Rechte-Syscall aufgerufen wird.
 
-**Stand:** In v3.2.2 umgesetzt (Branch `fix/v3.2.2-security`). Für einen
-numerischen `user-id` ohne passwd-Eintrag und ohne Gruppe gibt 3.2.2 nur eine
-Warnung aus und nimmt GID = UID. **In v4 wird daraus ein Fehler.**
+**Stand:** In v3.2.2 umgesetzt. Für einen numerischen `user-id` ohne
+passwd-Eintrag und ohne Gruppe gibt 3.2.2 nur eine Warnung aus und nimmt
+GID = UID. Auf dem Branch `v4` ist daraus ein Fehler geworden (erledigt).
 
 ### S2 Kindprozesse erben die Umgebung von vigild
 
@@ -187,8 +187,13 @@ Offen für v4:
   Unter OpenShift ist das die gleiche zufällige UID, das passt.
 
 **Stand:** In v3.2.2 umgesetzt (`bind_unix`, `--socket-mode` mit Default
-600, `vigil --socket-uid`). Für v4 fehlt noch die Prüfung des Verzeichnisses
-über `--path-prefix`.
+600, `vigil --socket-uid`). Auf dem Branch `v4` erledigt: `--path-prefix` mit
+Prüfung des Verzeichnisses (Modul `crates/vigild/src/path_prefix.rs`).
+
+Beim Smoke-Test gefunden und auf `v4` behoben: Der temporäre Socket-Name aus
+3.2.2 (`.vigild.sock.<pid>.tmp`) ist länger als der endgültige. Liegt der Pfad
+nahe an der Grenze von 107 Byte, scheitert der Bind. Jetzt `.<pid hex>.tmp`
+und eine klare Fehlermeldung bei zu langen Pfaden.
 
 ### S5 Ohne Identities ist jeder Aufrufer Admin, auch über TLS
 
@@ -329,6 +334,32 @@ anderen Grund neu startet. Um Reloader zu ersetzen, braucht es einen Auslöser:
 - Ein Event pro Änderung geht an das Alerting und erscheint als Metrik
   `vigil_service_file_reloads_total`.
 
+### Phase 4c: Layers aus einer ConfigMap, automatisches `replan`
+
+**Ziel:** Statt eines vigil-Operators (bewusst verworfen: würde Kubernetes
+nachbauen, braucht CRD, Controller, RBAC und API-Zugriff) reicht der
+typische Anwendungsfall: Layers als ConfigMap mounten, und vigild übernimmt
+Änderungen selbst. Damit entfällt `kubectl exec … vigil replan` nach einem
+Update der ConfigMap.
+
+- **Neue Option** für vigild: `--watch-layers <interval>` /
+  `VIGIL_WATCH_LAYERS` (z.B. `30s`, Default aus).
+- **Erkennung per Polling** wie in Phase 4b, mit derselben Code-Basis:
+  Hash über Namen und Inhalt aller `*.yaml` im Layer-Verzeichnis. Grund wie
+  dort: Das Kubelet tauscht bei ConfigMaps den `..data`-Symlink atomar aus.
+  Dateien, die mit `..` beginnen (`..data`, `..2026_…`), werden ignoriert.
+- **Debounce:** erst reagieren, wenn der Hash eine Polling-Runde lang stabil ist.
+- **Validierung vor dem Replan:** Die neuen Layers erst parsen und prüfen.
+  Bei einem Fehler bleibt der laufende Plan aktiv, es gibt ein Log und ein
+  Alert-Event (`layers-invalid`), und es wird nicht erneut versucht, bis
+  sich der Inhalt wieder ändert.
+- **Replan** nutzt die bestehende Logik von `vigil replan`, also nur
+  geänderte Services und Checks neu starten.
+- Metriken: `vigil_layers_reload_total{result="ok|invalid"}`, Zeitpunkt des
+  letzten erfolgreichen Reloads.
+- Doku in `orchestrators.md`: ConfigMap-Beispiel ohne `subPath` (mit
+  `subPath` aktualisiert das Kubelet nie).
+
 ## Releases
 
 ```
@@ -338,11 +369,11 @@ S1, S2, S4, S5, prefix ──┐
 S3-Rest, Phase 1 (Exit) ┤
 Phase 2 (Readiness) ─────┼──► v4.0
 Phase 3 (Oneshot/Cron) ──┤
-Phase 4 + 4b (Template) ─┘    (Phase 4 nach S2)
+Phase 4 + 4b + 4c ───────┘    (Phase 4 nach S2)
 ```
 
 Empfohlene Reihenfolge der Arbeit: 3.2.2-Backport zuerst, dann auf `main`
-S1-Fehlerfall → S4 + path-prefix → S5 → S2 → S3 → Phase 1 → Phase 2 → Phase 3 → Phase 4 → 4b.
+S1-Fehlerfall → S4 + path-prefix → S5 → S2 → S3 → Phase 1 → Phase 2 → Phase 3 → Phase 4 → 4b → 4c.
 
 Für jede Phase: Unit-Tests, VTest2-Integrationstests nach bestehendem Muster,
 ein Test unter OpenShift-Bedingungen (zufällige UID, GID 0, `/run` nicht
