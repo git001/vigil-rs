@@ -112,6 +112,22 @@ whitespace; no shell expansion). To use shell features, wrap in `sh -c`:
 command: sh -c "echo starting && exec /usr/local/bin/myapp"
 ```
 
+#### `user` / `user-id` / `group` / `group-id`
+
+Run the service as another user. This needs vigild to run as root (or
+with `CAP_SETUID`/`CAP_SETGID`).
+
+- Nothing set: the service runs with vigild's own identity and no
+  credential change is attempted. This is the normal case on OpenShift.
+- `user` or `user-id` without a group: the user's **primary group from
+  `/etc/passwd`** is used. For a numeric `user-id` without a passwd entry
+  vigild logs a warning and uses GID = UID. Set `group` or `group-id`
+  explicitly; from v4 on this case is an error.
+- The supplementary groups are always reset to the user's groups from
+  `/etc/group` (or only the primary group if the user has no passwd
+  entry). The child never keeps root's groups.
+- Exec checks running in a service context use the same rules.
+
 #### `startup`
 
 | Value | Behaviour |

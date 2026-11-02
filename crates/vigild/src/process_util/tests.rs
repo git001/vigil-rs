@@ -164,3 +164,148 @@ fn resolve_gid_name_and_mismatched_id_errors() {
     let err = resolve_gid(Some("root"), Some(9999)).unwrap_err();
     assert!(err.to_string().contains("gid") || err.to_string().contains("group-id"));
 }
+
+// ---------------------------------------------------------------------------
+// resolve_credentials / apply_credentials
+// ---------------------------------------------------------------------------
+
+use nix::unistd::{Gid, Uid};
+
+#[test]
+fn credentials_none_when_nothing_configured() {
+    // OpenShift case: no user/group → no credential syscalls at all.
+    assert!(
+        resolve_credentials(None, None, None, None)
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// passwd entry of the user running the tests (always resolvable, unlike
+/// `root`/`nobody`, which minimal sandboxes and containers may lack).
+fn me() -> nix::unistd::User {
+    nix::unistd::User::from_uid(Uid::effective())
+        .unwrap()
+        .expect("current user has a passwd entry")
+}
+
+#[test]
+fn credentials_user_without_group_uses_primary_gid() {
+    let pw = me();
+    let c = resolve_credentials(Some(&pw.name), None, None, None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(c.uid, pw.uid);
+    assert_eq!(
+        c.gid, pw.gid,
+        "primary gid must come from passwd, not stay unchanged"
+    );
+    assert!(c.groups.contains(&pw.gid));
+}
+
+#[test]
+fn credentials_user_id_without_group_uses_primary_gid() {
+    let pw = me();
+    let c = resolve_credentials(None, Some(pw.uid.as_raw()), None, None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(c.gid, pw.gid);
+}
+
+#[test]
+fn credentials_unknown_uid_without_group_falls_back_to_gid_eq_uid() {
+    // 3.x behaviour (warning); becomes an error in v4.
+    let c = resolve_credentials(None, Some(4_000_123), None, None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(c.gid, Gid::from_raw(4_000_123));
+    assert_eq!(c.groups, vec![Gid::from_raw(4_000_123)]);
+}
+
+#[test]
+fn credentials_unknown_uid_with_group_id_has_only_that_group() {
+    let c = resolve_credentials(None, Some(4_000_123), None, Some(4_000_456))
+        .unwrap()
+        .unwrap();
+    assert_eq!(c.uid, Uid::from_raw(4_000_123));
+    assert_eq!(c.gid, Gid::from_raw(4_000_456));
+    assert_eq!(c.groups, vec![Gid::from_raw(4_000_456)]);
+}
+
+#[test]
+fn credentials_explicit_group_overrides_primary() {
+    let c = resolve_credentials(Some(&me().name), None, None, Some(4_000_456))
+        .unwrap()
+        .unwrap();
+    assert_eq!(c.gid, Gid::from_raw(4_000_456));
+    assert!(c.groups.contains(&Gid::from_raw(4_000_456)));
+}
+
+#[test]
+fn credentials_group_only_keeps_current_uid() {
+    let c = resolve_credentials(None, None, None, Some(4_000_456))
+        .unwrap()
+        .unwrap();
+    assert_eq!(c.uid, Uid::effective());
+}
+
+async fn run_id(creds: Option<Credentials>) -> std::io::Result<String> {
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.args(["-c", "id -u; id -g; id -G"]);
+    apply_credentials(&mut cmd, creds);
+    let out = cmd.output().await?;
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+#[tokio::test]
+async fn apply_credentials_none_spawns_unchanged() {
+    let out = run_id(None).await.unwrap();
+    let first = out.lines().next().unwrap();
+    assert_eq!(first, Uid::effective().as_raw().to_string());
+}
+
+#[tokio::test]
+async fn apply_credentials_own_identity_needs_no_privileges() {
+    if Uid::effective().is_root() {
+        return; // covered by the root test below
+    }
+    // Rootless: naming our own uid/gid must not trigger setgroups (EPERM).
+    let creds = Credentials {
+        uid: Uid::effective(),
+        gid: Gid::effective(),
+        groups: vec![Gid::effective()],
+    };
+    let out = run_id(Some(creds)).await.expect("spawn without privileges");
+    assert_eq!(
+        out.lines().next().unwrap(),
+        Uid::effective().as_raw().to_string()
+    );
+}
+
+#[tokio::test]
+async fn apply_credentials_foreign_uid_unprivileged_fails() {
+    if Uid::effective().is_root() {
+        return;
+    }
+    let creds = Credentials {
+        uid: Uid::from_raw(4_000_123),
+        gid: Gid::from_raw(4_000_123),
+        groups: vec![Gid::from_raw(4_000_123)],
+    };
+    let err = run_id(Some(creds)).await.unwrap_err();
+    assert_eq!(err.raw_os_error(), Some(nix::libc::EPERM), "{err}");
+}
+
+/// The actual S1 regression: dropped from root, the child must not keep
+/// gid 0 or root's supplementary groups. Runs only as root (CI container).
+#[tokio::test]
+async fn apply_credentials_from_root_drops_all_groups() {
+    if !Uid::effective().is_root() {
+        eprintln!("skipped: needs root");
+        return;
+    }
+    let creds = resolve_credentials(None, Some(4_000_123), None, Some(4_000_456)).unwrap();
+    let out = run_id(creds).await.unwrap();
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines, vec!["4000123", "4000456", "4000456"], "{out}");
+}

@@ -11,7 +11,7 @@ use vigil_types::api::LogStream;
 use vigil_types::plan::LogsForward;
 
 use crate::logs::spawn_reader;
-use crate::process_util::{parse_command, resolve_gid, resolve_uid};
+use crate::process_util::{apply_credentials, parse_command, resolve_credentials};
 use crate::state::ServiceState;
 
 use super::Actor;
@@ -45,25 +45,13 @@ impl Actor {
             cmd.current_dir(dir);
         }
 
-        let uid = resolve_uid(self.config.user.as_deref(), self.config.user_id)?;
-        let gid = resolve_gid(self.config.group.as_deref(), self.config.group_id)?;
-        if uid.is_some() || gid.is_some() {
-            unsafe {
-                cmd.pre_exec(move || {
-                    if let Some(g) = gid {
-                        nix::unistd::setgid(g).map_err(|e| {
-                            std::io::Error::new(std::io::ErrorKind::PermissionDenied, e.to_string())
-                        })?;
-                    }
-                    if let Some(u) = uid {
-                        nix::unistd::setuid(u).map_err(|e| {
-                            std::io::Error::new(std::io::ErrorKind::PermissionDenied, e.to_string())
-                        })?;
-                    }
-                    Ok(())
-                });
-            }
-        }
+        let creds = resolve_credentials(
+            self.config.user.as_deref(),
+            self.config.user_id,
+            self.config.group.as_deref(),
+            self.config.group_id,
+        )?;
+        apply_credentials(&mut cmd, creds);
 
         cmd.process_group(0);
 

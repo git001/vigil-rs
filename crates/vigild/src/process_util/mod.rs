@@ -7,5 +7,5 @@ mod parse;
 #[cfg(test)]
 mod tests;
 
-pub use identity::{resolve_gid, resolve_uid};
+pub use identity::{Credentials, apply_credentials, resolve_credentials, resolve_gid, resolve_uid};
 pub use parse::parse_command;

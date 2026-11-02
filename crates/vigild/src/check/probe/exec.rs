@@ -8,7 +8,7 @@ use tokio::time::timeout;
 use tracing::{debug, warn};
 use vigil_types::plan::{ExecCheck, ServiceConfig};
 
-use crate::process_util::{resolve_gid, resolve_uid};
+use crate::process_util::{apply_credentials, resolve_credentials};
 
 pub(super) async fn probe_exec(
     exec: &ExecCheck,
@@ -43,18 +43,11 @@ pub(super) async fn probe_exec(
         .as_deref()
         .or_else(|| ctx_svc.and_then(|s| s.working_dir.as_deref()));
 
-    // Resolve uid/gid (fail-safe: log and skip on error).
-    let uid = match resolve_uid(eff_user, eff_user_id) {
-        Ok(u) => u,
+    // Resolve the full credential set (fail-safe: log and fail the probe).
+    let creds = match resolve_credentials(eff_user, eff_user_id, eff_group, eff_group_id) {
+        Ok(c) => c,
         Err(e) => {
-            warn!(%e, "exec check: failed to resolve user");
-            return false;
-        }
-    };
-    let gid = match resolve_gid(eff_group, eff_group_id) {
-        Ok(g) => g,
-        Err(e) => {
-            warn!(%e, "exec check: failed to resolve group");
+            warn!(%e, "exec check: failed to resolve user/group");
             return false;
         }
     };
@@ -72,23 +65,7 @@ pub(super) async fn probe_exec(
         if let Some(dir) = &working_dir {
             cmd.current_dir(dir);
         }
-        if uid.is_some() || gid.is_some() {
-            unsafe {
-                cmd.pre_exec(move || {
-                    if let Some(g) = gid {
-                        nix::unistd::setgid(g).map_err(|e| {
-                            std::io::Error::new(std::io::ErrorKind::PermissionDenied, e.to_string())
-                        })?;
-                    }
-                    if let Some(u) = uid {
-                        nix::unistd::setuid(u).map_err(|e| {
-                            std::io::Error::new(std::io::ErrorKind::PermissionDenied, e.to_string())
-                        })?;
-                    }
-                    Ok(())
-                });
-            }
-        }
+        apply_credentials(&mut cmd, creds);
 
         cmd.stdout(std::process::Stdio::null());
         cmd.stderr(std::process::Stdio::null());
