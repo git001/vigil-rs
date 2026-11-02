@@ -75,6 +75,28 @@ mod tests {
         fs::write(dir.path().join(name), content).unwrap();
     }
 
+    /// Every example's layers must load (and pass validation), so example
+    /// configs cannot silently break, e.g. through new pass-env rules.
+    #[test]
+    fn all_example_layers_load() {
+        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+        let mut checked = 0;
+        for entry in fs::read_dir(&examples).unwrap() {
+            let layers = entry.unwrap().path().join("layers");
+            if layers.is_dir() {
+                load_plan(&layers).unwrap_or_else(|e| panic!("{layers:?}: {e:#}"));
+                checked += 1;
+            }
+        }
+        // examples/layers-minimal has no layers/ subdir; it is a layers dir itself.
+        let minimal = examples.join("layers-minimal");
+        if minimal.is_dir() {
+            load_plan(&minimal).unwrap_or_else(|e| panic!("{minimal:?}: {e:#}"));
+            checked += 1;
+        }
+        assert!(checked > 5, "only {checked} example layer dirs found");
+    }
+
     #[test]
     fn invalid_pass_env_regex_rejects_plan() {
         let dir = TempDir::new().unwrap();

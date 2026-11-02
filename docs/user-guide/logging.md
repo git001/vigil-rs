@@ -432,7 +432,7 @@ Three source modes are available:
 | Flag | Source |
 |---|---|
 | `--kubernetes` | Kubernetes pod logs via the K8s API (in-cluster) |
-| `--source-socket PATH` | Unix-domain socket (e.g. vigild's `/tmp/vigild.sock`) |
+| `--source-socket PATH` | Unix-domain socket (e.g. vigild's `/tmp/vigil/vigild.sock`) |
 | `--source-url URL` | HTTP/HTTPS URL |
 
 **Streaming vigild logs to Filebeat via TCP:**
@@ -443,7 +443,7 @@ services:
   vigil-log-relay:
     command: >
       vigil-log-relay
-      --source-socket /tmp/vigild.sock
+      --source-socket /tmp/vigil/vigild.sock
       --source-path /v1/logs/follow?format=ndjson
       --tcp-sink-host 127.0.0.1
       --tcp-sink-port 5170
@@ -482,7 +482,7 @@ Key parameters:
 opening a TCP connection. Useful for debugging or piping output to another process:
 
 ```
-vigil-log-relay --source-socket /tmp/vigild.sock --stdout-sink
+vigil-log-relay --source-socket /tmp/vigil/vigild.sock --stdout-sink
 ```
 
 **Line filtering** — `--include` and `--exclude` accept Go-compatible regular expressions
@@ -498,7 +498,7 @@ services:
   vigil-log-relay:
     command: >
       vigil-log-relay
-      --source-socket /tmp/vigild.sock
+      --source-socket /tmp/vigil/vigild.sock
       --source-path /v1/logs/follow?format=ndjson
       --include '"level":"(error|warn)"'
       --exclude '"path":"/healthz"'

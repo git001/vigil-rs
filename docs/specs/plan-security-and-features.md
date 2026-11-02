@@ -136,6 +136,12 @@ environment (tokens, passwords) ends up in every child process.
   them automatically**. That is what the allowlists are for, and the v4
   migration guide must say so prominently.
 
+**Status:** done on the `v4` branch (`process_util/env.rs`, validation in
+`overlord/plan.rs`, `PR_SET_DUMPABLE` in `main.rs`). The
+`examples/kubernetes-pod-logs` layer now passes the variables
+vigil-log-relay reads, including `KUBERNETES_SERVICE_*` for the in-cluster
+API connection.
+
 ### S3 The reaper steals exit statuses from tokio
 
 **Problem:** `crates/vigild/src/reaper.rs` calls `waitpid(-1)` on every
@@ -212,6 +218,12 @@ controls all services.
   API is effectively read-only.
 - Migration guide: anyone using the TLS API without identities today needs a
   `basic` or `tls` identity in v4.
+- **vigil-log-relay:** `--source-url https://<vigild>/v1/logs/follow` reads
+  logs over the TLS API. Check which access level `/v1/logs/follow` needs; if
+  it is not `Open`, relay setups without identities break. Either document a
+  read-only identity for the relay (relay needs a way to send credentials,
+  e.g. basic auth or a client certificate) or keep log streaming `Open`.
+  Test the relay against a v4 vigild before releasing.
 
 ### Not affected
 

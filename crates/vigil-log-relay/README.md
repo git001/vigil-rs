@@ -38,6 +38,8 @@ container (no `--container` flag):
 
 Requires an in-cluster service account with `get`, `list`, `watch` on `pods` and `get` on `pods/log`. See [`examples/kubernetes-pod-logs/k8s/rbac.yaml`](../../examples/kubernetes-pod-logs/k8s/rbac.yaml).
 
+> **Running as a vigild service (vigil-rs v4+):** services no longer inherit vigild's environment. Pass the variables vigil-log-relay needs with `pass-env-glob`, including `KUBERNETES_SERVICE_*` for the in-cluster API connection, and the proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, also lower case), e.g. with `pass-env-regex: ['(?i)(https?|all|no)_proxy']`. See [`examples/kubernetes-pod-logs/layers/001-services.yaml`](../../examples/kubernetes-pod-logs/layers/001-services.yaml).
+
 ```
 vigil-log-relay --kubernetes \
   --namespace production \
@@ -85,10 +87,10 @@ vigil-log-relay --source-url https://vigild.example.com/v1/logs/follow?format=nd
 
 ### Unix socket (`--source-socket`)
 
-Streams ndjson from a vigild local Unix-domain socket. Useful when vigil-log-relay runs in the same pod or on the same host as vigild.
+Streams ndjson from a vigild local Unix-domain socket. Useful when vigil-log-relay runs in the same pod or on the same host as vigild. The socket is `<path-prefix>/vigild.sock` (vigild's `--path-prefix`, default `/run/vigil`; the vigil-rs image uses `/tmp/vigil`) and has mode 0600 by default, so vigil-log-relay must run with vigild's UID or vigild needs a wider `--socket-mode`.
 
 ```
-vigil-log-relay --source-socket /tmp/vigild.sock \
+vigil-log-relay --source-socket /tmp/vigil/vigild.sock \
   --source-path /v1/logs/follow?format=ndjson \
   --tcp-sink-host 127.0.0.1 --tcp-sink-port 5170
 ```

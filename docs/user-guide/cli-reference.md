@@ -408,7 +408,7 @@ Both flags are repeatable. Evaluation: include-check first, then exclude-check.
 ```bash
 # Only forward error and warn lines, drop health-check noise
 vigil-log-relay \
-  --source-socket /tmp/vigild.sock \
+  --source-socket /tmp/vigil/vigild.sock \
   --include '"level":"(error|warn)"' \
   --exclude '"path":"/healthz"' \
   --tcp-sink-host 127.0.0.1 \

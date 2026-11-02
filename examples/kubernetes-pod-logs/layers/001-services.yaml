@@ -33,6 +33,31 @@ services:
     # manifest (k8s/deployment.yaml). No defaults here — layer values would
     # override operator configuration.
     #
+    # Since vigil-rs v4 services do not inherit vigild's environment, so the
+    # variables vigil-log-relay reads must be passed explicitly.
+    # KUBERNETES_SERVICE_* is needed for the in-cluster API connection.
+    pass-env-glob:
+      - KUBERNETES_SERVICE_*
+      - NAMESPACE
+      - POD_SELECTOR
+      - CONTAINER_SELECTOR
+      - WATCH_INTERVAL
+      - NO_STREAM_PARAM
+      - VIGIL_LOG_FORMAT
+      - RUST_LOG
+      - TCP_SINK_*
+      - SOURCE_*
+      - DEST_*
+      - HEALTHCHECK*
+      - MAX_LOG_REQUESTS
+      - SINCE_SECONDS
+      - TAIL_LINES
+      - STDOUT_SINK
+    # Standard proxy variables (HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, NO_PROXY,
+    # upper and lower case), read by vigil-log-relay's HTTP client.
+    pass-env-regex:
+      - '(?i)(https?|all|no)_proxy'
+    #
     # Variables read by vigil-log-relay --kubernetes:
     #   NAMESPACE        namespace to watch (required)
     #   POD_SELECTOR     label selector, e.g. "app=myapp" (optional)

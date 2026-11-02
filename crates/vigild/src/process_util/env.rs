@@ -304,6 +304,29 @@ mod tests {
         assert!(value(&env, "MY_TOKEN_SECRET").is_some());
     }
 
+    /// The pattern documented for proxy variables (vigil-log-relay example).
+    #[test]
+    fn proxy_regex_matches_both_cases_only() {
+        let p = EnvPolicy::compile(None, &[], &["(?i)(https?|all|no)_proxy".into()]).unwrap();
+        let env = p.build(
+            os(&[
+                ("HTTP_PROXY", "a"),
+                ("https_proxy", "b"),
+                ("ALL_PROXY", "c"),
+                ("no_proxy", "d"),
+                ("SOURCE_PROXY", "x"),
+                ("HTTPS_PROXY_PASSWORD", "x"),
+            ]),
+            None,
+            &IndexMap::new(),
+        );
+        for k in ["HTTP_PROXY", "https_proxy", "ALL_PROXY", "no_proxy"] {
+            assert!(value(&env, k).is_some(), "{k} missing");
+        }
+        assert!(value(&env, "SOURCE_PROXY").is_none());
+        assert!(value(&env, "HTTPS_PROXY_PASSWORD").is_none());
+    }
+
     #[test]
     fn invalid_regex_is_an_error() {
         let err = EnvPolicy::compile(None, &[], &["(".into()]).unwrap_err();
