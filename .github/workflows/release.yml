@@ -30,7 +30,7 @@ jobs:
     outputs:
       content: ${{ steps.cliff.outputs.content }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -45,7 +45,7 @@ jobs:
           args: --latest --strip all
 
       - name: Upload release notes
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: changelog
           path: ${{ steps.cliff.outputs.changelog }}
@@ -57,13 +57,13 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -91,7 +91,7 @@ jobs:
             target: aarch64-unknown-linux-musl
             use_cross: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -99,7 +99,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Cache Cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -132,7 +132,7 @@ jobs:
           chmod +x dist/vigild-${{ matrix.arch }} dist/vigil-${{ matrix.arch }} dist/vigil-log-relay-${{ matrix.arch }}
           sha256sum dist/* > dist/SHA256SUMS-${{ matrix.arch }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: binaries-${{ matrix.arch }}
           path: dist/
@@ -161,10 +161,10 @@ jobs:
             version: "24.04"
             codename: noble
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download amd64 binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: binaries-amd64
           path: dist-bin/
@@ -208,7 +208,7 @@ jobs:
             dpkg-deb --info "$f" | grep -E 'Package|Version|Architecture|Installed-Size'
           done
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: deb-${{ matrix.distro }}${{ matrix.version }}
           path: dist/*.deb
@@ -235,10 +235,10 @@ jobs:
             dist: el10
             compress: zstd
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download amd64 binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: binaries-amd64
           path: dist-bin/
@@ -289,7 +289,7 @@ jobs:
             rpm -qip "$f" 2>/dev/null | grep -E 'Name|Version|Release|Architecture|Size' || true
           done
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rpm-rhel${{ matrix.rhel }}
           path: dist-out/*.rpm
@@ -305,16 +305,16 @@ jobs:
       digest: ${{ steps.push.outputs.digest }}
       image:  ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download amd64 binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: binaries-amd64
           path: dist/amd64/
 
       - name: Download arm64 binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: binaries-arm64
           path: dist/arm64/
@@ -382,7 +382,7 @@ jobs:
     needs: [build, container]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Log in to ghcr.io
         uses: docker/login-action@v3
@@ -417,7 +417,7 @@ jobs:
 
       # ── SBOM: binary artifacts ──────────────────────────────────────────────
       - name: Download amd64 binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: binaries-amd64
           path: dist/
@@ -437,7 +437,7 @@ jobs:
             --type spdxjson \
             "${{ needs.container.outputs.image }}@${{ needs.container.outputs.digest }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sbom
           path: |
@@ -454,28 +454,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: binaries-*
           path: artifacts/
           merge-multiple: true
 
       - name: Download .deb packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: deb-*
           path: artifacts/
           merge-multiple: true
 
       - name: Download .rpm packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: rpm-*
           path: artifacts/
           merge-multiple: true
 
       - name: Download SBOM
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: sbom
           path: artifacts/
