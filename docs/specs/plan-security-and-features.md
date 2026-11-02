@@ -208,22 +208,26 @@ controls all services.
 
 **Decision:** fix in v4 only, no backport.
 
-**Fix:**
+**Fix (as implemented on `v4`):**
 
 - Without identities, only the Unix socket grants admin, and only if the peer
-  UID is root or vigild's euid (as in pebble).
-- Over TLS without identities, only endpoints that need no auth (`Open`) are
-  accessible, e.g. health and metrics.
-- When started with `--tls-addr` but no identities, vigild warns that the TLS
-  API is effectively read-only.
+  UID is root or vigild's euid (as in pebble). Other callers get `open`.
+- TLS callers without a matching identity get `--tls-anonymous-access` /
+  `VIGIL_TLS_ANONYMOUS_ACCESS`: `metrics` (default) or `open`. Logs,
+  services and all state changes need an identity over TLS. (`read` as an
+  anonymous level was rejected: logs may contain sensitive data.)
+- `GET /v1/checks` is `open`, so Kubernetes `httpGet` probes keep working.
+- Every TLS request carries a `TlsConnection` marker for the auth layer.
+- At startup with `--tls-addr`, vigild logs the anonymous access level.
 - Migration guide: anyone using the TLS API without identities today needs a
   `basic` or `tls` identity in v4.
-- **vigil-log-relay:** `--source-url https://<vigild>/v1/logs/follow` reads
-  logs over the TLS API. Check which access level `/v1/logs/follow` needs; if
-  it is not `Open`, relay setups without identities break. Either document a
-  read-only identity for the relay (relay needs a way to send credentials,
-  e.g. basic auth or a client certificate) or keep log streaming `Open`.
-  Test the relay against a v4 vigild before releasing.
+- **vigil-log-relay:** `--source-url https://<vigild>/v1/logs/follow` needs
+  a `read` identity now. The relay gained `--source-user-file` /
+  `SOURCE_USER_FILE` (basic auth, re-read on every reconnect) and
+  `--source-cert`/`SOURCE_CERT` + `--source-key`/`SOURCE_KEY` (mTLS).
+
+**Status:** done on the `v4` branch, tested end to end (anonymous TLS
+caller, relay with basic auth and with mTLS).
 
 ### Not affected
 
@@ -406,6 +410,10 @@ steps; it feeds the changelog's "Breaking Changes" section.
   without capabilities.
 - The new `Starting` status and OpenAPI changes ship in v4.
 - No vigil operator; ConfigMap-based layers with auto-replan instead (4c).
+- S5: anonymous TLS access is `metrics` by default (or `open`), never
+  `read`; `/v1/checks` is `open`; vigil-log-relay authenticates via basic
+  auth file or mTLS. Every new option gets an environment variable, like all
+  options of vigild, vigil and vigil-log-relay.
 - Proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) are
   not part of the default base set: proxy URLs may carry credentials. Pass
   them per service, e.g. `pass-env-regex: ['(?i)(https?|all|no)_proxy']`.
