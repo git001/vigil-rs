@@ -7,8 +7,10 @@
 # Regenerate before tagging a release (part of the version-bump commit):
 #   git cliff --tag vX.Y.Z -o CHANGELOG.md
 #
-# Section order follows Keep a Changelog. git-cliff sorts groups by name, so
-# each group carries an HTML-comment prefix that is stripped in the output.
+# Section order follows Keep a Changelog, preceded by an extra
+# "⚠ Breaking Changes" section that also shows the migration note from the
+# commit's "BREAKING CHANGE:" footer. git-cliff sorts groups by name, so each
+# group carries an HTML-comment prefix that is stripped in the output.
 
 [changelog]
 header = """
@@ -38,10 +40,13 @@ No user-facing changes.
 ### {{ group | striptags | trim }}
 
 {% for commit in commits -%}
-- {% if commit.breaking %}**BREAKING:** {% endif -%}
-{% if commit.scope %}**{{ commit.scope }}**: {% endif -%}
+- {% if commit.scope %}**{{ commit.scope }}**: {% endif -%}
 {{ commit.message | split(pat="\n") | first | trim | upper_first }} \
 ([`{{ commit.id | truncate(length=7, end="") }}`](https://github.com/git001/vigil-rs/commit/{{ commit.id }}))
+{% if group is containing("Breaking") and commit.breaking_description \
+   and commit.breaking_description != commit.message -%}
+{{ "  - " }}*Migration:* {{ commit.breaking_description | split(pat="\n") | join(sep=" ") | trim }}
+{% endif -%}
 {% endfor -%}
 {% endif -%}
 {% endfor %}
@@ -79,31 +84,34 @@ commit_parsers = [
     { message = "^Merge ", group = "<!-- 9 -->Hidden" },
     { message = "(?i)^(update to |updte |)version ", group = "<!-- 9 -->Hidden" },
 
+    # Breaking changes get their own section at the top of each release,
+    # whatever their type ("type!:" or a "BREAKING CHANGE:" footer).
+    { message = "^\\w+(\\(.*\\))?!:", group = "<!-- 0 -->⚠ Breaking Changes" },
+    { footer = "^BREAKING[ -]CHANGE", group = "<!-- 0 -->⚠ Breaking Changes" },
+
     # Security first, so a security fix lands under "Security", not "Fixed".
     # Only code/dependency commits count: docs that merely mention
     # "security" must not end up here.
-    { message = "^(fix|feat|chore)(\\(.*\\))?!?: .*(?i:security|RUSTSEC-|CVE-)", group = "<!-- 5 -->Security" },
-    { message = "^(fix|feat|chore)", body = "(?i)security|RUSTSEC-|CVE-", group = "<!-- 5 -->Security" },
+    { message = "^(fix|feat|chore)(\\(.*\\))?!?: .*(?i:security|RUSTSEC-|CVE-)", group = "<!-- 6 -->Security" },
+    { message = "^(fix|feat|chore)", body = "(?i)security|RUSTSEC-|CVE-", group = "<!-- 6 -->Security" },
 
     # Security fixes whose message does not say so.
-    { sha = "2483705f6dbfe1f603b667dd23b2367831385403", group = "<!-- 5 -->Security" },  # 3.2.2: privilege drop kept root groups
-    { sha = "f6f905a515e77d282866bf1074bdb1b5edb512ec", group = "<!-- 5 -->Security" },  # 3.2.2: control socket hardening
+    { sha = "2483705f6dbfe1f603b667dd23b2367831385403", group = "<!-- 6 -->Security" },  # 3.2.2: privilege drop kept root groups
+    { sha = "f6f905a515e77d282866bf1074bdb1b5edb512ec", group = "<!-- 6 -->Security" },  # 3.2.2: control socket hardening
 
-    # Conventional commits. Breaking changes ("type!:") change existing
-    # behaviour, so they go to "Changed" whatever their type.
-    { message = "^\\w+(\\(.*\\))?!:", group = "<!-- 1 -->Changed" },
-    { message = "^feat", group = "<!-- 0 -->Added" },
-    { message = "^(perf|refactor)", group = "<!-- 1 -->Changed" },
-    { message = "(?i)^\\w+(\\(.*\\))?!?: deprecate", group = "<!-- 2 -->Deprecated" },
-    { message = "(?i)^\\w+(\\(.*\\))?!?: remove", group = "<!-- 3 -->Removed" },
-    { message = "^fix", group = "<!-- 4 -->Fixed" },
-    { message = "^chore\\(deps", group = "<!-- 1 -->Changed" },
+    # Conventional commits.
+    { message = "^feat", group = "<!-- 1 -->Added" },
+    { message = "^(perf|refactor)", group = "<!-- 2 -->Changed" },
+    { message = "(?i)^\\w+(\\(.*\\))?!?: deprecate", group = "<!-- 3 -->Deprecated" },
+    { message = "(?i)^\\w+(\\(.*\\))?!?: remove", group = "<!-- 4 -->Removed" },
+    { message = "^fix", group = "<!-- 5 -->Fixed" },
+    { message = "^chore\\(deps", group = "<!-- 2 -->Changed" },
 
     # User-facing changes from before the switch to conventional commits.
-    { sha = "04342f81f5ca260426263f6d5358012cb6dab2fb", group = "<!-- 0 -->Added" },    # json log format for vigil-log-relay
-    { sha = "384052eabdee2243666c346290c6b72d35b5e68d", group = "<!-- 0 -->Added" },    # --version for vigil-log-relay
-    { sha = "9ef0c935936f5d914ef9210901b1475cff7703bb", group = "<!-- 1 -->Changed" },  # image ships vigil-log-relay, bash, curl
-    { sha = "139f6b0ce9a82affca3009105af5b56e64ed71da", group = "<!-- 1 -->Changed" },  # image runs as USER 1001
+    { sha = "04342f81f5ca260426263f6d5358012cb6dab2fb", group = "<!-- 1 -->Added" },    # json log format for vigil-log-relay
+    { sha = "384052eabdee2243666c346290c6b72d35b5e68d", group = "<!-- 1 -->Added" },    # --version for vigil-log-relay
+    { sha = "9ef0c935936f5d914ef9210901b1475cff7703bb", group = "<!-- 2 -->Changed" },  # image ships vigil-log-relay, bash, curl
+    { sha = "139f6b0ce9a82affca3009105af5b56e64ed71da", group = "<!-- 2 -->Changed" },  # image runs as USER 1001
 
     # Everything else (docs, test, ci, style, chore, free-form housekeeping).
     { message = ".*", group = "<!-- 9 -->Hidden" },
