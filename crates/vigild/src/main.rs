@@ -85,6 +85,18 @@ struct Args {
     #[arg(long, env = "VIGIL_TLS_CLIENT_CA")]
     tls_client_ca: Option<PathBuf>,
 
+    /// Access of TLS callers without a matching identity: `open` (only
+    /// /v1/checks, /v1/system-info, API docs) or `metrics` (also
+    /// /v1/metrics). Logs, services and anything that changes state always
+    /// need an identity over TLS.
+    #[arg(
+        long,
+        env = "VIGIL_TLS_ANONYMOUS_ACCESS",
+        default_value = "metrics",
+        value_parser = ["open", "metrics"]
+    )]
+    tls_anonymous_access: String,
+
     /// Enable init/subreaper mode: reap orphaned zombie processes.
     /// Automatically active when vigild runs as PID 1.
     #[arg(long, env = "VIGIL_REAPER")]
@@ -188,12 +200,24 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
     let (shutdown_tx, mut shutdown_rx) =
         tokio::sync::mpsc::channel::<vigil_types::api::DaemonAction>(1);
 
+    let tls_anonymous_access = match args.tls_anonymous_access.as_str() {
+        "open" => vigil_types::identity::IdentityAccess::Open,
+        _ => vigil_types::identity::IdentityAccess::Metrics,
+    };
+    if args.tls_addr.is_some() {
+        info!(
+            access = %args.tls_anonymous_access,
+            "TLS API: callers without a matching identity get this access level"
+        );
+    }
+
     let app_state = api::AppState {
         overlord: overlord.clone(),
         log_store,
         identity_store,
         metrics,
         shutdown_tx,
+        tls_anonymous_access,
     };
     let router = api::router(app_state);
 

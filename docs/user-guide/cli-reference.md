@@ -299,14 +299,16 @@ Manage named principals for the access control system.
 
 | Level | Permissions |
 |-------|-------------|
-| `open` | No auth required — health and system-info endpoints |
+| `open` | No auth required — system-info and checks endpoints |
 | `metrics` | `GET /v1/metrics` only |
 | `read` | All `GET` endpoints |
 | `write` | `read` + service/check control (start, stop, restart) |
 | `admin` | Full access including identity management |
 
-**Bootstrap mode:** When the identity store is empty, every caller is granted
-`admin` access so the first identity can be added without credentials.
+**Bootstrap mode:** While the identity store is empty, root and vigild's own
+UID get `admin` over the Unix socket, so the first identity can be added
+without credentials. Callers on the TLS listener get at most
+`--tls-anonymous-access` (default `metrics`).
 
 #### `identities list [NAME...]`
 

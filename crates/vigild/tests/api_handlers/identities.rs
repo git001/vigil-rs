@@ -137,8 +137,8 @@ async fn auth_open_caller_forbidden_after_identity_added() {
     )
     .await;
 
-    // Now an unauthenticated GET /v1/identities (requires Admin) should be 403
-    let resp = app.get("/v1/identities").await;
+    // Now an unauthenticated (anonymous TLS) GET /v1/identities (requires Admin) should be 403
+    let resp = app.request_tls(Method::GET, "/v1/identities", None).await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
     app.shutdown().await;
@@ -158,8 +158,8 @@ async fn auth_read_endpoint_forbidden_without_credentials() {
     )
     .await;
 
-    // /v1/services requires Read — unauthenticated caller has Open → forbidden
-    let resp = app.get("/v1/services").await;
+    // /v1/services requires Read — anonymous TLS caller has Metrics → forbidden
+    let resp = app.request_tls(Method::GET, "/v1/services", None).await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
     app.shutdown().await;

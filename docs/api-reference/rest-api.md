@@ -19,7 +19,7 @@ levels are ordered from least to most privileged:
 
 | Level | How it is granted | Required by |
 |-------|-------------------|-------------|
-| `open` | No credentials needed | `GET /v1/system-info` |
+| `open` | No credentials needed | `GET /v1/system-info`, `GET /v1/checks` |
 | `metrics` | Basic Auth, local UID, or TLS client cert | `GET /v1/metrics` |
 | `read` | — | All other `GET` endpoints |
 | `write` | — | `POST /v1/services`, `POST /v1/replan` |
@@ -27,9 +27,17 @@ levels are ordered from least to most privileged:
 
 Each endpoint table below lists its **required level**.
 
-**Bootstrap mode:** When the identity store is empty (fresh install), every
-caller is automatically granted `admin` access so the first identity can be
-added without credentials. Once any identity exists, enforcement begins.
+**Callers without a matching identity:**
+
+| Connection | Access |
+|---|---|
+| TLS listener | `--tls-anonymous-access` (`metrics` by default, or `open`) |
+| Unix socket, root or vigild's UID, **no identities configured yet** | `admin` (bootstrap: add the first identity this way, e.g. via `kubectl exec`) |
+| Unix socket, any other UID, or once identities exist | `open` |
+
+Reading logs or services and anything that changes state over TLS always
+requires an identity. Before v4, every caller (including TLS) was `admin`
+while the identity store was empty.
 
 **Authentication methods:**
 
@@ -260,7 +268,8 @@ curl --unix-socket /run/vigil/vigild.sock http://localhost/v1/changes/42
 
 ### `GET /v1/checks`
 
-**Required access level:** `read`
+**Required access level:** `open` (so Kubernetes `httpGet` probes work without
+credentials; the response only contains check names and states)
 
 List health checks and their current status.
 

@@ -7,9 +7,11 @@
 // identity store + metrics) and drives the axum router via
 // `tower::ServiceExt::oneshot` — no network port is bound.
 //
-// Auth note: when the identity store is empty the auth extractor grants
-// `Admin` access automatically (bootstrap mode), so no credentials are
-// needed in these tests.
+// Auth note: `get` and `request` send requests the way the Unix socket does
+// (with the caller's peer UID, here the test process). While the identity
+// store is empty, root and vigild's own UID get `Admin` (bootstrap mode), so
+// no credentials are needed in these tests. `request_tls` simulates an
+// anonymous caller on the TLS listener.
 
 use axum::body::Body;
 use axum::http::{Method, Request};
@@ -36,6 +38,7 @@ mod logs;
 mod misc;
 mod services;
 mod system;
+mod tls_anonymous;
 
 // ---------------------------------------------------------------------------
 // Test harness
@@ -51,6 +54,13 @@ pub struct TestApp {
 
 impl TestApp {
     pub async fn new() -> Self {
+        Self::with_tls_anonymous(vigil_types::identity::IdentityAccess::Metrics).await
+    }
+
+    /// Like `new`, with an explicit `--tls-anonymous-access` level.
+    pub async fn with_tls_anonymous(
+        tls_anonymous_access: vigil_types::identity::IdentityAccess,
+    ) -> Self {
         let dir = TempDir::new().unwrap();
         let (handle, log_store, metrics, _task) =
             overlord::spawn(dir.path().to_owned(), "test-addr".into(), None, 100).unwrap();
@@ -63,6 +73,7 @@ impl TestApp {
             identity_store,
             metrics,
             shutdown_tx,
+            tls_anonymous_access,
         };
 
         TestApp {
@@ -72,13 +83,44 @@ impl TestApp {
         }
     }
 
-    /// Send a GET request and return the response.
+    /// Send a GET request over the (simulated) Unix socket.
     pub async fn get(&self, uri: &str) -> axum::response::Response {
+        self.request_inner(Method::GET, uri, None, true).await
+    }
+
+    /// Send a request as an anonymous caller on the TLS listener (no client
+    /// certificate, no Authorization header).
+    pub async fn request_tls(
+        &self,
+        method: Method,
+        uri: &str,
+        body: Option<serde_json::Value>,
+    ) -> axum::response::Response {
+        let mut builder = Request::builder()
+            .method(method)
+            .uri(uri)
+            .extension(vigild::server::TlsConnection);
+        let http_body = if let Some(json) = body {
+            builder = builder.header("Content-Type", "application/json");
+            Body::from(serde_json::to_vec(&json).unwrap())
+        } else {
+            Body::empty()
+        };
         self.router
             .clone()
-            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .oneshot(builder.body(http_body).unwrap())
             .await
             .unwrap()
+    }
+
+    /// Send a request without any transport information (neither Unix peer
+    /// UID nor TLS marker).
+    pub async fn request_no_transport(
+        &self,
+        method: Method,
+        uri: &str,
+    ) -> axum::response::Response {
+        self.request_inner(method, uri, None, false).await
     }
 
     /// Send a request with an arbitrary method/body and return the response.
@@ -88,7 +130,7 @@ impl TestApp {
         uri: &str,
         body: Option<serde_json::Value>,
     ) -> axum::response::Response {
-        self.request_inner(method, uri, body, false).await
+        self.request_inner(method, uri, body, true).await
     }
 
     /// Same as `request`, but injects a `ConnectInfo<UnixPeerInfo>` extension

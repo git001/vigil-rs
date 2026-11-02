@@ -40,8 +40,8 @@ async fn list_alerts_forbidden_without_credentials_after_bootstrap() {
     )
     .await;
 
-    // Unauthenticated GET /v1/alerts — Open < Read → 403
-    let resp = app.get("/v1/alerts").await;
+    // Unauthenticated (anonymous TLS caller) GET /v1/alerts — Open < Read → 403
+    let resp = app.request_tls(Method::GET, "/v1/alerts", None).await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     app.shutdown().await;
 }

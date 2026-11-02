@@ -907,19 +907,23 @@ default access rules based on connection type (see below).
 
 | Level | Grants access to |
 |-------|-----------------|
-| `open` | `GET /v1/system-info`, `GET /v1/health` — no authentication required |
+| `open` | `GET /v1/system-info`, `GET /v1/checks`, API docs — no authentication required |
 | `metrics` | `GET /v1/metrics` (Prometheus/OpenMetrics) |
 | `read` | All other `GET` endpoints |
 | `write` | `read` + service/check control (`POST /v1/services`, `POST /v1/checks`) |
 | `admin` | `write` + identity management (`POST /v1/identities`, `DELETE /v1/identities`) |
 
-### Default access (no identities configured)
+### Default access (caller without a matching identity)
 
 | Connection | Effective level |
 |------------|----------------|
-| Unix socket, UID 0 (root) or daemon UID | `admin` |
-| Unix socket, any other UID | `read` |
-| TCP / HTTPS (no client cert) | `open` |
+| Unix socket, UID 0 (root) or daemon UID, no identities configured yet | `admin` (bootstrap) |
+| Unix socket, any other UID, or once identities exist | `open` |
+| TLS listener | `--tls-anonymous-access`: `metrics` (default) or `open` |
+
+Logs, services and every state change need an identity over TLS. For a
+log shipper such as vigil-log-relay, create an identity with `access: read`
+(Basic Auth or TLS client certificate).
 
 ### Authentication methods
 

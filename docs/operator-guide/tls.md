@@ -166,8 +166,10 @@ vigild --layers-dir /etc/vigil/layers
 ### Step 2 — Register a TLS identity
 
 Add an identity whose `tls.ca-cert` matches the CA that signed the client
-certificate.  This can be done via the Unix socket (no auth required during
-bootstrap, or with an existing admin identity):
+certificate.  This can be done via the Unix socket (no auth required for root
+or vigild's own UID while no identity exists yet, or with an existing admin
+identity). It cannot be done over TLS without an identity: anonymous TLS
+callers get at most `--tls-anonymous-access` (`metrics` by default).
 
 ```bash
 curl --unix-socket /run/vigil/vigild.sock \

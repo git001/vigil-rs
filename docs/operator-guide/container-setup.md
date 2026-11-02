@@ -56,6 +56,7 @@ LABEL org.opencontainers.image.description="My application supervised by vigil-r
 | `--socket <PATH>` | `VIGIL_SOCKET` | `<path-prefix>/vigild.sock` | Unix socket path for the HTTP API. vigild refuses to start if the path is a symlink, a non-socket file, or a stale socket it cannot remove. |
 | `--socket-mode <OCTAL>` | `VIGIL_SOCKET_MODE` | `600` | Permission bits of the Unix socket. Without identities every caller that can connect is admin, so widen this (e.g. `660`) only together with local identities. |
 | `--tls-addr <ADDR>` | `VIGIL_TLS_ADDR` | — | Enable HTTPS listener, e.g. `0.0.0.0:8443` |
+| `--tls-anonymous-access <LEVEL>` | `VIGIL_TLS_ANONYMOUS_ACCESS` | `metrics` | Access of TLS callers without a matching identity: `metrics` (`/v1/metrics`, `/v1/checks`, `/v1/system-info`) or `open` (without metrics). Logs, services and state changes always need an identity over TLS. |
 | `--cert <PATH>` | `VIGIL_CERT` | — | PEM certificate file for TLS (auto-generated if omitted) |
 | `--key <PATH>` | `VIGIL_KEY` | — | PEM private key file for TLS (auto-generated if omitted) |
 | `--reaper` | `VIGIL_REAPER` | — | Force subreaper mode (automatic when PID 1) |

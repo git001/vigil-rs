@@ -99,6 +99,9 @@ pub struct AppState {
     pub identity_store: Arc<IdentityStore>,
     pub metrics: Arc<MetricsStore>,
     pub shutdown_tx: tokio::sync::mpsc::Sender<DaemonAction>,
+    /// Access level of TLS callers without a matching identity
+    /// (`--tls-anonymous-access`, `Open` or `Metrics`).
+    pub tls_anonymous_access: IdentityAccess,
 }
 
 // ---------------------------------------------------------------------------

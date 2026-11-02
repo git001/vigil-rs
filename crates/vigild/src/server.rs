@@ -27,6 +27,12 @@ use tracing::info;
 #[derive(Clone)]
 pub struct TlsPeerCert(pub Vec<u8>);
 
+/// Marker injected into every request that arrives over the TLS listener,
+/// with or without a client certificate. Lets the auth layer tell TLS
+/// callers apart from Unix-socket callers.
+#[derive(Clone, Copy, Debug)]
+pub struct TlsConnection;
+
 // ---------------------------------------------------------------------------
 // Unix peer credentials passed via ConnectInfo
 // ---------------------------------------------------------------------------
@@ -193,6 +199,7 @@ pub async fn serve_tls(addr: &str, acceptor: TlsAcceptor, router: Router) -> any
                             let mut r = router.clone();
                             let cert = peer_cert.clone();
                             async move {
+                                req.extensions_mut().insert(TlsConnection);
                                 if let Some(c) = cert {
                                     req.extensions_mut().insert(c);
                                 }

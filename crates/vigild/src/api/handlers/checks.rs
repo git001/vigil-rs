@@ -15,11 +15,10 @@ use super::{NamesQuery, parse_names};
     get, path = "/v1/checks",
     tag = "checks",
     summary = "List health checks",
-    description = "Returns the current status of all or selected health checks.\n\n**Required access:** `read` or higher.",
+    description = "Returns the current status of all or selected health checks.\n\n**Required access:** `open` (no credentials; usable by Kubernetes httpGet probes).",
     params(NamesQuery),
     responses(
         (status = 200, description = "List of check status entries.", body = Vec<CheckInfo>),
-        (status = 403, description = "Forbidden."),
         (status = 500, description = "Internal error."),
     )
 )]
@@ -28,8 +27,10 @@ pub(crate) async fn list_checks(
     State(s): State<AppState>,
     Query(q): Query<NamesQuery>,
 ) -> ApiResult<Vec<CheckInfo>> {
+    // Open: only names and up/down state, needed by unauthenticated
+    // Kubernetes probes (httpGet cannot send credentials).
     caller
-        .require(IdentityAccess::Read)
+        .require(IdentityAccess::Open)
         .map_err(ApiError::forbidden_from)?;
     let (tx, rx) = oneshot::channel();
     s.overlord
