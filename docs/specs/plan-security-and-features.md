@@ -406,6 +406,9 @@ steps; it feeds the changelog's "Breaking Changes" section.
   without capabilities.
 - The new `Starting` status and OpenAPI changes ship in v4.
 - No vigil operator; ConfigMap-based layers with auto-replan instead (4c).
+- Proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) are
+  not part of the default base set: proxy URLs may carry credentials. Pass
+  them per service, e.g. `pass-env-regex: ['(?i)(https?|all|no)_proxy']`.
 
 ## Open decisions
 
