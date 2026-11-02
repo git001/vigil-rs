@@ -11,7 +11,9 @@ use vigil_types::api::LogStream;
 use vigil_types::plan::LogsForward;
 
 use crate::logs::spawn_reader;
-use crate::process_util::{apply_credentials, parse_command, resolve_credentials};
+use crate::process_util::{
+    EnvPolicy, apply_credentials, apply_env, parse_command, resolve_credentials,
+};
 use crate::state::ServiceState;
 
 use super::Actor;
@@ -38,9 +40,6 @@ impl Actor {
             cmd.args(&argv[1..]);
         }
 
-        if !self.config.environment.is_empty() {
-            cmd.envs(self.config.environment.iter());
-        }
         if let Some(dir) = &self.config.working_dir {
             cmd.current_dir(dir);
         }
@@ -51,6 +50,17 @@ impl Actor {
             self.config.group.as_deref(),
             self.config.group_id,
         )?;
+        let policy = EnvPolicy::compile(
+            self.config.pass_env,
+            &self.config.pass_env_glob,
+            &self.config.pass_env_regex,
+        )?;
+        let env = policy.build(
+            std::env::vars_os(),
+            creds.as_ref(),
+            &self.config.environment,
+        );
+        apply_env(&mut cmd, env);
         apply_credentials(&mut cmd, creds);
 
         cmd.process_group(0);

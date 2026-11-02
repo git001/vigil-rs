@@ -136,6 +136,16 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Hide vigild's own environment (possibly holding secrets from the
+    // container spec) from services running with the same UID: with
+    // dumpable=0, /proc/<vigild>/environ and friends become root-owned.
+    // Needs no capabilities; children are unaffected (reset on execve).
+    #[cfg(target_os = "linux")]
+    match nix::sys::prctl::set_dumpable(false) {
+        Ok(()) => tracing::debug!("PR_SET_DUMPABLE=0"),
+        Err(e) => tracing::warn!(%e, "prctl(PR_SET_DUMPABLE, 0) failed"),
+    }
+
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?

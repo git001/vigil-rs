@@ -42,6 +42,23 @@ spec:
         name: myapp-vigil-layers
 ```
 
+### Environment variables and Secrets
+
+Variables from `env:` / `envFrom:` (including Secrets, e.g. synced by the
+External Secrets Operator) are set on the container, so they reach **vigild**.
+Since v4, services do not inherit them automatically: list what each service
+needs with `pass-env-glob` / `pass-env-regex` (see the
+[configuration reference](../user-guide/configuration.md#environment--pass-env--pass-env-glob--pass-env-regex)).
+
+```yaml
+services:
+  api:
+    command: /usr/local/bin/api
+    pass-env-glob: [DATABASE_URL, DB_PASSWORD, APP_*]
+```
+
+Use `pass-env: true` to restore the pre-v4 behaviour for a service.
+
 ### ConfigMap for layers
 
 ```yaml

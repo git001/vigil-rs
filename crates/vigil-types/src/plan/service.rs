@@ -81,6 +81,19 @@ pub struct ServiceConfig {
     pub requires: Vec<String>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub environment: IndexMap<String, String>,
+    /// Pass vigild's whole environment to the service. Default (unset):
+    /// `false`, i.e. only PATH, HOME, USER, LOGNAME, TZ plus variables
+    /// matched by `pass-env-glob` / `pass-env-regex`, plus `environment`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pass_env: Option<bool>,
+    /// Names of vigild environment variables to pass through; `*` and `?`
+    /// wildcards, the pattern must match the whole name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pass_env_glob: Vec<String>,
+    /// Regular expressions (anchored to the whole name) selecting vigild
+    /// environment variables to pass through.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pass_env_regex: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -159,6 +172,17 @@ pub(super) fn merge_service(base: &mut ServiceConfig, overlay: &ServiceConfig) {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone())),
     );
+    opt!(pass_env);
+    for v in &overlay.pass_env_glob {
+        if !base.pass_env_glob.contains(v) {
+            base.pass_env_glob.push(v.clone());
+        }
+    }
+    for v in &overlay.pass_env_regex {
+        if !base.pass_env_regex.contains(v) {
+            base.pass_env_regex.push(v.clone());
+        }
+    }
     opt!(user);
     opt!(user_id);
     opt!(group);

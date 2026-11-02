@@ -245,6 +245,7 @@ fn exec(command: &str) -> vigil_types::plan::ExecCheck {
         group: None,
         group_id: None,
         working_dir: None,
+        ..Default::default()
     }
 }
 
@@ -433,4 +434,50 @@ async fn tcp_check_default_host_via_perform() {
     )
     .await;
     assert!(result);
+}
+
+/// S2: an exec probe must not see vigild's environment unless allowed.
+/// `cargo test` exports CARGO_MANIFEST_DIR into the test process, which
+/// plays the part of a secret in vigild's environment here.
+#[tokio::test]
+async fn exec_check_does_not_inherit_vigild_env_by_default() {
+    if std::env::var_os("CARGO_MANIFEST_DIR").is_none() {
+        eprintln!("skipped: CARGO_MANIFEST_DIR not set");
+        return;
+    }
+    let hidden = exec(r#"[ -z "$CARGO_MANIFEST_DIR" ] && [ -n "$PATH" ]"#);
+    assert!(
+        probe_exec(&hidden, Duration::from_secs(5), &empty_svc_configs()).await,
+        "variable leaked into the probe (or PATH missing)"
+    );
+
+    let mut allowed = exec(r#"[ -n "$CARGO_MANIFEST_DIR" ]"#);
+    allowed.pass_env_glob = vec!["CARGO_*".to_string()];
+    assert!(
+        probe_exec(&allowed, Duration::from_secs(5), &empty_svc_configs()).await,
+        "pass-env-glob did not pass the variable"
+    );
+
+    let mut all = exec(r#"[ -n "$CARGO_MANIFEST_DIR" ]"#);
+    all.pass_env = Some(true);
+    assert!(probe_exec(&all, Duration::from_secs(5), &empty_svc_configs()).await);
+}
+
+/// The probe inherits the service context's pass-env lists.
+#[tokio::test]
+async fn exec_check_uses_service_context_pass_env() {
+    if std::env::var_os("CARGO_MANIFEST_DIR").is_none() {
+        return;
+    }
+    let mut svcs = IndexMap::new();
+    svcs.insert(
+        "app".to_string(),
+        vigil_types::plan::ServiceConfig {
+            pass_env_regex: vec!["CARGO_MANIFEST_.*".to_string()],
+            ..Default::default()
+        },
+    );
+    let mut e = exec(r#"[ -n "$CARGO_MANIFEST_DIR" ]"#);
+    e.service_context = Some("app".to_string());
+    assert!(probe_exec(&e, Duration::from_secs(5), &svcs).await);
 }

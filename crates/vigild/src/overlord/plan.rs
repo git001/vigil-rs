@@ -40,7 +40,29 @@ pub fn load_plan(dir: &Path) -> anyhow::Result<Plan> {
         layers.push(layer);
     }
 
-    Ok(Plan::from_layers(layers))
+    let plan = Plan::from_layers(layers);
+    validate(&plan)?;
+    Ok(plan)
+}
+
+/// Checks that need more than deserialization. Runs on startup and on every
+/// replan, so a bad layer is rejected before anything is (re)started.
+fn validate(plan: &Plan) -> anyhow::Result<()> {
+    use crate::process_util::EnvPolicy;
+
+    for (name, svc) in &plan.services {
+        EnvPolicy::for_service(svc).with_context(|| format!("service {name:?}"))?;
+    }
+    for (name, check) in &plan.checks {
+        if let Some(exec) = &check.exec {
+            let ctx = exec
+                .service_context
+                .as_deref()
+                .and_then(|s| plan.services.get(s));
+            EnvPolicy::for_exec_check(exec, ctx).with_context(|| format!("check {name:?}"))?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -51,6 +73,63 @@ mod tests {
 
     fn write(dir: &TempDir, name: &str, content: &str) {
         fs::write(dir.path().join(name), content).unwrap();
+    }
+
+    #[test]
+    fn invalid_pass_env_regex_rejects_plan() {
+        let dir = TempDir::new().unwrap();
+        write(
+            &dir,
+            "001.yaml",
+            "services:\n  app:\n    command: /bin/true\n    pass-env-regex: ['(']\n",
+        );
+        let err = format!("{:#}", load_plan(dir.path()).unwrap_err());
+        assert!(err.contains("service \"app\""), "{err}");
+        assert!(err.contains("invalid pass-env-regex"), "{err}");
+    }
+
+    #[test]
+    fn pass_env_true_with_globs_rejects_plan() {
+        let dir = TempDir::new().unwrap();
+        write(
+            &dir,
+            "001.yaml",
+            "services:\n  app:\n    command: /bin/true\n    pass-env: true\n    pass-env-glob: [APP_*]\n",
+        );
+        assert!(load_plan(dir.path()).is_err());
+    }
+
+    #[test]
+    fn exec_check_inherits_context_lists_for_validation() {
+        let dir = TempDir::new().unwrap();
+        write(
+            &dir,
+            "001.yaml",
+            "services:\n  app:\n    command: /bin/true\n    pass-env-glob: [APP_*]\n\
+             checks:\n  c:\n    exec:\n      command: 'true'\n      service-context: app\n      pass-env: true\n",
+        );
+        let err = format!("{:#}", load_plan(dir.path()).unwrap_err());
+        assert!(err.contains("check \"c\""), "{err}");
+    }
+
+    #[test]
+    fn pass_env_fields_parse_and_merge() {
+        let dir = TempDir::new().unwrap();
+        write(
+            &dir,
+            "001.yaml",
+            "services:\n  app:\n    command: /bin/true\n    pass-env-glob: [APP_*]\n",
+        );
+        write(
+            &dir,
+            "002.yaml",
+            "services:\n  app:\n    override: merge\n    pass-env-glob: [DB_*]\n    pass-env-regex: ['^K8S_.*']\n",
+        );
+        let plan = load_plan(dir.path()).unwrap();
+        let app = &plan.services["app"];
+        assert_eq!(app.pass_env_glob, vec!["APP_*", "DB_*"]);
+        assert_eq!(app.pass_env_regex, vec!["^K8S_.*"]);
+        assert_eq!(app.pass_env, None);
     }
 
     #[test]

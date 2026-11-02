@@ -3070,6 +3070,7 @@ dependencies = [
  "notify",
  "prometheus-client",
  "rcgen",
+ "regex",
  "reqwest",
  "rustls",
  "rustls-pemfile",

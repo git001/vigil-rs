@@ -29,6 +29,7 @@ fn exec_cfg(cmd: &str, threshold: u32) -> CheckConfig {
             group: None,
             group_id: None,
             working_dir: None,
+            ..Default::default()
         }),
         ..Default::default()
     }

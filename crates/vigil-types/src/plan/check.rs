@@ -74,6 +74,15 @@ pub struct ExecCheck {
     pub service_context: Option<String>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub environment: IndexMap<String, String>,
+    /// Same as the service field; overrides the service context's value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pass_env: Option<bool>,
+    /// Appended to the service context's `pass-env-glob`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pass_env_glob: Vec<String>,
+    /// Appended to the service context's `pass-env-regex`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pass_env_regex: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

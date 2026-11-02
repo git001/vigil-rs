@@ -8,7 +8,7 @@ use tokio::time::timeout;
 use tracing::{debug, warn};
 use vigil_types::plan::{ExecCheck, ServiceConfig};
 
-use crate::process_util::{apply_credentials, resolve_credentials};
+use crate::process_util::{EnvPolicy, apply_credentials, apply_env, resolve_credentials};
 
 pub(super) async fn probe_exec(
     exec: &ExecCheck,
@@ -52,6 +52,16 @@ pub(super) async fn probe_exec(
         }
     };
 
+    // Same environment the service would get (see process_util::env).
+    let policy = match EnvPolicy::for_exec_check(exec, ctx_svc) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!(%e, "exec check: invalid pass-env settings");
+            return false;
+        }
+    };
+    let env = policy.build(std::env::vars_os(), creds.as_ref(), &env);
+
     let command = exec.command.clone();
     let working_dir = eff_working_dir.map(str::to_owned);
 
@@ -59,9 +69,7 @@ pub(super) async fn probe_exec(
         let mut cmd = tokio::process::Command::new("sh");
         cmd.args(["-c", &command]);
 
-        if !env.is_empty() {
-            cmd.envs(env.iter());
-        }
+        apply_env(&mut cmd, env);
         if let Some(dir) = &working_dir {
             cmd.current_dir(dir);
         }

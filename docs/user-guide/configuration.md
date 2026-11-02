@@ -63,6 +63,9 @@ services:
     environment:
       FOO: bar
       DATABASE_URL: postgres://localhost/mydb
+    pass-env: false                    # inherit vigild's whole environment? (default: false)
+    pass-env-glob: [APP_*, LOG_LEVEL]  # pass these vigild variables (wildcards * and ?)
+    pass-env-regex: ['^K8S_[A-Z]+_URL$']  # pass vigild variables matching (anchored)
 
     # --- Startup ---
     startup: enabled                   # enabled | disabled (default: disabled)
@@ -127,6 +130,46 @@ with `CAP_SETUID`/`CAP_SETGID`).
   `/etc/group` (or only the primary group if the user has no passwd
   entry). The child never keeps root's groups.
 - Exec checks running in a service context use the same rules.
+
+#### `environment` / `pass-env` / `pass-env-glob` / `pass-env-regex`
+
+A service does **not** inherit vigild's environment by default. vigild's
+environment often holds secrets (for example Kubernetes `env`/`envFrom` from
+Secrets) that a service does not need. A service gets:
+
+1. A minimal base: `PATH` (vigild's, or a standard path if unset), `TZ` if
+   set, and `HOME`, `USER`, `LOGNAME`. With `user`/`user-id` these describe
+   the target user from `/etc/passwd`; otherwise they are vigild's.
+2. vigild variables selected by `pass-env-glob` or `pass-env-regex`.
+3. `environment`, which overrides everything above.
+
+| Field | Meaning |
+|---|---|
+| `pass-env` | `true` passes vigild's entire environment (the behaviour before v4). Cannot be combined with `pass-env-glob`/`pass-env-regex`. Default `false`. |
+| `pass-env-glob` | List of variable names. `*` matches any characters, `?` exactly one; the pattern must match the **whole** name (`APP_*` does not match `MY_APP_X`). |
+| `pass-env-regex` | List of regular expressions, each anchored to the whole name (`TOKEN` does not match `MY_TOKEN`; write `.*TOKEN.*` for that). |
+
+Glob and regex matches are combined. Invalid regular expressions, or
+`pass-env: true` together with a list, make the layer invalid: vigild refuses
+to start, and `vigil replan` keeps the running plan. In layer merges the
+lists are appended and `pass-env` is overridden.
+
+Which variables were passed is logged at debug level, as names only.
+
+vigild also marks itself non-dumpable at startup, so services running with
+the same UID (e.g. on OpenShift) cannot read vigild's environment through
+`/proc/<pid>/environ` either.
+
+```yaml
+# Kubernetes: the Deployment sets DATABASE_URL, DB_PASSWORD, APP_* and LOG_LEVEL.
+services:
+  api:
+    command: /usr/local/bin/api
+    pass-env-glob: [DATABASE_URL, DB_PASSWORD, APP_*, LOG_LEVEL]
+  worker:
+    command: /usr/local/bin/worker
+    pass-env-glob: [APP_*]       # no database credentials for the worker
+```
 
 #### `startup`
 
@@ -408,6 +451,12 @@ suppressed (they do not appear in container logs).
 `service-context` inherits the environment variables, user, group, and working
 directory from the named service. Individual fields (`user`, `user-id`, `group`,
 `group-id`, `working-dir`, `environment`) override the inherited values.
+
+Exec checks follow the same environment rules as services (see
+[`pass-env`](#environment--pass-env--pass-env-glob--pass-env-regex)): they
+accept `pass-env`, `pass-env-glob` and `pass-env-regex` as well. The check's
+`pass-env` overrides the service context's; the glob and regex lists are
+combined with the service context's lists.
 
 ---
 
