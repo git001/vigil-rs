@@ -95,17 +95,10 @@ pub fn resolve_credentials(
     let gid = match (gid, &pw) {
         (Some(g), _) => g,
         (None, Some(pw)) => pw.gid,
-        (None, None) => {
-            // v3.x compatibility: warn and fall back to gid = uid instead of
-            // failing (v4 makes this an error). Keeping vigild's GID, as
-            // before 3.2.2, would leave the child in group 0.
-            tracing::warn!(
-                uid = uid.as_raw(),
-                "uid has no passwd entry and no group is configured; using gid = uid. \
-                 Set `group` or `group-id` explicitly (this becomes an error in v4)"
-            );
-            Gid::from_raw(uid.as_raw())
-        }
+        (None, None) => anyhow::bail!(
+            "uid {uid} has no passwd entry, so its primary group is unknown; \
+             set `group` or `group-id` explicitly"
+        ),
     };
 
     let mut groups = match &pw {

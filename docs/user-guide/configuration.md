@@ -120,9 +120,9 @@ with `CAP_SETUID`/`CAP_SETGID`).
 - Nothing set: the service runs with vigild's own identity and no
   credential change is attempted. This is the normal case on OpenShift.
 - `user` or `user-id` without a group: the user's **primary group from
-  `/etc/passwd`** is used. For a numeric `user-id` without a passwd entry
-  vigild logs a warning and uses GID = UID. Set `group` or `group-id`
-  explicitly; from v4 on this case is an error.
+  `/etc/passwd`** is used. A numeric `user-id` without a passwd entry
+  needs an explicit `group` or `group-id`, otherwise the service fails to
+  start (3.2.x only warned and used GID = UID).
 - The supplementary groups are always reset to the user's groups from
   `/etc/group` (or only the primary group if the user has no passwd
   entry). The child never keeps root's groups.

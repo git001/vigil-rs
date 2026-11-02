@@ -213,13 +213,10 @@ fn credentials_user_id_without_group_uses_primary_gid() {
 }
 
 #[test]
-fn credentials_unknown_uid_without_group_falls_back_to_gid_eq_uid() {
-    // 3.x behaviour (warning); becomes an error in v4.
-    let c = resolve_credentials(None, Some(4_000_123), None, None)
-        .unwrap()
-        .unwrap();
-    assert_eq!(c.gid, Gid::from_raw(4_000_123));
-    assert_eq!(c.groups, vec![Gid::from_raw(4_000_123)]);
+fn credentials_unknown_uid_without_group_errors() {
+    // v4: no silent fallback (3.2.x warned and used gid = uid).
+    let err = resolve_credentials(None, Some(4_000_123), None, None).unwrap_err();
+    assert!(err.to_string().contains("no passwd entry"), "{err}");
 }
 
 #[test]
