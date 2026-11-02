@@ -13,7 +13,16 @@
 //!  * optionally calls `prctl(PR_SET_CHILD_SUBREAPER)` so we become the
 //!    reaper for orphans even when we are *not* PID 1
 //!  * spawns a tokio task that collects zombie processes on `SIGCHLD`
+//!  * keeps the exit statuses it collected, so that a waiter it beat
+//!    ([`wait_child`]) still gets its child's
 
+use std::collections::HashMap;
+use std::os::unix::process::ExitStatusExt;
+use std::process::ExitStatus;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+use tokio::process::Child;
 use tracing::{debug, warn};
 
 // ---------------------------------------------------------------------------
@@ -53,15 +62,18 @@ pub fn enable_subreaper() -> anyhow::Result<()> {
 // Zombie reaper task
 // ---------------------------------------------------------------------------
 
-/// Spawn a background tokio task that reaps orphaned zombie processes whenever
+/// Spawn a background tokio task that reaps zombie processes whenever
 /// `SIGCHLD` is delivered.
 ///
-/// # Safety / interaction with tokio
-/// On Linux ≥ 5.10 tokio uses `pidfd_open(2)` for processes it spawns, so
-/// our `waitpid(-1, WNOHANG)` loop collects only truly orphaned zombies.
-/// On older kernels there is a theoretical race (we could collect a PID tokio
-/// is about to wait on), but in the primary use-case — single-binary container
-/// init — the practical risk is negligible.
+/// # Interaction with tokio
+/// `waitpid(-1, WNOHANG)` collects *any* exited child, including the ones
+/// vigild spawned itself (services, exec checks) and waits on through tokio:
+/// a pidfd tells tokio when its child has exited, but does not keep another
+/// `waitpid` from collecting it first. When the reaper wins, tokio's wait
+/// fails with `ECHILD` and the child's exit status would be lost (a service
+/// that exited 0 was reported as failed, exit code 1), so the reaper keeps
+/// what it collected for a while ([`REAPED_KEEP`]) and [`wait_child`] takes
+/// it from there.
 pub fn spawn_reaper() -> anyhow::Result<()> {
     let mut sigchld = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child())?;
     tokio::spawn(async move {
@@ -83,7 +95,8 @@ fn reap_children() {
         match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
             Ok(WaitStatus::StillAlive) => break,
             Ok(status) => {
-                debug!("reaped orphan: {:?}", status);
+                debug!("reaped: {:?}", status);
+                record_reaped(status);
             }
             Err(Errno::ECHILD) => break, // no children left
             Err(e) => {
@@ -91,5 +104,148 @@ fn reap_children() {
                 break;
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Exit statuses the reaper collected
+// ---------------------------------------------------------------------------
+
+/// How long the reaper keeps a status it collected. A waiter whose wait it
+/// beat asks within milliseconds; an orphan's status is never asked for, and
+/// is dropped after this.
+pub const REAPED_KEEP: Duration = Duration::from_secs(60);
+
+/// How long [`wait_child`] looks for a status the reaper collected: the
+/// reaper records it right after its `waitpid`, but a waiter can see `ECHILD`
+/// in between.
+const REAPED_LOOKUP: Duration = Duration::from_millis(200);
+
+/// Raw wait statuses by PID, with when they were collected.
+fn reaped() -> &'static Mutex<HashMap<i32, (Instant, i32)>> {
+    static REAPED: OnceLock<Mutex<HashMap<i32, (Instant, i32)>>> = OnceLock::new();
+    REAPED.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Keeps a collected child's exit status, as the raw wait status
+/// `ExitStatus::from_raw` takes, for [`wait_child`]. Statuses older than
+/// [`REAPED_KEEP`] are dropped.
+fn record_reaped(status: nix::sys::wait::WaitStatus) {
+    use nix::sys::wait::WaitStatus;
+
+    let (pid, raw) = match status {
+        WaitStatus::Exited(pid, code) => (pid, (code & 0xff) << 8),
+        WaitStatus::Signaled(pid, signal, core) => {
+            (pid, signal as i32 | if core { 0x80 } else { 0 })
+        }
+        // Stopped / continued children are not collected (no WUNTRACED).
+        _ => return,
+    };
+    let now = Instant::now();
+    let mut map = reaped().lock().unwrap_or_else(|e| e.into_inner());
+    map.retain(|_, (at, _)| now.duration_since(*at) < REAPED_KEEP);
+    map.insert(pid.as_raw(), (now, raw));
+}
+
+/// The exit status the reaper collected for `pid`, if it did, removed from
+/// the record.
+fn take_reaped(pid: u32) -> Option<ExitStatus> {
+    let mut map = reaped().lock().unwrap_or_else(|e| e.into_inner());
+    map.remove(&(pid as i32))
+        .map(|(_, raw)| ExitStatus::from_raw(raw))
+}
+
+/// Wait for `child` to exit, as `Child::wait` does, and get its exit status
+/// even when the reaper collected it first.
+///
+/// Use this instead of `child.wait()` for every child vigild spawns while the
+/// reaper runs (PID 1 or `--reaper`). Without the reaper it is
+/// `child.wait()`.
+pub async fn wait_child(child: &mut Child) -> std::io::Result<ExitStatus> {
+    // Before the wait: tokio forgets the PID once the child is waited for.
+    let pid = child.id();
+    match child.wait().await {
+        Err(e) if e.raw_os_error() == Some(nix::errno::Errno::ECHILD as i32) => {
+            let Some(pid) = pid else { return Err(e) };
+            let deadline = Instant::now() + REAPED_LOOKUP;
+            loop {
+                if let Some(status) = take_reaped(pid) {
+                    return Ok(status);
+                }
+                if Instant::now() >= deadline {
+                    return Err(e);
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nix::sys::wait::waitpid;
+    use nix::unistd::Pid;
+
+    /// Collects `child` the way the reaper does, before its waiter can.
+    fn reap_first(child: &Child) {
+        let pid = Pid::from_raw(child.id().expect("child has a pid") as i32);
+        let status = waitpid(pid, None).expect("waitpid");
+        record_reaped(status);
+    }
+
+    #[tokio::test]
+    async fn exit_code_survives_the_reaper_collecting_it_first() {
+        let mut child = tokio::process::Command::new("sh")
+            .args(["-c", "exit 3"])
+            .spawn()
+            .unwrap();
+        reap_first(&child);
+        let status = wait_child(&mut child).await.expect("status recovered");
+        assert_eq!(status.code(), Some(3));
+    }
+
+    #[tokio::test]
+    async fn success_survives_the_reaper_collecting_it_first() {
+        let mut child = tokio::process::Command::new("true").spawn().unwrap();
+        reap_first(&child);
+        let status = wait_child(&mut child).await.expect("status recovered");
+        assert!(status.success());
+    }
+
+    #[tokio::test]
+    async fn signal_survives_the_reaper_collecting_it_first() {
+        use std::os::unix::process::ExitStatusExt;
+        let mut child = tokio::process::Command::new("sh")
+            .args(["-c", "kill -TERM $$"])
+            .spawn()
+            .unwrap();
+        reap_first(&child);
+        let status = wait_child(&mut child).await.expect("status recovered");
+        assert_eq!(
+            status.signal(),
+            Some(nix::sys::signal::Signal::SIGTERM as i32)
+        );
+    }
+
+    #[tokio::test]
+    async fn without_the_reaper_it_is_child_wait() {
+        let mut child = tokio::process::Command::new("sh")
+            .args(["-c", "exit 7"])
+            .spawn()
+            .unwrap();
+        let status = wait_child(&mut child).await.unwrap();
+        assert_eq!(status.code(), Some(7));
+    }
+
+    #[test]
+    fn statuses_older_than_the_keep_window_are_dropped() {
+        let old = Instant::now() - REAPED_KEEP - Duration::from_secs(1);
+        reaped().lock().unwrap().insert(-42, (old, 0));
+        record_reaped(nix::sys::wait::WaitStatus::Exited(Pid::from_raw(-43), 0));
+        let map = reaped().lock().unwrap();
+        assert!(!map.contains_key(&-42));
+        assert!(map.contains_key(&-43));
     }
 }

@@ -161,7 +161,7 @@ pub(super) async fn run(
 
             status = async {
                 match actor.child.as_mut() {
-                    Some(c) => c.wait().await,
+                    Some(c) => crate::reaper::wait_child(c).await,
                     None => std::future::pending().await,
                 }
             } => {
