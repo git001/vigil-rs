@@ -149,10 +149,23 @@ fn record_reaped(status: nix::sys::wait::WaitStatus) {
 
 /// The exit status the reaper collected for `pid`, if it did, removed from
 /// the record.
-fn take_reaped(pid: u32) -> Option<ExitStatus> {
+///
+/// Only a status collected at or after `spawned_at` can belong to the child
+/// we wait for. An older entry is the status of an earlier process that had
+/// the same PID (e.g. an orphan reaped within [`REAPED_KEEP`] before the PID
+/// was reused); it is discarded instead of being returned.
+fn take_reaped(pid: u32, spawned_at: Instant) -> Option<ExitStatus> {
     let mut map = reaped().lock().unwrap_or_else(|e| e.into_inner());
-    map.remove(&(pid as i32))
-        .map(|(_, raw)| ExitStatus::from_raw(raw))
+    match map.get(&(pid as i32)) {
+        Some((at, _)) if *at < spawned_at => {
+            map.remove(&(pid as i32));
+            None
+        }
+        Some(_) => map
+            .remove(&(pid as i32))
+            .map(|(_, raw)| ExitStatus::from_raw(raw)),
+        None => None,
+    }
 }
 
 /// Wait for `child` to exit, as `Child::wait` does, and get its exit status
@@ -161,7 +174,10 @@ fn take_reaped(pid: u32) -> Option<ExitStatus> {
 /// Use this instead of `child.wait()` for every child vigild spawns while the
 /// reaper runs (PID 1 or `--reaper`). Without the reaper it is
 /// `child.wait()`.
-pub async fn wait_child(child: &mut Child) -> std::io::Result<ExitStatus> {
+///
+/// `spawned_at` must be taken right before the child was spawned; it keeps a
+/// stale status of an earlier process with the same PID from being returned.
+pub async fn wait_child(child: &mut Child, spawned_at: Instant) -> std::io::Result<ExitStatus> {
     // Before the wait: tokio forgets the PID once the child is waited for.
     let pid = child.id();
     match child.wait().await {
@@ -169,7 +185,7 @@ pub async fn wait_child(child: &mut Child) -> std::io::Result<ExitStatus> {
             let Some(pid) = pid else { return Err(e) };
             let deadline = Instant::now() + REAPED_LOOKUP;
             loop {
-                if let Some(status) = take_reaped(pid) {
+                if let Some(status) = take_reaped(pid, spawned_at) {
                     return Ok(status);
                 }
                 if Instant::now() >= deadline {
@@ -197,32 +213,41 @@ mod tests {
 
     #[tokio::test]
     async fn exit_code_survives_the_reaper_collecting_it_first() {
+        let spawned = Instant::now();
         let mut child = tokio::process::Command::new("sh")
             .args(["-c", "exit 3"])
             .spawn()
             .unwrap();
         reap_first(&child);
-        let status = wait_child(&mut child).await.expect("status recovered");
+        let status = wait_child(&mut child, spawned)
+            .await
+            .expect("status recovered");
         assert_eq!(status.code(), Some(3));
     }
 
     #[tokio::test]
     async fn success_survives_the_reaper_collecting_it_first() {
+        let spawned = Instant::now();
         let mut child = tokio::process::Command::new("true").spawn().unwrap();
         reap_first(&child);
-        let status = wait_child(&mut child).await.expect("status recovered");
+        let status = wait_child(&mut child, spawned)
+            .await
+            .expect("status recovered");
         assert!(status.success());
     }
 
     #[tokio::test]
     async fn signal_survives_the_reaper_collecting_it_first() {
         use std::os::unix::process::ExitStatusExt;
+        let spawned = Instant::now();
         let mut child = tokio::process::Command::new("sh")
             .args(["-c", "kill -TERM $$"])
             .spawn()
             .unwrap();
         reap_first(&child);
-        let status = wait_child(&mut child).await.expect("status recovered");
+        let status = wait_child(&mut child, spawned)
+            .await
+            .expect("status recovered");
         assert_eq!(
             status.signal(),
             Some(nix::sys::signal::Signal::SIGTERM as i32)
@@ -231,12 +256,42 @@ mod tests {
 
     #[tokio::test]
     async fn without_the_reaper_it_is_child_wait() {
+        let spawned = Instant::now();
         let mut child = tokio::process::Command::new("sh")
             .args(["-c", "exit 7"])
             .spawn()
             .unwrap();
-        let status = wait_child(&mut child).await.unwrap();
+        let status = wait_child(&mut child, spawned).await.unwrap();
         assert_eq!(status.code(), Some(7));
+    }
+
+    /// S3 rest: a status recorded before the child was spawned belongs to an
+    /// earlier process with the same PID and must not be returned.
+    #[test]
+    fn status_recorded_before_spawn_is_ignored() {
+        let pid: u32 = 4_000_001; // beyond any real pid_max default
+        let before = Instant::now();
+        record_reaped(nix::sys::wait::WaitStatus::Exited(
+            Pid::from_raw(pid as i32),
+            7,
+        ));
+        let spawned_later = Instant::now() + Duration::from_millis(1);
+        assert!(
+            take_reaped(pid, spawned_later).is_none(),
+            "stale status returned"
+        );
+        assert!(
+            take_reaped(pid, before).is_none(),
+            "stale entry must have been discarded"
+        );
+
+        let spawned = Instant::now();
+        record_reaped(nix::sys::wait::WaitStatus::Exited(
+            Pid::from_raw(pid as i32),
+            3,
+        ));
+        let st = take_reaped(pid, spawned).expect("fresh status");
+        assert_eq!(st.code(), Some(3));
     }
 
     #[test]

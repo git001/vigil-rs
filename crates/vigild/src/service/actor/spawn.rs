@@ -77,6 +77,7 @@ impl Actor {
             cmd.stderr(std::process::Stdio::piped());
         }
 
+        self.spawned_at = std::time::Instant::now();
         let mut child = cmd
             .spawn()
             .map_err(|e| anyhow::anyhow!("failed to spawn '{}': {}", argv[0], e))?;

@@ -36,6 +36,9 @@ pub(super) struct Actor {
     state: ServiceState,
     since: DateTime<Utc>,
     child: Option<Child>,
+    /// Taken right before the current child was spawned (see
+    /// `reaper::wait_child`).
+    spawned_at: std::time::Instant,
     backoff_count: u32,
     current_backoff: Duration,
     event_tx: mpsc::Sender<Event>,
@@ -57,6 +60,7 @@ impl Actor {
             state: ServiceState::Inactive,
             since: Utc::now(),
             child: None,
+            spawned_at: std::time::Instant::now(),
             backoff_count: 0,
             current_backoff: DEFAULT_BACKOFF_DELAY,
             event_tx,
@@ -161,7 +165,7 @@ pub(super) async fn run(
 
             status = async {
                 match actor.child.as_mut() {
-                    Some(c) => crate::reaper::wait_child(c).await,
+                    Some(c) => crate::reaper::wait_child(c, actor.spawned_at).await,
                     None => std::future::pending().await,
                 }
             } => {
