@@ -34,18 +34,21 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Generate changelog
+      # Release notes: only the section of the tag being released, without
+      # the CHANGELOG.md header and the compare-link footer. CHANGELOG.md
+      # itself is committed (regenerated in the version-bump commit).
+      - name: Generate release notes
         id: cliff
         uses: orhun/git-cliff-action@v4
         with:
           config: cliff.toml
-          args: --latest --strip header
+          args: --latest --strip all
 
-      - name: Upload CHANGELOG.md
+      - name: Upload release notes
         uses: actions/upload-artifact@v4
         with:
           name: changelog
-          path: CHANGELOG.md
+          path: ${{ steps.cliff.outputs.changelog }}
 
   # ───────────────────────────────────────────────────────────────────────────
   # 2. Tests
