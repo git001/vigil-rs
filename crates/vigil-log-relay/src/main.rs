@@ -48,6 +48,9 @@ async fn main() -> Result<()> {
         .ok();
 
     let cli = Cli::parse();
+    if let Err(msg) = cli.validate() {
+        bail!("{msg}");
+    }
 
     let env_filter = if std::env::var("RUST_LOG").is_ok() {
         tracing_subscriber::EnvFilter::from_default_env()

@@ -97,17 +97,20 @@ pub struct Cli {
 
     /// Skip TLS certificate verification for the source connection.
     ///
-    /// Applies to --source-url mode. Useful when vigild uses a self-signed certificate.
+    /// Only for --source-url (rejected with --kubernetes: configure TLS for the
+    /// Kubernetes API in the kubeconfig). Useful when vigild uses a self-signed certificate.
     #[arg(long, env = "SOURCE_INSECURE", help_heading = "Source Connection")]
     pub source_insecure: bool,
 
     /// PEM file with one or more CA certificates (chain) to verify the source's TLS.
     ///
     /// Supports chain files with multiple concatenated PEM blocks.
-    /// Applies to --source-url mode.
+    /// Only for --source-url (with --kubernetes, the CA comes from the
+    /// ServiceAccount or the kubeconfig).
     #[arg(
         long,
         env = "SOURCE_CACERT",
+        conflicts_with_all = ["kubernetes", "source_socket"],
         value_name = "PATH",
         help_heading = "Source Connection"
     )]
@@ -118,10 +121,12 @@ pub struct Cli {
     /// Read on every (re)connect, so a rotated Secret is picked up without a
     /// restart. A trailing newline is ignored. Use this with a vigild
     /// identity of access `read` to stream logs over vigild's TLS API.
-    /// Applies to --source-url mode.
+    /// Only for --source-url (with --kubernetes, authentication comes from the
+    /// ServiceAccount token or the kubeconfig).
     #[arg(
         long,
         env = "SOURCE_USER_FILE",
+        conflicts_with_all = ["kubernetes", "source_socket"],
         value_name = "PATH",
         help_heading = "Source Connection"
     )]
@@ -129,10 +134,12 @@ pub struct Cli {
 
     /// PEM client certificate for mTLS to the source (requires --source-key).
     ///
-    /// Applies to --source-url mode.
+    /// Only for --source-url. For the Kubernetes API, put the client
+    /// certificate into the kubeconfig (`client-certificate`/`client-key`).
     #[arg(
         long,
         env = "SOURCE_CERT",
+        conflicts_with_all = ["kubernetes", "source_socket"],
         value_name = "PATH",
         requires = "source_key",
         help_heading = "Source Connection"
@@ -141,10 +148,11 @@ pub struct Cli {
 
     /// PEM private key matching --source-cert.
     ///
-    /// Applies to --source-url mode.
+    /// Only for --source-url.
     #[arg(
         long,
         env = "SOURCE_KEY",
+        conflicts_with_all = ["kubernetes", "source_socket"],
         value_name = "PATH",
         requires = "source_cert",
         help_heading = "Source Connection"
@@ -484,4 +492,87 @@ pub struct Cli {
     /// Enable debug logging with timestamps.
     #[arg(long, help_heading = "Logging")]
     pub debug: bool,
+}
+
+impl Cli {
+    /// Checks clap cannot express. `--source-insecure` is a flag that may come
+    /// from `SOURCE_INSECURE=false`, which clap would count as "present", so
+    /// its conflict is checked here on the actual value.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.source_insecure && (self.kubernetes || self.source_socket.is_some()) {
+            return Err(
+                "--source-insecure only applies to --source-url; with --kubernetes \
+                 configure TLS for the Kubernetes API in the kubeconfig"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::Cli;
+    use clap::Parser;
+
+    fn parse(args: &[&str]) -> Result<Cli, String> {
+        let mut argv = vec!["vigil-log-relay", "--stdout-sink"];
+        argv.extend_from_slice(args);
+        let cli = Cli::try_parse_from(argv).map_err(|e| e.to_string())?;
+        cli.validate()?;
+        Ok(cli)
+    }
+
+    #[test]
+    fn url_only_options_rejected_with_kubernetes() {
+        for extra in [
+            &["--source-cert", "c", "--source-key", "k"][..],
+            &["--source-user-file", "f"][..],
+            &["--source-cacert", "ca"][..],
+            &["--source-insecure"][..],
+        ] {
+            let mut args = vec!["--kubernetes"];
+            args.extend_from_slice(extra);
+            assert!(
+                parse(&args).is_err(),
+                "{extra:?} accepted with --kubernetes"
+            );
+        }
+    }
+
+    #[test]
+    fn url_only_options_rejected_with_socket() {
+        assert!(parse(&["--source-socket", "/s", "--source-user-file", "f"]).is_err());
+        assert!(parse(&["--source-socket", "/s", "--source-insecure"]).is_err());
+    }
+
+    #[test]
+    fn url_only_options_accepted_with_url() {
+        let cli = parse(&[
+            "--source-url",
+            "https://x/",
+            "--source-cert",
+            "c",
+            "--source-key",
+            "k",
+            "--source-user-file",
+            "f",
+            "--source-cacert",
+            "ca",
+            "--source-insecure",
+        ])
+        .unwrap();
+        assert!(cli.source_insecure);
+    }
+
+    #[test]
+    fn cert_and_key_require_each_other() {
+        assert!(parse(&["--source-url", "https://x/", "--source-cert", "c"]).is_err());
+        assert!(parse(&["--source-url", "https://x/", "--source-key", "k"]).is_err());
+    }
+
+    #[test]
+    fn proxy_options_still_allowed_with_kubernetes() {
+        parse(&["--kubernetes", "--source-proxy", "http://p:3128"]).unwrap();
+    }
 }

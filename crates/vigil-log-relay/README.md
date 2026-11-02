@@ -38,7 +38,14 @@ container (no `--container` flag):
 
 Requires an in-cluster service account with `get`, `list`, `watch` on `pods` and `get` on `pods/log`. See [`examples/kubernetes-pod-logs/k8s/rbac.yaml`](../../examples/kubernetes-pod-logs/k8s/rbac.yaml).
 
-> **Running as a vigild service (vigil-rs v4+):** services no longer inherit vigild's environment. Pass the variables vigil-log-relay needs with `pass-env-glob`, including `KUBERNETES_SERVICE_*` for the in-cluster API connection, and the proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, also lower case), e.g. with `pass-env-regex: ['(?i)(https?|all|no)_proxy']`. See [`examples/kubernetes-pod-logs/layers/001-services.yaml`](../../examples/kubernetes-pod-logs/layers/001-services.yaml).
+**Authentication and TLS to the Kubernetes API** come from the ServiceAccount
+(in-cluster) or from the kubeconfig (`KUBECONFIG` or `~/.kube/config`), which
+may contain a client certificate (`client-certificate`/`client-key`), a token
+or an exec plugin. `--source-cert`, `--source-key`, `--source-user-file`,
+`--source-cacert` and `--source-insecure` are rejected in this mode; the
+`--source-proxy*` options do apply.
+
+> **Running as a vigild service (vigil-rs v4+):** services no longer inherit vigild's environment. Pass the variables vigil-log-relay needs with `pass-env-glob`, including `KUBERNETES_SERVICE_*` for the in-cluster API connection (or `KUBECONFIG` outside the cluster), and the proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, also lower case), e.g. with `pass-env-regex: ['(?i)(https?|all|no)_proxy']`. See [`examples/kubernetes-pod-logs/layers/001-services.yaml`](../../examples/kubernetes-pod-logs/layers/001-services.yaml).
 
 ```
 vigil-log-relay --kubernetes \
@@ -97,6 +104,10 @@ HTTP Basic Auth or a TLS client certificate:
 
 The password lives in a file, not in a flag or variable, so it never shows up
 in the process list or `/proc/<pid>/environ`.
+
+These options, like `--source-cacert` and `--source-insecure`, only apply to
+`--source-url`. Combined with `--kubernetes` or `--source-socket`, vigil-log-relay
+refuses to start instead of silently ignoring them.
 
 Create the matching identity on vigild via the Unix socket, e.g. with a
 SHA-512-crypt hash from `openssl passwd -6`:

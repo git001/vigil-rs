@@ -35,9 +35,11 @@ services:
     #
     # Since vigil-rs v4 services do not inherit vigild's environment, so the
     # variables vigil-log-relay reads must be passed explicitly.
-    # KUBERNETES_SERVICE_* is needed for the in-cluster API connection.
+    # KUBERNETES_SERVICE_* is needed for the in-cluster API connection;
+    # KUBECONFIG only when running outside the cluster.
     pass-env-glob:
       - KUBERNETES_SERVICE_*
+      - KUBECONFIG
       - NAMESPACE
       - POD_SELECTOR
       - CONTAINER_SELECTOR
