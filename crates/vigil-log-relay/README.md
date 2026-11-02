@@ -83,6 +83,36 @@ vigil-log-relay --source-url https://vigild.example.com/v1/logs/follow?format=nd
   --tcp-sink-host 127.0.0.1 --tcp-sink-port 5170
 ```
 
+#### Authentication
+
+Since vigil-rs v4, vigild's TLS API serves logs only to callers with an
+identity of access `read` (or higher). vigil-log-relay can authenticate with
+HTTP Basic Auth or a TLS client certificate:
+
+| Flag | Env | Description |
+|------|-----|-------------|
+| `--source-user-file PATH` | `SOURCE_USER_FILE` | File containing `user:password`. Re-read on every (re)connect, so a rotated Kubernetes Secret is picked up without a restart. A trailing newline is ignored. |
+| `--source-cert PATH` | `SOURCE_CERT` | PEM client certificate for mTLS (requires `--source-key`) |
+| `--source-key PATH` | `SOURCE_KEY` | PEM private key for `--source-cert` (requires `--source-cert`) |
+
+The password lives in a file, not in a flag or variable, so it never shows up
+in the process list or `/proc/<pid>/environ`.
+
+Create the matching identity on vigild via the Unix socket, e.g. with a
+SHA-512-crypt hash from `openssl passwd -6`:
+
+```bash
+curl --unix-socket /run/vigil/vigild.sock -X POST http://localhost/v1/identities \
+  -H 'Content-Type: application/json' \
+  -d '{"identities":{"log-relay":{"access":"read","basic":{"password-hash":"$6$..."}}}}'
+```
+
+```
+SOURCE_USER_FILE=/var/run/secrets/relay/credentials \
+vigil-log-relay --source-url https://vigild.example.com/v1/logs/follow?format=ndjson \
+  --tcp-sink-host 127.0.0.1 --tcp-sink-port 5170
+```
+
 ---
 
 ### Unix socket (`--source-socket`)

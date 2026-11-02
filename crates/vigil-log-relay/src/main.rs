@@ -135,6 +135,9 @@ async fn main() -> Result<()> {
         proxy_insecure: cli.source_proxy_insecure,
         proxy_cacert: cli.source_proxy_cacert.clone(),
         no_proxy: cli.source_no_proxy.clone(),
+        source_user_file: cli.source_user_file.clone(),
+        source_cert: cli.source_cert.clone(),
+        source_key: cli.source_key.clone(),
     };
     let reconnect = ReconnectConfig {
         initial_delay_ms: cli.source_reconnect_delay,

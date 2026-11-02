@@ -35,6 +35,17 @@ pub async fn run(
             builder = builder.add_root_certificate(cert);
         }
     }
+    if let (Some(cert_path), Some(key_path)) = (&conn.source_cert, &conn.source_key) {
+        let mut pem = std::fs::read(cert_path)
+            .with_context(|| format!("reading --source-cert {}", cert_path.display()))?;
+        let key_pem = std::fs::read(key_path)
+            .with_context(|| format!("reading --source-key {}", key_path.display()))?;
+        pem.push(b'\n');
+        pem.extend_from_slice(&key_pem);
+        let identity = reqwest::Identity::from_pem(&pem)
+            .context("building TLS client identity from --source-cert / --source-key")?;
+        builder = builder.identity(identity);
+    }
     if conn.connect_timeout_ms > 0 {
         builder = builder.connect_timeout(Duration::from_millis(conn.connect_timeout_ms));
     }
@@ -78,7 +89,21 @@ pub async fn run(
     loop {
         liveness.tick();
 
-        match client.get(&url).send().await {
+        let mut request = client.get(&url);
+        if let Some(path) = &conn.source_user_file {
+            match read_basic_credentials(path) {
+                Ok((user, pass)) => request = request.basic_auth(user, Some(pass)),
+                Err(e) => {
+                    warn!(error = %format!("{e:#}"), "cannot read --source-user-file");
+                    failures = bump_failures(failures, cfg.max_retries, &url)?;
+                    sleep(backoff).await;
+                    backoff = (backoff * 2).min(Duration::from_millis(cfg.max_delay_ms));
+                    continue;
+                }
+            }
+        }
+
+        match request.send().await {
             Ok(resp) if resp.status().is_success() => {
                 info!(url = %url, "connected");
                 failures = 0;
@@ -105,6 +130,23 @@ pub async fn run(
         sleep(backoff).await;
         backoff = (backoff * 2).min(Duration::from_millis(cfg.max_delay_ms));
     }
+}
+
+// ---------------------------------------------------------------------------
+// Basic Auth credentials file
+// ---------------------------------------------------------------------------
+
+/// Read `user:password` from `path`. Only trailing newlines are stripped, so
+/// passwords may contain spaces and further colons.
+pub(crate) fn read_basic_credentials(path: &Path) -> Result<(String, String)> {
+    let raw =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let line = raw.trim_end_matches(['\n', '\r']);
+    let (user, pass) = line
+        .split_once(':')
+        .with_context(|| format!("{}: expected `user:password`", path.display()))?;
+    anyhow::ensure!(!user.is_empty(), "{}: empty user name", path.display());
+    Ok((user.to_owned(), pass.to_owned()))
 }
 
 // ---------------------------------------------------------------------------

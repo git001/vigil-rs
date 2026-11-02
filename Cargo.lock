@@ -3007,6 +3007,7 @@ name = "vigil-log-relay"
 version = "3.2.2"
 dependencies = [
  "anyhow",
+ "base64",
  "bytes",
  "clap",
  "futures",

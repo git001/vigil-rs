@@ -36,6 +36,9 @@ fn default_conn() -> SourceConnConfig {
         proxy_insecure: false,
         proxy_cacert: None,
         no_proxy: None,
+        source_user_file: None,
+        source_cert: None,
+        source_key: None,
     }
 }
 

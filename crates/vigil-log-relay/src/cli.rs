@@ -113,6 +113,44 @@ pub struct Cli {
     )]
     pub source_cacert: Option<PathBuf>,
 
+    /// File with HTTP Basic Auth credentials `user:password` for the source.
+    ///
+    /// Read on every (re)connect, so a rotated Secret is picked up without a
+    /// restart. A trailing newline is ignored. Use this with a vigild
+    /// identity of access `read` to stream logs over vigild's TLS API.
+    /// Applies to --source-url mode.
+    #[arg(
+        long,
+        env = "SOURCE_USER_FILE",
+        value_name = "PATH",
+        help_heading = "Source Connection"
+    )]
+    pub source_user_file: Option<PathBuf>,
+
+    /// PEM client certificate for mTLS to the source (requires --source-key).
+    ///
+    /// Applies to --source-url mode.
+    #[arg(
+        long,
+        env = "SOURCE_CERT",
+        value_name = "PATH",
+        requires = "source_key",
+        help_heading = "Source Connection"
+    )]
+    pub source_cert: Option<PathBuf>,
+
+    /// PEM private key matching --source-cert.
+    ///
+    /// Applies to --source-url mode.
+    #[arg(
+        long,
+        env = "SOURCE_KEY",
+        value_name = "PATH",
+        requires = "source_cert",
+        help_heading = "Source Connection"
+    )]
+    pub source_key: Option<PathBuf>,
+
     /// Proxy URL for HTTP/HTTPS source (overrides HTTP_PROXY / HTTPS_PROXY env vars).
     ///
     /// Applies to --source-url and --kubernetes modes.

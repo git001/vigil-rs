@@ -60,6 +60,12 @@ pub struct SourceConnConfig {
     pub proxy_cacert: Option<PathBuf>,
     /// Comma-separated list of hosts / CIDRs that bypass the proxy.
     pub no_proxy: Option<String>,
+    /// File with `user:password` for HTTP Basic Auth (re-read per connect).
+    pub source_user_file: Option<PathBuf>,
+    /// PEM client certificate for mTLS (together with `source_key`).
+    pub source_cert: Option<PathBuf>,
+    /// PEM private key for `source_cert`.
+    pub source_key: Option<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
