@@ -80,14 +80,18 @@ commit_parsers = [
     { message = "(?i)^(update to |updte |)version ", group = "<!-- 9 -->Hidden" },
 
     # Security first, so a security fix lands under "Security", not "Fixed".
-    { message = "(?i)security|RUSTSEC-|CVE-", group = "<!-- 5 -->Security" },
-    { body = "(?i)security|RUSTSEC-|CVE-", group = "<!-- 5 -->Security" },
+    # Only code/dependency commits count: docs that merely mention
+    # "security" must not end up here.
+    { message = "^(fix|feat|chore)(\\(.*\\))?!?: .*(?i:security|RUSTSEC-|CVE-)", group = "<!-- 5 -->Security" },
+    { message = "^(fix|feat|chore)", body = "(?i)security|RUSTSEC-|CVE-", group = "<!-- 5 -->Security" },
 
     # Security fixes whose message does not say so.
     { sha = "2483705f6dbfe1f603b667dd23b2367831385403", group = "<!-- 5 -->Security" },  # 3.2.2: privilege drop kept root groups
     { sha = "f6f905a515e77d282866bf1074bdb1b5edb512ec", group = "<!-- 5 -->Security" },  # 3.2.2: control socket hardening
 
-    # Conventional commits.
+    # Conventional commits. Breaking changes ("type!:") change existing
+    # behaviour, so they go to "Changed" whatever their type.
+    { message = "^\\w+(\\(.*\\))?!:", group = "<!-- 1 -->Changed" },
     { message = "^feat", group = "<!-- 0 -->Added" },
     { message = "^(perf|refactor)", group = "<!-- 1 -->Changed" },
     { message = "(?i)^\\w+(\\(.*\\))?!?: deprecate", group = "<!-- 2 -->Deprecated" },
