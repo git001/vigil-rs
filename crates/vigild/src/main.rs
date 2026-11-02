@@ -97,6 +97,17 @@ struct Args {
     )]
     tls_anonymous_access: String,
 
+    /// vigild's exit code when a policy shuts it down: `propagate` (the
+    /// service's code after exit-code-map, 128+signal for signals) or `fixed`
+    /// (v3 behaviour: 0 on success, 10 on failure).
+    #[arg(
+        long,
+        env = "VIGIL_EXIT_CODE",
+        default_value = "propagate",
+        value_parser = ["propagate", "fixed"]
+    )]
+    exit_code: String,
+
     /// Enable init/subreaper mode: reap orphaned zombie processes.
     /// Automatically active when vigild runs as PID 1.
     #[arg(long, env = "VIGIL_REAPER")]
@@ -194,6 +205,10 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
         http_address,
         https_address,
         args.log_buffer,
+        match args.exit_code.as_str() {
+            "fixed" => vigild::service::ExitCodeMode::Fixed,
+            _ => vigild::service::ExitCodeMode::Propagate,
+        },
     )?;
     let identity_store = identity::IdentityStore::new();
 

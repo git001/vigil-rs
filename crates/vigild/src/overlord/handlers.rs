@@ -143,6 +143,7 @@ impl Overlord {
                     stop_signal,
                     on_success,
                     on_failure,
+                    last_exit: e.snapshot.last_exit,
                 }
             })
             .collect()

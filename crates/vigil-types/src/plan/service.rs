@@ -47,11 +47,13 @@ pub enum LogsPushFormat {
 #[serde(rename_all = "kebab-case")]
 pub enum OnExit {
     Restart,
-    /// Shut down the daemon; exit code depends on context (success→0, failure→10).
+    /// Shut down the daemon. Exit code: the service's code with
+    /// `--exit-code propagate` (default), else success→0, failure→10.
     Shutdown,
-    /// Shut down the daemon with exit code 10 (intended for on-success).
+    /// Shut down the daemon with a failure code: the service's non-zero code
+    /// with `--exit-code propagate`, else (or for code 0) 10.
     FailureShutdown,
-    /// Shut down the daemon with exit code 0 (intended for on-failure).
+    /// Shut down the daemon with exit code 0.
     SuccessShutdown,
     Ignore,
 }
@@ -110,6 +112,14 @@ pub struct ServiceConfig {
     /// Grace period before SIGKILL after stop_signal.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kill_delay: Option<String>,
+    /// Exit codes that count as success (after `exit-code-map`).
+    /// Default (empty): `[0]`. A signal counts as code `128 + signal`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub success_exit_codes: Vec<i32>,
+    /// Rewrite exit codes before they are classified and propagated,
+    /// e.g. `{143: 0}` to treat SIGTERM as a clean exit.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub exit_code_map: IndexMap<i32, i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub on_success: Option<OnExit>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -190,6 +200,11 @@ pub(super) fn merge_service(base: &mut ServiceConfig, overlay: &ServiceConfig) {
     opt!(working_dir);
     opt!(stop_signal);
     opt!(kill_delay);
+    if !overlay.success_exit_codes.is_empty() {
+        base.success_exit_codes = overlay.success_exit_codes.clone();
+    }
+    base.exit_code_map
+        .extend(overlay.exit_code_map.iter().map(|(k, v)| (*k, *v)));
     opt!(on_success);
     opt!(on_failure);
     base.on_check_failure.extend(

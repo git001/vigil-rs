@@ -37,6 +37,7 @@ struct AlertLabel {
 /// Compatible with Pebble's metric names and types:
 /// - `vigil_service_start_count{service}` counter
 /// - `vigil_service_active{service}`      gauge (0/1)
+/// - `vigil_service_last_exit_code{service}` gauge (128+signal, -1 unknown)
 /// - `vigil_check_up{check}`              gauge (0/1)
 /// - `vigil_check_success_count{check}`   counter
 /// - `vigil_check_failure_count{check}`   counter
@@ -53,6 +54,7 @@ pub struct MetricsStore {
     check_success_count: Family<CheckLabel, Counter>,
     check_failure_count: Family<CheckLabel, Counter>,
     alert_fire_count: Family<AlertLabel, Counter>,
+    service_last_exit_code: Family<ServiceLabel, Gauge>,
 }
 
 impl MetricsStore {
@@ -67,6 +69,7 @@ impl MetricsStore {
         let check_success_count = Family::<CheckLabel, Counter>::default();
         let check_failure_count = Family::<CheckLabel, Counter>::default();
         let alert_fire_count = Family::<AlertLabel, Counter>::default();
+        let service_last_exit_code = Family::<ServiceLabel, Gauge>::default();
 
         registry.register(
             "vigil_service_start_count",
@@ -109,6 +112,12 @@ impl MetricsStore {
             alert_fire_count.clone(),
         );
 
+        registry.register(
+            "vigil_service_last_exit_code",
+            "Exit code of the service's last process (128+signal if killed by a signal, -1 if unknown)",
+            service_last_exit_code.clone(),
+        );
+
         Arc::new(Self {
             registry,
             service_start_count,
@@ -119,6 +128,7 @@ impl MetricsStore {
             check_success_count,
             check_failure_count,
             alert_fire_count,
+            service_last_exit_code,
         })
     }
 
@@ -148,6 +158,15 @@ impl MetricsStore {
                 service: service.to_owned(),
             })
             .set(if active { 1 } else { 0 });
+    }
+
+    /// Record how the service's last process ended (`None`: unknown → -1).
+    pub fn set_service_last_exit_code(&self, service: &str, code: Option<i32>) {
+        self.service_last_exit_code
+            .get_or_create(&ServiceLabel {
+                service: service.to_owned(),
+            })
+            .set(code.map(i64::from).unwrap_or(-1));
     }
 
     pub fn record_check_success(&self, check: &str) {

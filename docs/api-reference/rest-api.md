@@ -142,11 +142,17 @@ List services and their current status.
       "current-since": "2026-03-18T10:00:05.123Z",
       "stop-signal": "SIGTERM",
       "on-success": "restart",
-      "on-failure": "restart"
+      "on-failure": "restart",
+      "last-exit": { "code": 3 }
     }
   ]
 }
 ```
+
+`last-exit` describes how the service's last process ended: `{"code": N}` for
+a normal exit, `{"signal": N}` if it was killed by a signal. It is omitted
+until the service has exited once. The values are raw (before
+`exit-code-map`).
 
 **Service status values:** `active` | `inactive` | `backoff` | `error`
 
@@ -447,6 +453,7 @@ Metrics exposed:
 | `vigil_services_count` | gauge | Total number of configured services |
 | `vigil_service_info{service}` | gauge (always 1) | Enumerates all configured service names |
 | `vigil_service_active{service}` | gauge | `1` if service is active, `0` otherwise |
+| `vigil_service_last_exit_code{service}` | gauge | Exit code of the last process (`128 + signal` if killed by a signal, `-1` if unknown); absent until the service has exited once |
 | `vigil_service_start_count_total{service}` | counter | Number of times the service has started |
 | `vigil_check_up{check}` | gauge | `1` if check is up, `0` if down |
 | `vigil_check_success_count_total{check}` | counter | Number of successful check runs |

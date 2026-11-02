@@ -71,6 +71,26 @@ pub enum ServiceStatus {
     Error,
 }
 
+/// How a service process ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub struct ExitInfo {
+    /// Exit code, if the process exited normally.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<i32>,
+    /// Signal number, if the process was killed by a signal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal: Option<i32>,
+}
+
+impl ExitInfo {
+    /// Shell-style code: the exit code, or `128 + signal` for a signal.
+    /// `None` if neither is known (the wait itself failed).
+    pub fn shell_code(&self) -> Option<i32> {
+        self.code.or(self.signal.map(|s| 128 + s))
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "kebab-case")]
 pub struct ServiceInfo {
@@ -84,6 +104,10 @@ pub struct ServiceInfo {
     pub on_success: String,
     /// Effective on-failure policy (default: restart).
     pub on_failure: String,
+    /// How the last process of this service ended (raw, before
+    /// `exit-code-map`). Absent until the service has exited once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_exit: Option<ExitInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

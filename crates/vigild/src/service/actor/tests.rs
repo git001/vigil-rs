@@ -135,7 +135,15 @@ async fn start_process_becomes_active_then_exits_to_backoff() {
     let log_store = LogStore::new(100, 64);
     let metrics = MetricsStore::new();
     let (tx, rx) = mpsc::channel(32);
-    tokio::spawn(run("svc".into(), config, rx, event_tx, log_store, metrics));
+    tokio::spawn(run(
+        "svc".into(),
+        config,
+        rx,
+        event_tx,
+        log_store,
+        metrics,
+        crate::service::ExitCodeMode::Propagate,
+    ));
 
     // Start the service
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
@@ -398,6 +406,7 @@ async fn shutdown_exit_code_success_gives_zero() {
 #[tokio::test]
 async fn shutdown_exit_code_failure_gives_ten() {
     let (mut actor, mut event_rx) = make_actor();
+    actor.exit_code_mode = crate::service::ExitCodeMode::Fixed;
     let mut backoff_sleep = None;
     let mut stop_deadline = None;
     let mut pending_restart = false;
@@ -716,4 +725,104 @@ async fn send_stop_signal_with_child() {
     assert!(actor.child.is_some());
 
     actor.cleanup().await;
+}
+
+// ------------------------------------------------------------------
+// Phase 1: exit-code propagation, exit-code-map, success-exit-codes
+// ------------------------------------------------------------------
+
+/// Feed one exit into the actor and return (DaemonShutdown code, ProcessExited success).
+async fn exit_with(
+    actor: &mut Actor,
+    rx: &mut mpsc::Receiver<Event>,
+    raw: i32,
+) -> (Option<i32>, Option<bool>) {
+    use std::os::unix::process::ExitStatusExt;
+    let mut backoff_sleep = None;
+    let mut stop_deadline = None;
+    let mut pending_restart = false;
+    actor
+        .handle_child_exit(
+            Ok(std::process::ExitStatus::from_raw(raw)),
+            &mut backoff_sleep,
+            &mut stop_deadline,
+            &mut pending_restart,
+        )
+        .await;
+    let (mut code, mut success) = (None, None);
+    while let Ok(ev) = rx.try_recv() {
+        match ev.kind {
+            EventKind::DaemonShutdown { exit_code } => code = Some(exit_code),
+            EventKind::ProcessExited { success: s, .. } => success = Some(s),
+            _ => {}
+        }
+    }
+    (code, success)
+}
+
+#[tokio::test]
+async fn propagate_passes_service_exit_code() {
+    let (mut actor, mut rx) = make_actor();
+    actor.config.on_failure = Some(vigil_types::plan::OnExit::Shutdown);
+    let (code, success) = exit_with(&mut actor, &mut rx, 3 << 8).await;
+    assert_eq!(code, Some(3));
+    assert_eq!(success, Some(false));
+    assert_eq!(
+        actor.last_exit,
+        Some(vigil_types::api::ExitInfo {
+            code: Some(3),
+            signal: None
+        })
+    );
+}
+
+#[tokio::test]
+async fn propagate_signal_as_128_plus_signal() {
+    let (mut actor, mut rx) = make_actor();
+    actor.config.on_failure = Some(vigil_types::plan::OnExit::Shutdown);
+    let (code, _) = exit_with(&mut actor, &mut rx, 15).await; // killed by SIGTERM
+    assert_eq!(code, Some(143));
+    assert_eq!(
+        actor.last_exit,
+        Some(vigil_types::api::ExitInfo {
+            code: None,
+            signal: Some(15)
+        })
+    );
+}
+
+#[tokio::test]
+async fn exit_code_map_turns_sigterm_into_success() {
+    let (mut actor, mut rx) = make_actor();
+    actor.config.exit_code_map.insert(143, 0);
+    actor.config.on_success = Some(vigil_types::plan::OnExit::Shutdown);
+    actor.config.on_failure = Some(vigil_types::plan::OnExit::FailureShutdown);
+    let (code, success) = exit_with(&mut actor, &mut rx, 15).await;
+    assert_eq!(success, Some(true), "143 mapped to 0 counts as success");
+    assert_eq!(code, Some(0));
+}
+
+#[tokio::test]
+async fn success_exit_codes_classify_nonzero_as_success() {
+    let (mut actor, mut rx) = make_actor();
+    actor.config.success_exit_codes = vec![0, 2];
+    actor.config.on_success = Some(vigil_types::plan::OnExit::Shutdown);
+    actor.config.on_failure = Some(vigil_types::plan::OnExit::FailureShutdown);
+    let (code, success) = exit_with(&mut actor, &mut rx, 2 << 8).await;
+    assert_eq!(success, Some(true));
+    assert_eq!(code, Some(2), "on-success shutdown propagates code 2");
+
+    let (code, success) = exit_with(&mut actor, &mut rx, 1 << 8).await;
+    assert_eq!(success, Some(false), "1 is not listed");
+    assert_eq!(code, Some(1));
+}
+
+#[tokio::test]
+async fn success_exit_codes_replace_zero() {
+    let (mut actor, mut rx) = make_actor();
+    actor.config.success_exit_codes = vec![2];
+    actor.config.on_failure = Some(vigil_types::plan::OnExit::FailureShutdown);
+    let (code, success) = exit_with(&mut actor, &mut rx, 0).await;
+    assert_eq!(success, Some(false), "0 is not in the list any more");
+    assert_eq!(code, Some(10), "failure-shutdown never exits 0");
 }

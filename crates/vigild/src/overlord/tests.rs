@@ -57,6 +57,7 @@ pub(super) fn make_overlord(
             since: Utc::now(),
             startup: Startup::Enabled,
             pid: None,
+            last_exit: None,
         };
         svc_map.insert(name.to_string(), ServiceEntry { handle, snapshot });
     }
@@ -92,6 +93,7 @@ pub(super) fn make_overlord(
         cmd_rx,
         layers_dir: std::path::PathBuf::new(),
         pending_autostart: Vec::new(),
+        exit_code_mode: service::ExitCodeMode::default(),
     }
 }
 
@@ -308,14 +310,22 @@ async fn daemon_shutdown_event_returns_exit_code() {
 }
 
 #[tokio::test]
-async fn process_exited_event_returns_none() {
+async fn process_exited_event_returns_none_and_records_last_exit() {
     let mut ov = make_overlord(&[("svc", &[], &[], &[])], &[]);
+    let exit = vigil_types::api::ExitInfo {
+        code: None,
+        signal: Some(15),
+    };
     let event = service::Event {
         service: "svc".to_string(),
-        kind: service::EventKind::ProcessExited { success: true },
+        kind: service::EventKind::ProcessExited {
+            success: false,
+            exit: Some(exit),
+        },
     };
     let result = ov.handle_svc_event(event).await;
     assert!(result.is_none());
+    assert_eq!(ov.services["svc"].snapshot.last_exit, Some(exit));
 }
 
 #[tokio::test]

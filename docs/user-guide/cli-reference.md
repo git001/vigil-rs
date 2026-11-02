@@ -114,23 +114,29 @@ https-address: 0.0.0.0:8443
 
 Manage supervised services.
 
-#### `services list [NAME...]`
+#### `services list [NAME...] [-o table|json]`
 
-List services and their current status.
+List services and their current status. `-o json` (`VIGIL_OUTPUT=json`)
+prints the API objects, including `last-exit`.
 
 ```bash
 vigil services list
 vigil services list myapp sidecar
+vigil services list -o json
 ```
 
 Example output:
 
 ```
-Service                  Startup    Status     On-Success         On-Failure         Stop-Signal
---------------------------------------------------------------------------------------------
-haproxy                  enabled    active     ignore             restart            SIGUSR1
-controller               enabled    active     restart            restart            SIGTERM
+Service                  Startup    Status     On-Success         On-Failure         Stop-Signal  Last-Exit
+------------------------------------------------------------------------------------------------------------
+haproxy                  enabled    active     ignore             restart            SIGUSR1      -
+controller               enabled    inactive   restart            ignore             SIGTERM      SIGTERM
+migrate                  enabled    inactive   ignore             ignore             SIGTERM      0
 ```
+
+`Last-Exit` is the exit code of the service's last process, the signal name
+if it was killed by a signal, or `-` if it has not exited yet.
 
 **Status values:**
 

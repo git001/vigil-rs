@@ -12,6 +12,9 @@ pub enum ServicesCmd {
     List {
         /// Filter by service name(s).
         names: Vec<String>,
+        /// Output format.
+        #[arg(short = 'o', long, env = "VIGIL_OUTPUT", default_value = "table", value_parser = ["table", "json"])]
+        output: String,
     },
 
     /// Start one or more services (empty = all).
@@ -29,26 +32,37 @@ pub enum ServicesCmd {
 
 pub async fn run(client: &VigilClient, sub: ServicesCmd) -> anyhow::Result<()> {
     match sub {
-        ServicesCmd::List { names } => {
+        ServicesCmd::List { names, output } => {
             let services = client.list_services(&names).await?;
+            if output == "json" {
+                println!("{}", serde_json::to_string_pretty(&services)?);
+                return Ok(());
+            }
             if services.is_empty() {
                 println!("No services.");
                 return Ok(());
             }
             println!(
-                "{:<24} {:<10} {:<10} {:<18} {:<18} {:<10}",
-                "Service", "Startup", "Status", "On-Success", "On-Failure", "Stop-Signal"
+                "{:<24} {:<10} {:<10} {:<18} {:<18} {:<12} {:<10}",
+                "Service",
+                "Startup",
+                "Status",
+                "On-Success",
+                "On-Failure",
+                "Stop-Signal",
+                "Last-Exit"
             );
-            println!("{}", "-".repeat(92));
+            println!("{}", "-".repeat(108));
             for svc in services {
                 println!(
-                    "{:<24} {:<10} {:<10} {:<18} {:<18} {:<10}",
+                    "{:<24} {:<10} {:<10} {:<18} {:<18} {:<12} {:<10}",
                     svc.name,
                     format!("{:?}", svc.startup).to_lowercase(),
                     format!("{:?}", svc.current).to_lowercase(),
                     svc.on_success,
                     svc.on_failure,
                     svc.stop_signal,
+                    fmt_last_exit(svc.last_exit),
                 );
             }
         }
@@ -68,4 +82,50 @@ pub async fn run(client: &VigilClient, sub: ServicesCmd) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// `3`, `SIGTERM`, or `-` if the service has not exited yet.
+fn fmt_last_exit(exit: Option<vigil_types::api::ExitInfo>) -> String {
+    match exit {
+        Some(e) => match (e.code, e.signal) {
+            (Some(c), _) => c.to_string(),
+            (None, Some(s)) => nix::sys::signal::Signal::try_from(s)
+                .map(|sig| sig.as_str().to_string())
+                .unwrap_or_else(|_| format!("signal {s}")),
+            (None, None) => "?".into(),
+        },
+        None => "-".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fmt_last_exit;
+    use vigil_types::api::ExitInfo;
+
+    #[test]
+    fn last_exit_formatting() {
+        assert_eq!(fmt_last_exit(None), "-");
+        assert_eq!(
+            fmt_last_exit(Some(ExitInfo {
+                code: Some(3),
+                signal: None
+            })),
+            "3"
+        );
+        assert_eq!(
+            fmt_last_exit(Some(ExitInfo {
+                code: None,
+                signal: Some(15)
+            })),
+            "SIGTERM"
+        );
+        assert_eq!(
+            fmt_last_exit(Some(ExitInfo {
+                code: None,
+                signal: None
+            })),
+            "?"
+        );
+    }
 }

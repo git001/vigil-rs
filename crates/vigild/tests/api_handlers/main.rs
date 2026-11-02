@@ -62,8 +62,14 @@ impl TestApp {
         tls_anonymous_access: vigil_types::identity::IdentityAccess,
     ) -> Self {
         let dir = TempDir::new().unwrap();
-        let (handle, log_store, metrics, _task) =
-            overlord::spawn(dir.path().to_owned(), "test-addr".into(), None, 100).unwrap();
+        let (handle, log_store, metrics, _task) = overlord::spawn(
+            dir.path().to_owned(),
+            "test-addr".into(),
+            None,
+            100,
+            vigild::service::ExitCodeMode::default(),
+        )
+        .unwrap();
         let identity_store = IdentityStore::new();
         let (shutdown_tx, _shutdown_rx) = mpsc::channel(1);
 

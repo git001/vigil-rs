@@ -110,6 +110,8 @@ pub(super) struct Overlord {
     /// Services with `startup: enabled` that are waiting for their `after:`
     /// dependencies to start before being auto-started.
     pub(super) pending_autostart: Vec<String>,
+    /// How vigild's exit code is chosen on a shutdown policy (`--exit-code`).
+    pub(super) exit_code_mode: service::ExitCodeMode,
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +124,7 @@ pub fn spawn(
     http_address: String,
     https_address: Option<String>,
     log_buffer: usize,
+    exit_code_mode: service::ExitCodeMode,
 ) -> anyhow::Result<(
     Handle,
     Arc<LogStore>,
@@ -172,6 +175,7 @@ pub fn spawn(
         cmd_rx,
         layers_dir,
         pending_autostart: Vec::new(),
+        exit_code_mode,
     };
 
     let join = tokio::spawn(run(ov));
@@ -181,6 +185,16 @@ pub fn spawn(
 // ---------------------------------------------------------------------------
 // Main loop
 // ---------------------------------------------------------------------------
+
+impl Overlord {
+    /// Stop everything and exit vigild with `code`. The single place where a
+    /// policy (service exit or check failure) terminates the daemon.
+    pub(super) async fn shutdown(&mut self, code: i32) -> ! {
+        info!(exit_code = code, "shutting down on policy");
+        self.stop_all().await;
+        process::exit(code);
+    }
+}
 
 async fn run(mut ov: Overlord) {
     ov.sync_actors();
@@ -199,8 +213,7 @@ async fn run(mut ov: Overlord) {
                 if let Some(ev) = event
                     && let Some(exit_code) = ov.handle_svc_event(ev).await
                 {
-                    ov.stop_all().await;
-                    process::exit(exit_code);
+                    ov.shutdown(exit_code).await;
                 }
             },
 

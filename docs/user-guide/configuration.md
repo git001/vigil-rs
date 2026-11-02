@@ -82,8 +82,10 @@ services:
     kill-delay: 10s                    # SIGKILL sent after this if still running
 
     # --- Exit policies ---
-    on-success: restart                # what to do when process exits with code 0
-    on-failure: restart                # what to do when process exits with non-zero
+    on-success: restart                # what to do when the exit counts as success
+    on-failure: restart                # what to do otherwise
+    success-exit-codes: [0]            # exit codes that count as success (default: [0])
+    exit-code-map: {143: 0}            # rewrite codes first (signal N → 128+N)
 
     # --- Health-check-triggered actions ---
     on-check-failure:
@@ -224,9 +226,48 @@ Policy applied when the managed process exits.
 |---|---|
 | `restart` | Restart the service (with backoff). **Default.** |
 | `ignore` | Do nothing; service transitions to `Inactive` |
-| `shutdown` | Stop all services and exit vigild; code depends on context |
-| `failure-shutdown` | Stop all and exit with code 10 (useful in `on-success`) |
+| `shutdown` | Stop all services and exit vigild with the service's exit code (see below) |
+| `failure-shutdown` | Stop all and exit with a failure code: the service's non-zero code, or 10 (useful in `on-success`) |
 | `success-shutdown` | Stop all and exit with code 0 (useful in `on-failure`) |
+
+**vigild's exit code** depends on `--exit-code` / `VIGIL_EXIT_CODE`:
+
+| Policy | `propagate` (default) | `fixed` (v3 behaviour) |
+|---|---|---|
+| `shutdown` | the service's code (after `exit-code-map`); `128 + signal` if it was killed by a signal | `0` on success, `10` on failure |
+| `failure-shutdown` | the service's code if non-zero, else `10` | `10` |
+| `success-shutdown` | `0` | `0` |
+
+For `on-check-failure` there is no process exit code: `shutdown` and
+`failure-shutdown` exit with `10`, `success-shutdown` with `0`.
+
+#### `success-exit-codes` / `exit-code-map`
+
+Control which exits count as success (and therefore pick `on-success` or
+`on-failure`) and which code vigild propagates.
+
+```yaml
+services:
+  worker:
+    command: /usr/local/bin/worker
+    exit-code-map: {143: 0}       # SIGTERM (128+15) counts as a clean exit
+    success-exit-codes: [0, 2]    # 2 = "nothing to do" is also a success
+    on-success: shutdown
+    on-failure: shutdown
+```
+
+- A process killed by a signal has the code `128 + signal` (SIGTERM → 143,
+  SIGKILL → 137), as in a shell.
+- `exit-code-map` is applied first. Both the success check and the
+  propagated code use the mapped value.
+- `success-exit-codes` replaces the default `[0]`. If you list codes, include
+  `0` yourself when it should still be a success.
+- In layer merges, `exit-code-map` entries are merged and a non-empty
+  `success-exit-codes` replaces the previous list.
+
+The last exit of every service is shown by `vigil services list` (column
+`Last-Exit`), in the API (`last-exit` in `GET /v1/services`) and as the metric
+`vigil_service_last_exit_code`.
 
 #### `on-check-failure`
 

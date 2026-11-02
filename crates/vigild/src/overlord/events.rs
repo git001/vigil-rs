@@ -3,8 +3,6 @@
 
 //! Overlord event handlers: service state transitions and check results.
 
-use std::process;
-
 use chrono::Utc;
 use tracing::{error, info, warn};
 use vigil_types::api::CheckStatus;
@@ -88,7 +86,12 @@ impl Overlord {
 
                 None
             }
-            service::EventKind::ProcessExited { .. } => None,
+            service::EventKind::ProcessExited { exit, .. } => {
+                if let Some(e) = self.services.get_mut(&event.service) {
+                    e.snapshot.last_exit = *exit;
+                }
+                None
+            }
             service::EventKind::DaemonShutdown { exit_code } => {
                 info!(service = %event.service, exit_code, "daemon shutdown requested by service policy");
                 Some(*exit_code)
@@ -128,20 +131,12 @@ impl Overlord {
                     }
                 }
                 OnExit::Ignore => {}
-                OnExit::Shutdown => {
-                    info!(service = %svc_name, check = %event.check, "on-check-failure: shutdown");
-                    self.stop_all().await;
-                    process::exit(10);
-                }
-                OnExit::SuccessShutdown => {
-                    info!(service = %svc_name, check = %event.check, "on-check-failure: success-shutdown");
-                    self.stop_all().await;
-                    process::exit(0);
-                }
-                OnExit::FailureShutdown => {
-                    info!(service = %svc_name, check = %event.check, "on-check-failure: failure-shutdown");
-                    self.stop_all().await;
-                    process::exit(10);
+                policy @ (OnExit::Shutdown | OnExit::FailureShutdown | OnExit::SuccessShutdown) => {
+                    // No process exit code here: a check failure is a failure.
+                    let code = service::shutdown_code(self.exit_code_mode, policy, false, None)
+                        .expect("shutdown policies always yield a code");
+                    info!(service = %svc_name, check = %event.check, ?policy, "on-check-failure: shutdown");
+                    self.shutdown(code).await;
                 }
             }
         }

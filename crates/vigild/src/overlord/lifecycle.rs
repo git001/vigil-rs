@@ -29,6 +29,7 @@ impl Overlord {
                 self.event_tx.clone(),
                 Arc::clone(&self.log_store),
                 Arc::clone(&self.metrics),
+                self.exit_code_mode,
             );
             let snap = service::Snapshot {
                 name: name.clone(),
@@ -36,6 +37,7 @@ impl Overlord {
                 since: Utc::now(),
                 startup: config.startup,
                 pid: None,
+                last_exit: None,
             };
             self.services.insert(
                 name.clone(),

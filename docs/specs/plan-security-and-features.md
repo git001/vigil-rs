@@ -248,6 +248,22 @@ that way.
 - Also: last exit code in the API and status, metric
   `vigil_service_last_exit_code`, `vigil services -o json`.
 
+**Status:** done on the `v4` branch, together with the S3 rest (reaped
+statuses older than the spawn are ignored). As implemented:
+
+- `--exit-code propagate|fixed` / `VIGIL_EXIT_CODE`, default `propagate`.
+- `shutdown_code()` in `service/mod.rs` is the single rule for vigild's exit
+  code (service exits and `on-check-failure`); `Overlord::shutdown()` is the
+  single place that stops everything and exits.
+- `failure-shutdown` never exits 0 (falls back to 10); check failures have
+  no process code and use 0/10.
+- `exit-code-map` is applied before `success-exit-codes`; signals count as
+  `128 + signal`.
+- API `last-exit` (raw `code`/`signal`), CLI column `Last-Exit` and
+  `-o json` / `VIGIL_OUTPUT`, metric `vigil_service_last_exit_code`.
+- Docs fix: README and container-setup.md already claimed real exit-code
+  propagation for v3, which only ever exited 0 or 10.
+
 ## Phase 2: readiness and sd_notify
 
 - **Current state:** `Starting` only lasts a moment, because

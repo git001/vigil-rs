@@ -16,7 +16,7 @@ use crate::logs::LogStore;
 use crate::metrics::MetricsStore;
 use crate::state::ServiceState;
 
-use super::{Cmd, DEFAULT_BACKOFF_DELAY, Event, EventKind, Snapshot};
+use super::{Cmd, DEFAULT_BACKOFF_DELAY, Event, EventKind, ExitCodeMode, Snapshot};
 
 mod backoff;
 mod handlers;
@@ -44,6 +44,10 @@ pub(super) struct Actor {
     event_tx: mpsc::Sender<Event>,
     log_store: Arc<LogStore>,
     metrics: Arc<MetricsStore>,
+    /// How vigild's exit code is chosen on a shutdown policy.
+    exit_code_mode: ExitCodeMode,
+    /// How the last process ended.
+    last_exit: Option<vigil_types::api::ExitInfo>,
 }
 
 impl Actor {
@@ -66,6 +70,8 @@ impl Actor {
             event_tx,
             log_store,
             metrics,
+            exit_code_mode: ExitCodeMode::default(),
+            last_exit: None,
         }
     }
 
@@ -76,6 +82,7 @@ impl Actor {
             since: self.since,
             startup: self.config.startup,
             pid: self.child.as_ref().and_then(|c| c.id()),
+            last_exit: self.last_exit,
         }
     }
 
@@ -106,6 +113,7 @@ pub(super) async fn run(
     event_tx: mpsc::Sender<Event>,
     log_store: Arc<LogStore>,
     metrics: Arc<MetricsStore>,
+    exit_code_mode: ExitCodeMode,
 ) {
     let mut actor = Actor::new(
         name.clone(),
@@ -114,6 +122,7 @@ pub(super) async fn run(
         Arc::clone(&log_store),
         metrics,
     );
+    actor.exit_code_mode = exit_code_mode;
     let mut backoff_sleep: Option<Pin<Box<Sleep>>> = None;
     let mut stop_deadline: Option<Pin<Box<Sleep>>> = None;
     let mut pending_restart = false;
