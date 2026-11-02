@@ -298,14 +298,17 @@ async fn apply_credentials_foreign_uid_unprivileged_fails() {
 
 /// The actual S1 regression: dropped from root, the child must not keep
 /// gid 0 or root's supplementary groups. Runs only as root (CI container).
+/// IDs stay below 65535 so the test also works as root inside a rootless
+/// container, whose user namespace usually maps only 0..=65535 (unmapped IDs
+/// make setgroups/setgid fail with EINVAL).
 #[tokio::test]
 async fn apply_credentials_from_root_drops_all_groups() {
     if !Uid::effective().is_root() {
         eprintln!("skipped: needs root");
         return;
     }
-    let creds = resolve_credentials(None, Some(4_000_123), None, Some(4_000_456)).unwrap();
+    let creds = resolve_credentials(None, Some(54_123), None, Some(54_456)).unwrap();
     let out = run_id(creds).await.unwrap();
     let lines: Vec<&str> = out.lines().collect();
-    assert_eq!(lines, vec!["4000123", "4000456", "4000456"], "{out}");
+    assert_eq!(lines, vec!["54123", "54456", "54456"], "{out}");
 }
