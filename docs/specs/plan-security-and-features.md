@@ -1,402 +1,400 @@
-# Plan vigil-rs v4: Security-Fixes und neue Features
+# vigil-rs v4 plan: security fixes and new features
 
-Stand: 2026-11-02, Basis v3.2.1 (`4d78710`).
-Grundlage: Feature-Vergleich mit gopherd sowie dessen Commit `75e38f4`
+Status: 2026-11-03, based on v3.2.1 (`4d78710`).
+Background: feature comparison with gopherd and its commit `75e38f4`
 ("close trust-boundary gaps between PID 1 and services").
 
-**Ziel-Version: v4.0.** Wegen der neuen Features und der geänderten Defaults
-(`pass-env`, neuer Status `Starting`, Exit-Codes) wird das ein Major-Release.
+**Target version: v4.0.** The new features and changed defaults
+(`pass-env`, new `Starting` status, exit codes) make this a major release.
 
-## Grundsatz: Alles muss unter OpenShift laufen
+## Principle: everything must run on OpenShift
 
-Unter OpenShift (`restricted-v2` SCC) gilt:
+Under OpenShift (`restricted-v2` SCC):
 
-- vigild läuft mit einer zufälligen UID (z.B. `1000680000`) und GID 0.
-- Es gibt keine Capabilities, also kein `CAP_SETUID` oder `CAP_SETGID`.
-- `/run` ist ein tmpfs, das root gehört und nicht beschreibbar ist
-  (siehe `docs/operator-guide/orchestrators.md`, dort wird bereits
-  `--socket /tmp/vigild.sock` verwendet).
-- Mit `readOnlyRootFilesystem` ist nur beschreibbar, was als `emptyDir` gemountet ist.
+- vigild runs with a random UID (e.g. `1000680000`) and GID 0.
+- There are no capabilities, so no `CAP_SETUID` or `CAP_SETGID`.
+- `/run` is a root-owned tmpfs and not writable
+  (see `docs/operator-guide/orchestrators.md`).
+- With `readOnlyRootFilesystem`, only `emptyDir` mounts are writable.
 
-Daraus folgt für alle neuen Dateien und Sockets:
+Consequences for every new file and socket:
 
-- **Ein Verzeichnis für alles: `--path-prefix` / `VIGIL_PATH_PREFIX`.**
-  Alles, was vigild zur Laufzeit anlegt, kommt dort hinein, nie fest nach `/run`.
-  Es gibt keine Fallback-Kette, der Pfad ist explizit.
-  - Default: `/run/vigil`. Unter OpenShift z.B. `/data/my-vigil` oder `/tmp/vigil`.
-  - Inhalt:
+- **One directory for everything: `--path-prefix` / `VIGIL_PATH_PREFIX`.**
+  Everything vigild creates at runtime goes there, never hard-coded to `/run`.
+  There is no fallback chain; the path is explicit.
+  - Default: `/run/vigil`. On OpenShift e.g. `/data/my-vigil` or `/tmp/vigil`.
+  - Contents:
     ```
-    <prefix>/vigild.sock          Control-Socket (Default für --socket)
-    <prefix>/notify/<svc>-<rand>.sock   sd_notify (Phase 2)
+    <prefix>/vigild.sock                control socket (default for --socket)
+    <prefix>/notify/<svc>-<rand>.sock   sd_notify (phase 2)
     ```
-  - `--socket` bleibt als Override bestehen. Der Default ist neu
-    `<prefix>/vigild.sock`, das gilt auch für den Client `vigil`.
-- **Prüfung beim Start, bei Fehler Abbruch mit klarer Meldung:**
-  - Das Verzeichnis muss existieren und darf kein Symlink sein (`lstat`).
-  - Owner ist die eigene euid.
-  - Nicht beschreibbar für other (kein `o+w`). `g+w` ist erlaubt, weil unter
-    OpenShift Verzeichnisse oft `chmod g=u` für GID 0 haben.
-  - Beschreibbar für vigild (Test über `access(W_OK)`).
-  - Die Fehlermeldung nennt Pfad, gefundenen Owner und Modus und die
-    erwarteten Werte.
-- **Unterverzeichnisse** wie `notify/` legt vigild selbst mit 0700 an.
-- **Letzte Komponente anlegen (entschieden):** Fehlt die letzte Pfadkomponente
-  und existiert das übergeordnete Verzeichnis, legt vigild sie selbst mit 0700
-  an und prüft sie danach wie oben. Tiefere fehlende Ebenen sind ein Fehler.
-  Grund: Ein `emptyDir`-Mountpunkt gehört root und hat Modus 0777, als Prefix
-  direkt würde er abgelehnt. So funktioniert `emptyDir` auf `/data` mit
-  `--path-prefix /data/my-vigil` ohne initContainer.
-- **Keine Pflicht-Capabilities:** Kein Feature darf Capabilities voraussetzen.
-  Code für den User-Wechsel läuft nur, wenn `user` oder `group` konfiguriert ist.
+  - `--socket` remains as an override. Its default is now
+    `<prefix>/vigild.sock`, for the `vigil` client as well.
+- **Checked at startup; vigild aborts with a clear message on failure:**
+  - The directory must exist and must not be a symlink (`lstat`).
+  - Owned by vigild's effective UID.
+  - Not writable by others (no `o+w`). `g+w` is allowed because OpenShift
+    images commonly use `chmod g=u` for GID 0.
+  - Writable for vigild (checked with `access(W_OK)`).
+  - The error names the path, the owner and mode found, and what is expected.
+- **Subdirectories** such as `notify/` are created by vigild with mode 0700.
+- **Creating the last component:** if the last path component is missing and
+  its parent exists, vigild creates it with mode 0700 and then checks it as
+  above. Deeper missing levels are an error. Reason: an `emptyDir` mount point
+  is root-owned with mode 0777 and would be rejected as a prefix itself; this
+  way `emptyDir` on `/data` works with `--path-prefix /data/my-vigil` without
+  an initContainer.
+- **No required capabilities:** no feature may depend on capabilities. The
+  user-switching code only runs when `user` or `group` is configured.
 
-## Phase 0: Security-Fixes
+## Phase 0: security fixes
 
-### S1 Rechte werden beim User-Wechsel nur halb abgegeben
+### S1 Privileges only partly dropped when switching user
 
-**Problem:** `crates/vigild/src/service/actor/spawn.rs:48-65` und
-`crates/vigild/src/check/probe/exec.rs:75-90` rufen nur `setgid` und `setuid` auf.
+**Problem:** `crates/vigild/src/service/actor/spawn.rs` and
+`crates/vigild/src/check/probe/exec.rs` only called `setgid` and `setuid`.
 
-- Die Zusatzgruppen von root bleiben erhalten, denn `setgroups` wird nirgends aufgerufen.
-- Bei `user:` ohne `group:` liefert `resolve_gid` `None`
-  (`crates/vigild/src/process_util/identity.rs:52`). Dann wird gar kein
-  `setgid` aufgerufen und die primäre GID bleibt 0.
+- Root's supplementary groups were kept, because `setgroups` was never called.
+- With `user:` but no `group:`, `resolve_gid` returned `None`
+  (`crates/vigild/src/process_util/identity.rs`), so no `setgid` happened at
+  all and the primary GID stayed 0.
 
-**Wen das betrifft:** nur Setups, in denen vigild als root läuft und `user:`
-konfiguriert ist (Docker, Podman, VMs).
+**Affected:** only setups where vigild runs as root and `user:` is configured
+(Docker, Podman, VMs).
 
-**OpenShift ist nicht betroffen.** Dort ist kein `user:` gesetzt, also wird
-der `pre_exec`-Zweig gar nicht ausgeführt, und alle Prozesse laufen mit der
-zugewiesenen UID. GID 0 ist dort so gewollt: OpenShift erwartet, dass Dateien
-im Image der Gruppe 0 gehören und für sie beschreibbar sind. Wäre `user:`
-gesetzt, schlägt `setuid` heute schon mit `EPERM` fehl.
+**OpenShift is not affected.** No `user:` is set there, so the `pre_exec`
+branch never runs and every process keeps the assigned UID. GID 0 is intended
+there: OpenShift expects image files to be owned and writable by group 0. With
+`user:` set, `setuid` already fails with `EPERM`.
 
-**Fix:** gemeinsamer Helper `process_util::drop_privileges` für Services und Exec-Checks.
+**Fix:** shared helpers `process_util::resolve_credentials` and
+`process_util::apply_credentials` for services and exec checks.
 
-- Läuft nur, wenn `user` oder `group` konfiguriert ist. Ohne diese Angaben
-  wird nie `setgroups` aufgerufen, denn das bräuchte `CAP_SETGID` und
-  würde OpenShift kaputt machen.
-- Ohne `group` wird die primäre GID des Users aus `getpwnam` genommen.
-- Die Gruppenliste wird vor dem Fork ermittelt (`getgrouplist`). In `pre_exec`
-  laufen nur `setgroups`, `setgid` und `setuid`, denn dort darf nichts allokiert werden.
-- Ist die Ziel-UID gleich der eigenen euid (häufig bei Rootless), wird nichts
-  geändert und es gibt keinen Fehler.
-- Nach `setuid` prüfen, dass sich `setuid(0)` nicht mehr ausführen lässt.
+- Only run when `user` or `group` is configured. Without them `setgroups` is
+  never called, because it needs `CAP_SETGID` and would break OpenShift.
+- Without `group`, the user's primary GID from the passwd database is used.
+- The group list is resolved before fork (`getgrouplist`). `pre_exec` only
+  calls `setgroups`, `setgid` and `setuid`, because nothing may be allocated
+  there.
+- If vigild is unprivileged and the target UID/GID equal its own (common for
+  rootless setups), nothing is changed and no error occurs.
+- After `setuid`, verify that `setuid(0)` fails.
 
-**Tests:** Unit-Test für die GID-Auflösung. Integrationstest als root prüft
-`id -G` im Kindprozess. Ein Test ohne Root und ohne `user:` stellt sicher,
-dass kein Rechte-Syscall aufgerufen wird.
+**Tests:** unit tests for credential resolution; an integration test as root
+checks `id -G` in the child; a test without root and without `user:` makes
+sure no credential syscall is made.
 
-**Stand:** In v3.2.2 umgesetzt. Für einen numerischen `user-id` ohne
-passwd-Eintrag und ohne Gruppe gibt 3.2.2 nur eine Warnung aus und nimmt
-GID = UID. Auf dem Branch `v4` ist daraus ein Fehler geworden (erledigt).
+**Status:** done in v3.2.2. For a numeric `user-id` without passwd entry and
+without group, 3.2.2 only logs a warning and uses GID = UID. On the `v4`
+branch this is now an error (done).
 
-### S2 Kindprozesse erben die Umgebung von vigild
+### S2 Child processes inherit vigild's environment
 
-**Problem:** Weder Services noch Exec-Probes rufen `env_clear()` auf. Die
-Umgebung von vigild (Tokens, Passwörter) landet in jedem Kindprozess.
+**Problem:** neither services nor exec probes call `env_clear()`. vigild's
+environment (tokens, passwords) ends up in every child process.
 
-**Entscheidung:** `pass-env` ist per Default `false`.
+**Decision:** `pass-env` defaults to `false`.
 
 **Fix:**
 
-- Drei getrennte Felder pro Service:
+- Three separate fields per service:
   ```yaml
-  pass-env: false                         # Default
+  pass-env: false                         # default
   pass-env-glob: [DATABASE_URL, "APP_*", "*_APP_*_LAL"]
   pass-env-regex: ['^K8S_[A-Z]+_URL$', 'TOKEN_(A|B)']
   ```
   - `pass-env: false`: `env_clear()` plus `PATH`, `HOME`, `USER`, `LOGNAME`
-    und `TZ`, dazu alles, was über `pass-env-glob` oder `pass-env-regex`
-    passt, dazu `environment:`.
-  - `pass-env: true`: die gesamte Umgebung von vigild. Sind zusätzlich
-    `pass-env-glob` oder `pass-env-regex` gesetzt, ist das ein
-    Validierungsfehler, weil sie dann wirkungslos wären.
-  - `pass-env-glob`: YAML-Liste. `*` (beliebig viele Zeichen) und `?` (ein
-    Zeichen) an beliebiger Stelle, der Glob muss den **ganzen** Namen treffen.
-    Kleiner eigener Matcher, kein Crate nötig.
-  - `pass-env-regex`: YAML-Liste (ein String mit `A|B` geht auch). Crate
-    `regex`, ist schon Workspace-Dependency. Jeder Ausdruck wird als
-    `^(?:…)$` verankert, damit `TOKEN` nicht versehentlich `MY_TOKEN_SECRET`
-    trifft. Wer Teiltreffer will, schreibt `.*TOKEN.*`.
-  - Glob- und Regex-Treffer werden vereinigt. Die Ausdrücke werden beim
-    Laden des Plans kompiliert, ungültige führen zum Fehler.
-  - Overlay-Merge: Listen werden angehängt (wie `after`), `pass-env` überschreibt.
-  - `vigil plan` zeigt die Muster. Welche Variablen konkret durchgereicht
-    werden, erscheint nur als Namen im Debug-Log, nie mit Werten.
-- Exec-Checks im Kontext eines Service bekommen genau dieselbe Umgebung.
-- vigild ruft beim Start `prctl(PR_SET_DUMPABLE, 0)` auf. Das braucht keine
-  Capabilities und gilt nur für vigild selbst.
+    and `TZ`, plus everything matched by `pass-env-glob` or `pass-env-regex`,
+    plus `environment:`.
+  - `pass-env: true`: vigild's entire environment. Setting `pass-env-glob` or
+    `pass-env-regex` as well is a validation error, since they would have no
+    effect.
+  - `pass-env-glob`: YAML list. `*` (any number of characters) and `?` (one
+    character) anywhere; the glob must match the **whole** name. Small
+    hand-written matcher, no crate needed.
+  - `pass-env-regex`: YAML list (a single string with `A|B` also works). Uses
+    the `regex` crate, already a workspace dependency. Each expression is
+    anchored as `^(?:…)$` so that `TOKEN` does not accidentally match
+    `MY_TOKEN_SECRET`; use `.*TOKEN.*` for partial matches.
+  - Glob and regex matches are combined. Expressions are compiled when the
+    plan is loaded; invalid ones are an error.
+  - Overlay merge: lists are appended (like `after`), `pass-env` overrides.
+  - `vigil plan` shows the patterns. Which variables are actually passed is
+    only logged at debug level, as names, never with values.
+- Exec checks in a service context get exactly the same environment.
+- vigild calls `prctl(PR_SET_DUMPABLE, 0)` at startup. This needs no
+  capabilities and only affects vigild itself.
 
-**Warum das unter OpenShift/K8s wichtig ist:**
+**Why this matters on OpenShift/Kubernetes:**
 
-- Dort laufen vigild und alle Services mit derselben UID. Ohne
-  `PR_SET_DUMPABLE=0` kann jeder Service `/proc/1/environ` lesen, und
-  `env_clear()` allein schützt dann nicht. Mit `PR_SET_DUMPABLE=0` gehört
-  `/proc/1/*` root und ist für die gleiche UID nicht mehr lesbar.
-- Variablen aus dem Deployment (`env:`, `envFrom:` aus Secrets, auch von ESO)
-  bekommt zuerst vigild. Mit Default `false` sehen die Services sie **nicht
-  mehr automatisch**. Dafür gibt es die Allowlist, und in der Migrationsanleitung
-  für v4 muss das prominent stehen.
+- vigild and all services run with the same UID there. Without
+  `PR_SET_DUMPABLE=0` every service can read `/proc/1/environ`, so
+  `env_clear()` alone does not protect anything. With `PR_SET_DUMPABLE=0`,
+  `/proc/1/*` is owned by root and no longer readable for the same UID.
+- Variables from the Deployment (`env:`, `envFrom:` from Secrets, including
+  ESO) reach vigild first. With the `false` default, services **no longer see
+  them automatically**. That is what the allowlists are for, and the v4
+  migration guide must say so prominently.
 
-### S3 Der Reaper schnappt tokio die Exit-Status weg
+### S3 The reaper steals exit statuses from tokio
 
-**Problem:** `crates/vigild/src/reaper.rs:81` ruft `waitpid(-1)` bei jedem
-`SIGCHLD` auf. Damit kann er auch eigene Services und Probes einsammeln, bevor
-tokio sie abholt. tokio bekommt dann `ECHILD`, und
-`crates/vigild/src/service/actor/handlers.rs:110-115` macht daraus
-„failure, Code 1“. Ohne diesen Fix ist Phase 1 nicht zuverlässig umsetzbar.
+**Problem:** `crates/vigild/src/reaper.rs` calls `waitpid(-1)` on every
+`SIGCHLD`. It can therefore collect vigild's own services and probes before
+tokio does. tokio then gets `ECHILD`, and
+`crates/vigild/src/service/actor/handlers.rs` turns that into
+"failure, code 1". Phase 1 cannot be reliable without a fix.
 
-**Fix** (so löst es auch gopherd mit `reaper.Registry`):
+**Original fix idea** (as gopherd does with `reaper.Registry`):
 
-- Der Reaper wird der einzige Aufrufer von `wait`.
-- Spawn und Registrierung laufen unter einem gemeinsamen Lock
-  (`Mutex<HashMap<Pid, oneshot::Sender<WaitStatus>>>`), sonst kann ein Kind
-  sterben, bevor es registriert ist.
-- Registrierte PIDs bekommen ihren Status über den oneshot-Kanal, unbekannte werden verworfen.
-- Der Service-Actor wartet auf diesen Kanal statt auf `Child::wait()`.
-  Exec-Probes laufen über denselben Weg.
+- The reaper becomes the only caller of `wait`.
+- Spawn and registration happen under one lock
+  (`Mutex<HashMap<Pid, oneshot::Sender<WaitStatus>>>`), otherwise a child can
+  die before it is registered.
+- Registered PIDs receive their status through the oneshot channel; unknown
+  ones are discarded.
+- The service actor waits on that channel instead of `Child::wait()`. Exec
+  probes use the same path.
 
-**Test:** zuerst ein Repro. Viele Services, die schnell mit `exit 3` enden, und
-Orphans parallel. Dann prüfen, dass immer 3 gemeldet wird.
+**Status:** largely fixed by PR #1 (daveman1010221), shipped in v3.2.2. The
+reaper keeps collected statuses for 60 s and `reaper::wait_child` picks them
+up on `ECHILD`. Exit codes are reliable now; phase 1 no longer depends on the
+registry rework.
 
-**Stand:** Größtenteils behoben durch PR #1 (daveman1010221), kommt in
-v3.2.2. Der Reaper merkt sich eingesammelte Status 60 s lang,
-`reaper::wait_child` holt sie bei `ECHILD`. Exit-Codes sind damit
-zuverlässig, Phase 1 hängt nicht mehr am Registry-Umbau.
+Open for v4:
 
-Offen für v4:
+- Ignore statuses recorded before the child was spawned. Otherwise, with PID
+  reuse within 60 s, a stale orphan status could be returned.
+- The registry rework is now only needed for signals: between the reaper
+  collecting a child and the actor processing it, tokio still considers the
+  PID valid, so `kill` could hit a reused PID.
 
-- Status ignorieren, die älter als der Spawn des Kindes sind. Sonst könnte
-  bei PID-Wiederverwendung innerhalb von 60 s ein alter Orphan-Status
-  geliefert werden. Machen wir in v4 selbst.
-- Registry-Umbau (s.o.) nur noch wegen der Signale: Zwischen dem Einsammeln
-  durch den Reaper und der Verarbeitung im Actor hält tokio die PID noch für
-  gültig, `kill` könnte eine neu vergebene PID treffen.
+### S4 Harden the control socket
 
-### S4 Control-Socket absichern
+- **Server** (`crates/vigild/src/server.rs`, `bind_unix`):
+  - Check with `lstat` and refuse symlinks and non-socket files.
+  - Bind under a short temporary name, `chmod`, then `rename` into place, so
+    the socket never exists at its final path with looser permissions. The
+    process-wide umask is not touched, because concurrently spawned services
+    would inherit it.
+  - If a stale node at the path cannot be removed, vigild aborts instead of
+    only warning. The socket is bound before any service starts.
+  - In v4 the socket lives under `--path-prefix` and is checked by its rules.
+- **Client** (`vigil`, Unix transport): after connecting, check
+  `SO_PEERCRED` and refuse a listener that is neither root nor our own euid
+  (`--socket-uid` trusts one more UID). On OpenShift that is the same random
+  UID, so it works.
 
-- **Server** (`crates/vigild/src/server.rs:53-63`):
-  - Mit `lstat` prüfen und Symlinks ablehnen.
-  - Mit umask `0177` binden, danach explizit `chmod 0600`.
-  - Lässt sich eine fremde Datei am Pfad nicht entfernen, bricht vigild ab, statt nur zu warnen.
-  - In v4 liegt der Socket unter `--path-prefix` und wird mit dessen Regeln
-    geprüft. Im Backport 3.2.2 gibt es keinen Prefix, dort nur die Prüfungen
-    am Socket selbst.
-- **Client** (`vigil`, Unix-Transport): Vor dem Senden mit `SO_PEERCRED`
-  prüfen, dass die Gegenseite root ist oder die eigene euid hat.
-  Unter OpenShift ist das die gleiche zufällige UID, das passt.
+**Status:** done in v3.2.2 (`bind_unix`, `--socket-mode` defaulting to 600,
+`vigil --socket-uid`). Done on the `v4` branch: `--path-prefix` with the
+directory check (`crates/vigild/src/path_prefix.rs`).
 
-**Stand:** In v3.2.2 umgesetzt (`bind_unix`, `--socket-mode` mit Default
-600, `vigil --socket-uid`). Auf dem Branch `v4` erledigt: `--path-prefix` mit
-Prüfung des Verzeichnisses (Modul `crates/vigild/src/path_prefix.rs`).
+Found while smoke-testing and fixed on `v4`: the temporary socket name from
+3.2.2 (`.vigild.sock.<pid>.tmp`) is longer than the final one, so a path close
+to the 107-byte limit failed to bind. It is now `.<pid hex>.tmp`, with a clear
+error for paths that are too long.
 
-Beim Smoke-Test gefunden und auf `v4` behoben: Der temporäre Socket-Name aus
-3.2.2 (`.vigild.sock.<pid>.tmp`) ist länger als der endgültige. Liegt der Pfad
-nahe an der Grenze von 107 Byte, scheitert der Bind. Jetzt `.<pid hex>.tmp`
-und eine klare Fehlermeldung bei zu langen Pfaden.
+### S5 Without identities every caller is admin, including over TLS
 
-### S5 Ohne Identities ist jeder Aufrufer Admin, auch über TLS
+**Problem:** `crates/vigild/src/api/auth/mod.rs` grants admin to every caller
+as long as no identity is configured. This includes the TLS listener over
+TCP: with `--tls-addr` and no identities, anyone who can reach the port
+controls all services.
 
-**Problem:** `crates/vigild/src/api/auth/mod.rs:92` gibt jedem Aufrufer
-Admin-Rechte, solange keine Identity hinterlegt ist. Das gilt auch für den
-TLS-Listener über TCP: Mit `--tls-addr` ohne Identities kann jeder, der den
-Port erreicht, alle Services steuern.
-
-**Entscheidung:** Fix erst in v4, kein Backport.
+**Decision:** fix in v4 only, no backport.
 
 **Fix:**
 
-- Ohne Identities bekommt nur der Unix-Socket Admin, und zwar nur, wenn die
-  Peer-UID root oder die euid von vigild ist (wie bei pebble).
-- Über TLS gibt es ohne Identities nur Zugriff auf Endpunkte ohne Auth
-  (`Open`), z.B. Health und Metrics.
-- Beim Start mit `--tls-addr`, aber ohne Identities, gibt vigild eine Warnung
-  aus, dass die TLS-API nur lesend erreichbar ist.
-- Migrationsanleitung: Wer heute die TLS-API ohne Identities nutzt, braucht in
-  v4 eine `basic`- oder `tls`-Identity.
+- Without identities, only the Unix socket grants admin, and only if the peer
+  UID is root or vigild's euid (as in pebble).
+- Over TLS without identities, only endpoints that need no auth (`Open`) are
+  accessible, e.g. health and metrics.
+- When started with `--tls-addr` but no identities, vigild warns that the TLS
+  API is effectively read-only.
+- Migration guide: anyone using the TLS API without identities today needs a
+  `basic` or `tls` identity in v4.
 
-### Nicht betroffen
+### Not affected
 
-`O_CLOEXEC` und das Pipe-Leak aus dem gopherd-Commit betreffen vigil-rs nicht.
-Rust-`std` und tokio erledigen das schon. Die neuen Features unten müssen das beibehalten.
+`O_CLOEXEC` and the pipe leak from the gopherd commit do not affect vigil-rs;
+Rust `std` and tokio already handle them. The new features below must keep it
+that way.
 
-## Phase 1: Echte Exit-Codes, braucht S3
+## Phase 1: real exit codes (needs S3)
 
-- `EventKind::ProcessExited` bekommt `ExitInfo { code: Option<i32>, signal: Option<i32> }`.
-- Neue Daemon-Option `exit-code: fixed | propagate`. Bei `propagate` beendet
-  sich vigild mit dem Code des Service, bei einem Signal mit `128+sig`.
-  **Default in v4: `propagate`.** `fixed` (das alte 0/10) bleibt für die Migration.
-- Optional pro Service: `success-exit-codes: [0, 143]` und `exit-code-map: {143: 0}`.
-- Die Pfade `stop_all()` + `process::exit` an
-  `crates/vigild/src/overlord/events.rs:131-144` und
-  `crates/vigild/src/overlord/mod.rs:199-204` werden zu einer Funktion
-  `shutdown(code)` zusammengefasst.
-- Nebenbei: letzter Exit-Code in API und Status, Metrik
+- `EventKind::ProcessExited` gets `ExitInfo { code: Option<i32>, signal: Option<i32> }`.
+- New daemon option `exit-code: fixed | propagate`. With `propagate`, vigild
+  exits with the service's code, or `128+sig` for a signal.
+  **Default in v4: `propagate`.** `fixed` (the old 0/10) stays for migration.
+- Optional per service: `success-exit-codes: [0, 143]` and `exit-code-map: {143: 0}`.
+- The `stop_all()` + `process::exit` paths in
+  `crates/vigild/src/overlord/events.rs` and `crates/vigild/src/overlord/mod.rs`
+  are merged into a single `shutdown(code)` function.
+- Also: last exit code in the API and status, metric
   `vigil_service_last_exit_code`, `vigil services -o json`.
 
-## Phase 2: Readiness und sd_notify
+## Phase 2: readiness and sd_notify
 
-- **Ausgangslage:** `Starting` dauert nur einen Moment, denn
-  `crates/vigild/src/service/actor/spawn.rs:111` setzt sofort `Active`.
-  `after_deps_running` wartet nur auf `is_running()`. `CheckLevel::Ready`
-  wird angezeigt, aber für nichts genutzt.
-- **Neue Felder pro Service:** `ready: process | notify | check` (Default
+- **Current state:** `Starting` only lasts a moment, because
+  `crates/vigild/src/service/actor/spawn.rs` sets `Active` immediately.
+  `after_deps_running` only waits for `is_running()`. `CheckLevel::Ready` is
+  displayed but not used for anything.
+- **New fields per service:** `ready: process | notify | check` (default
   `process`), `ready-check: <name>`, `ready-timeout: 30s`.
-- **Zustände:** `Starting` bleibt bestehen, bis die Readiness erfüllt ist,
-  dann kommt `Active`. Abhängige Services warten auf `Active`. Beim Timeout
-  greift die `on-failure`-Policy.
-- **sd_notify, ohne zusätzliches Crate:**
-  - Pro Service ein `UnixDatagram` unter
-    `<path-prefix>/notify/<svc>-<64bit random>.sock`. Modus 0600, Owner ist die
-    Service-UID, ohne User-Wechsel also die eigene UID, `chown` entfällt dann.
-    Ein Pfad im Dateisystem statt eines abstrakten Namens vermeidet das
-    Squatting-Problem, das gopherd hatte.
-  - Der Pfad kommt in `NOTIFY_SOCKET`. Das gilt auch bei `pass-env: false`.
-  - Empfang über `recvmsg` mit `SCM_CREDENTIALS`. Akzeptiert werden nur
-    Nachrichten von PIDs in der Prozessgruppe des Service.
-  - Ausgewertet werden `READY=1`, `STATUS=` (erscheint in der API) und
-    `STOPPING=1`. Watchdog kommt später.
-- **API (Breaking, deshalb v4):** `ServiceStatus` bekommt `Starting`.
-  OpenAPI-Version auf v4 anheben. `vigil` v4 und `vigil-log-relay` müssen
-  den neuen Wert kennen.
+- **States:** `Starting` lasts until readiness is reached, then `Active`.
+  Dependent services wait for `Active`. On timeout the `on-failure` policy
+  applies.
+- **sd_notify, without an extra crate:**
+  - One `UnixDatagram` per service at
+    `<path-prefix>/notify/<svc>-<64-bit random>.sock`, mode 0600, owned by the
+    service UID (without user switching that is vigild's own UID, so no
+    `chown`). A filesystem path instead of an abstract name avoids the
+    squatting problem gopherd had.
+  - The path goes into `NOTIFY_SOCKET`, also with `pass-env: false`.
+  - Received via `recvmsg` with `SCM_CREDENTIALS`. Only messages from PIDs in
+    the service's process group are accepted.
+  - Handled: `READY=1`, `STATUS=` (shown in the API) and `STOPPING=1`.
+    Watchdog comes later.
+- **API (breaking, hence v4):** `ServiceStatus` gets `Starting`. Bump the
+  OpenAPI version to v4. `vigil` v4 and `vigil-log-relay` must know the new
+  value.
 
-## Phase 3: Oneshot und Cron, baut auf Phase 2 auf
+## Phase 3: oneshot and cron (builds on phase 2)
 
 - `type: simple | oneshot`
-  - Ein Oneshot gilt mit Exit 0 als „ready“, abhängige Services starten danach.
-  - Nach Erfolg kein Neustart. Ein Fehler läuft über die normale
-    `on-failure`-Policy mit Backoff.
-  - Neuer Endzustand `Done` (ebenfalls neu in der API).
-- `schedule: "*/5 * * * *"`, nur für `oneshot`:
-  - Crate `croner` mit Feature `jiff` (Vorgabe des Users), also `jiff` statt
-    `chrono` für Zeitzonen und die Berechnung des nächsten Termins.
-    5 oder 6 Felder, korrekter Umgang mit der Sommerzeit. Vor der Umsetzung
-    prüfen, welche croner-Version das Feature anbietet.
-  - Zusätzlicher `sleep_until(next)`-Zweig im `select!` des Actors.
-  - Überlappende Läufe: Default `skip`, wenn der vorige Lauf noch aktiv ist.
-  - Zeitzone UTC, optional `schedule-tz`.
-  - Hot-Reload berechnet den nächsten Termin neu.
-  - Kein Zustand auf der Platte (kein „letzter Lauf“-File). Verpasste Termine
-    während eines Pod-Neustarts werden nicht nachgeholt.
-- Metriken und Alerts: Ergebnis und Zeitpunkt des letzten Laufs.
+  - A oneshot counts as "ready" on exit 0; dependent services start afterwards.
+  - No restart after success. A failure goes through the normal `on-failure`
+    policy with backoff.
+  - New final state `Done` (also new in the API).
+- `schedule: "*/5 * * * *"`, only for `oneshot`:
+  - Crate `croner` with the `jiff` feature (maintainer decision), i.e. `jiff`
+    instead of `chrono` for time zones and next-run computation. 5 or 6
+    fields, correct DST handling. Check which croner version provides the
+    feature before implementing.
+  - An extra `sleep_until(next)` branch in the actor's `select!`.
+  - Overlapping runs: default `skip` while the previous run is still active.
+  - Time zone UTC, optional `schedule-tz`.
+  - Hot reload recomputes the next run.
+  - No state on disk (no "last run" file). Runs missed during a pod restart
+    are not caught up.
+- Metrics and alerts: result and time of the last run.
 
-## Phase 4: Templating
+## Phase 4: templating
 
 - **Syntax:** `{{.VAR}}`, `{{.VAR:-default}}`, `{{file "/p"}}`, `{{mem 75%}}`, `{{cpu 50%}}`.
-- **Wo:** `command` und die Werte von `environment`.
-- **Wann:** Beim Laden des Plans nur Syntaxprüfung. Aufgelöst wird erst beim
-  Spawn. Bei jedem (Neu-)Start eines Service wird `{{file}}` also frisch gelesen.
-- **Parser:** neues Modul `crates/vigild/src/template/`, handgeschrieben, ohne
-  Regex oder Template-Engine. Alles in einem einzigen Durchgang über den
-  Originaltext (das war der Template-Bug bei gopherd). Fuzzing mit proptest.
-- **`file`:** nur reguläre Dateien, maximal 64 KiB, abschließender Zeilenumbruch
-  wird entfernt. Aufgelöste Werte erscheinen nie in Logs oder in der Plan-API.
-  - Symlinks müssen erlaubt sein: Kubernetes-Secret-Volumes bestehen aus
-    Symlinks (`key -> ..data/key`, `..data -> ..2026_11_02_...`). Kein
-    `O_NOFOLLOW` auf den Pfad, aber nach dem Öffnen mit `fstat` prüfen, dass
-    es eine reguläre Datei ist.
-- **`mem` / `cpu`:** cgroup v2 `memory.max` bzw. `cpu.max`, sonst
-  `/proc/meminfo` bzw. `sched_getaffinity`. Unter OpenShift liefern diese
-  Werte die Pod-Limits.
-- **`.VAR`:** Quelle ist `environment` des Service plus die per `pass-env`
-  freigegebenen Variablen von vigild.
+- **Where:** `command` and the values of `environment`.
+- **When:** only a syntax check when the plan is loaded. Values are resolved
+  at spawn time, so `{{file}}` is read fresh on every (re)start of a service.
+- **Parser:** new module `crates/vigild/src/template/`, hand-written, no regex
+  or template engine. Everything is resolved in a single pass over the
+  original text (that was gopherd's template bug). Fuzzing with proptest.
+- **`file`:** regular files only, at most 64 KiB, a trailing newline is
+  stripped. Resolved values never appear in logs or the plan API.
+  - Symlinks must be allowed: Kubernetes secret volumes consist of symlinks
+    (`key -> ..data/key`, `..data -> ..2026_11_02_...`). No `O_NOFOLLOW` on
+    the path, but `fstat` after opening to make sure it is a regular file.
+- **`mem` / `cpu`:** cgroup v2 `memory.max` / `cpu.max`, otherwise
+  `/proc/meminfo` / `sched_getaffinity`. On OpenShift these reflect the pod
+  limits.
+- **`.VAR`:** sources are the service's `environment` plus vigild variables
+  allowed through `pass-env`.
 
-### Phase 4b: Dateien beobachten (Ersatz für stakater Reloader)
+### Phase 4b: watching files (replacement for stakater Reloader)
 
-**Ausgangslage mit ESO:** ESO aktualisiert das Kubernetes-Secret. Was dann passiert:
+**Situation with ESO:** ESO updates the Kubernetes Secret. Then:
 
-- **Secret als Volume (ohne `subPath`):** Das Kubelet aktualisiert die Datei im
-  Pod nach etwa 1-2 Minuten (Sync-Periode plus Cache). Ein `{{file}}` liest
-  den neuen Wert beim nächsten Start des Service.
-- **Secret als Env-Variable (`env`/`envFrom`):** wird nie aktualisiert, nur
-  durch einen Neustart des Pods. Dafür braucht man weiter Reloader.
-- **Volume mit `subPath`:** wird nie aktualisiert.
+- **Secret as a volume (without `subPath`):** the kubelet updates the file in
+  the pod after about 1-2 minutes (sync period plus cache). A `{{file}}` reads
+  the new value on the service's next start.
+- **Secret as an env variable (`env`/`envFrom`):** never updated except by a
+  pod restart. Reloader is still needed for that.
+- **Volume with `subPath`:** never updated.
 
-Phase 4 allein liest den neuen Wert also nur, wenn der Service aus einem
-anderen Grund neu startet. Um Reloader zu ersetzen, braucht es einen Auslöser:
+Phase 4 alone only picks up the new value when the service restarts for some
+other reason. Replacing Reloader needs a trigger:
 
-- **Neues Feld pro Service:**
+- **New field per service:**
   ```yaml
   watch-files:
-    paths: [/etc/secrets/db-password]   # zusätzlich zu allen {{file}}-Pfaden
+    paths: [/etc/secrets/db-password]   # in addition to all {{file}} paths
     on-change: restart                  # restart | signal:SIGHUP | ignore
     interval: 30s
   ```
-- **Erkennung per Polling** (Hash bzw. Inode und mtime alle `interval`), nicht
-  per inotify. Grund: Das Kubelet tauscht den `..data`-Symlink atomar aus,
-  inotify auf die Datei bekommt das nicht zuverlässig mit. Polling ist einfach
-  und funktioniert auch auf NFS und overlayfs.
-- **Debounce:** ESO und Kubelet aktualisieren mehrere Keys nacheinander. Erst
-  reagieren, wenn sich der Inhalt eine Polling-Runde lang nicht mehr ändert.
-- **Vorteil gegenüber Reloader:** Es wird nur der betroffene Service neu
-  gestartet, nicht der ganze Pod. Bei `signal:SIGHUP` gar nichts, wenn die
-  Anwendung Reload kann.
-- Ein Event pro Änderung geht an das Alerting und erscheint als Metrik
+- **Detection by polling** (hash or inode and mtime every `interval`), not
+  inotify. Reason: the kubelet swaps the `..data` symlink atomically, and
+  inotify on the file does not reliably notice. Polling is simple and also
+  works on NFS and overlayfs.
+- **Debounce:** ESO and the kubelet update several keys one after another.
+  Only react once the content has been stable for one polling round.
+- **Advantage over Reloader:** only the affected service is restarted, not the
+  whole pod; with `signal:SIGHUP` nothing is restarted if the application can
+  reload.
+- Each change emits an alert event and increments the metric
   `vigil_service_file_reloads_total`.
 
-### Phase 4c: Layers aus einer ConfigMap, automatisches `replan`
+### Phase 4c: layers from a ConfigMap, automatic `replan`
 
-**Ziel:** Statt eines vigil-Operators (bewusst verworfen: würde Kubernetes
-nachbauen, braucht CRD, Controller, RBAC und API-Zugriff) reicht der
-typische Anwendungsfall: Layers als ConfigMap mounten, und vigild übernimmt
-Änderungen selbst. Damit entfällt `kubectl exec … vigil replan` nach einem
-Update der ConfigMap.
+**Goal:** instead of a vigil operator (deliberately rejected: it would
+duplicate Kubernetes and needs a CRD, controller, RBAC and API access), cover
+the common case: mount the layers as a ConfigMap and let vigild pick up
+changes itself. This removes the need for `kubectl exec … vigil replan` after
+updating the ConfigMap.
 
-- **Neue Option** für vigild: `--watch-layers <interval>` /
-  `VIGIL_WATCH_LAYERS` (z.B. `30s`, Default aus).
-- **Erkennung per Polling** wie in Phase 4b, mit derselben Code-Basis:
-  Hash über Namen und Inhalt aller `*.yaml` im Layer-Verzeichnis. Grund wie
-  dort: Das Kubelet tauscht bei ConfigMaps den `..data`-Symlink atomar aus.
-  Dateien, die mit `..` beginnen (`..data`, `..2026_…`), werden ignoriert.
-- **Debounce:** erst reagieren, wenn der Hash eine Polling-Runde lang stabil ist.
-- **Validierung vor dem Replan:** Die neuen Layers erst parsen und prüfen.
-  Bei einem Fehler bleibt der laufende Plan aktiv, es gibt ein Log und ein
-  Alert-Event (`layers-invalid`), und es wird nicht erneut versucht, bis
-  sich der Inhalt wieder ändert.
-- **Replan** nutzt die bestehende Logik von `vigil replan`, also nur
-  geänderte Services und Checks neu starten.
-- Metriken: `vigil_layers_reload_total{result="ok|invalid"}`, Zeitpunkt des
-  letzten erfolgreichen Reloads.
-- Doku in `orchestrators.md`: ConfigMap-Beispiel ohne `subPath` (mit
-  `subPath` aktualisiert das Kubelet nie).
+- **New vigild option:** `--watch-layers <interval>` / `VIGIL_WATCH_LAYERS`
+  (e.g. `30s`, off by default).
+- **Detection by polling** as in phase 4b, sharing the code: a hash over names
+  and contents of all `*.yaml` files in the layers directory. Same reason as
+  there: the kubelet swaps the ConfigMap's `..data` symlink atomically. Files
+  starting with `..` (`..data`, `..2026_…`) are ignored.
+- **Debounce:** only react once the hash has been stable for one polling round.
+- **Validate before replanning:** parse and check the new layers first. On
+  error the running plan stays active, an error is logged and an alert event
+  (`layers-invalid`) is emitted; no retry until the content changes again.
+- **Replan** reuses the existing `vigil replan` logic, i.e. only changed
+  services and checks are restarted.
+- Metrics: `vigil_layers_reload_total{result="ok|invalid"}` and the time of
+  the last successful reload.
+- Docs in `orchestrators.md`: ConfigMap example without `subPath` (with
+  `subPath` the kubelet never updates the files).
 
 ## Releases
 
 ```
-S1, S4 (Backport, ohne path-prefix) ──────────► v3.2.2
+S1, S4 (backport, without path-prefix) ────────► v3.2.2
 
 S1, S2, S4, S5, prefix ──┐
-S3-Rest, Phase 1 (Exit) ┤
-Phase 2 (Readiness) ─────┼──► v4.0
-Phase 3 (Oneshot/Cron) ──┤
-Phase 4 + 4b + 4c ───────┘    (Phase 4 nach S2)
+S3 rest, phase 1 (exit) ─┤
+phase 2 (readiness) ─────┼──► v4.0
+phase 3 (oneshot/cron) ──┤
+phase 4 + 4b + 4c ───────┘    (phase 4 after S2)
 ```
 
-Empfohlene Reihenfolge der Arbeit: 3.2.2-Backport zuerst, dann auf `main`
-S1-Fehlerfall → S4 + path-prefix → S5 → S2 → S3 → Phase 1 → Phase 2 → Phase 3 → Phase 4 → 4b → 4c.
+Order of work: the 3.2.2 backport first, then on `v4`:
+S1 error case → S4 + path-prefix → S5 → S2 → S3 rest → phase 1 → phase 2 →
+phase 3 → phase 4 → 4b → 4c.
 
-Für jede Phase: Unit-Tests, VTest2-Integrationstests nach bestehendem Muster,
-ein Test unter OpenShift-Bedingungen (zufällige UID, GID 0, `/run` nicht
-beschreibbar, `readOnlyRootFilesystem` mit `emptyDir` auf `/tmp`), Updates in
-`docs/user-guide/configuration.md`, `docs/operator-guide/orchestrators.md` und
-`docs/specs/openapi.yaml`, Coverage nicht unter 92 %. Dazu eine
-Migrationsanleitung v3 → v4.
+For every phase: unit tests, VTest2 integration tests following the existing
+patterns, a test under OpenShift conditions (random UID, GID 0, `/run` not
+writable, `readOnlyRootFilesystem` with an `emptyDir` on `/tmp`), updates to
+`docs/user-guide/configuration.md`, `docs/operator-guide/orchestrators.md` and
+`docs/specs/openapi.yaml`, coverage not below 92 %, plus a v3 → v4 migration
+guide. Breaking commits carry a `BREAKING CHANGE:` footer with migration
+steps; it feeds the changelog's "Breaking Changes" section.
 
-## Entschieden
+## Decided
 
-- Ziel-Version v4.0, **alle Phasen kommen in v4.0**.
-- S1 und S4 zusätzlich als Backport in v3.2.2.
-- `pass-env` Default `false`, Allowlists über getrennte Felder
-  `pass-env-glob` und `pass-env-regex`.
-- Exit-Codes: `propagate` ist Default in v4.
-- Ein einziges Verzeichnis `--path-prefix` für alle Laufzeitdateien, Prüfung
-  beim Start, bei Fehler Abbruch.
-- Alles muss unter OpenShift ohne Schreibrechte auf `/run` und ohne Capabilities laufen.
-- Neuer Status `Starting` und Änderungen an der OpenAPI kommen in v4.
+- Target version v4.0; **all phases ship in v4.0**.
+- S1 and S4 additionally backported to v3.2.2 (released).
+- `pass-env` defaults to `false`; allowlists via the separate fields
+  `pass-env-glob` and `pass-env-regex`.
+- Exit codes: `propagate` is the default in v4.
+- A single `--path-prefix` directory for all runtime files, checked at
+  startup, abort on failure. vigild creates the last component (mode 0700)
+  if it is missing.
+- Everything must run on OpenShift without write access to `/run` and
+  without capabilities.
+- The new `Starting` status and OpenAPI changes ship in v4.
+- No vigil operator; ConfigMap-based layers with auto-replan instead (4c).
 
-- vigild legt die letzte Komponente von `--path-prefix` selbst mit 0700 an,
-  wenn sie fehlt.
+## Open decisions
 
-## Offene Entscheidungen
-
-Keine.
+None.
