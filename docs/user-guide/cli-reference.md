@@ -13,7 +13,8 @@ vigil [FLAGS] <COMMAND>
 
 | Flag | Env var | Default | Description |
 |---|---|---|---|
-| `--socket <PATH>` | `VIGIL_SOCKET` | `/run/vigil/vigild.sock` | Unix socket path. Ignored when `--url` is set. |
+| `--path-prefix <DIR>` | `VIGIL_PATH_PREFIX` | `/run/vigil` | Runtime directory of vigild (same variable as for vigild). The socket is `<path-prefix>/vigild.sock` unless `--socket` is set. |
+| `--socket <PATH>` | `VIGIL_SOCKET` | `<path-prefix>/vigild.sock` | Unix socket path. Ignored when `--url` is set. |
 | `--socket-uid <UID>` | `VIGIL_SOCKET_UID` | — | Also trust a daemon socket owned by this UID. By default `vigil` only talks to a vigild running as root or as your own UID and refuses any other listener. |
 | `--url <URL>` | `VIGIL_URL` | — | HTTP or HTTPS base URL (e.g. `http://host:8080`, `https://host:8443`). Overrides `--socket`. |
 | `-k`, `--insecure` | — | false | Skip TLS certificate verification. Only effective with `--url https://...` |

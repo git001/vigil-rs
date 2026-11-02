@@ -26,10 +26,11 @@ LABEL org.opencontainers.image.title="vigil-rs" \
       org.opencontainers.image.licenses="AGPL-3.0-only" \
       org.opencontainers.image.source="https://github.com/git001/vigil-rs"
 
-# Use /tmp for the socket: /run is a root-owned tmpfs on OpenShift and
-# any chmod done in the image layer is lost at runtime.
+# Runtime files go to /tmp/vigil: /run is a root-owned tmpfs on OpenShift and
+# any chmod done in the image layer is lost at runtime. vigild creates the
+# directory itself (mode 0700); the vigil client reads the same variable.
 ENV VIGIL_LAYERS=/etc/vigil/layers \
-    VIGIL_SOCKET=/tmp/vigild.sock
+    VIGIL_PATH_PREFIX=/tmp/vigil
 
 VOLUME ["/etc/vigil/layers"]
 

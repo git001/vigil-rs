@@ -99,34 +99,49 @@ pub fn bind_unix(socket_path: &Path, mode: u32) -> anyhow::Result<UnixListener> 
     };
     std::fs::create_dir_all(parent).with_context(|| format!("creating socket dir {parent:?}"))?;
 
-    let file_name = socket_path
-        .file_name()
-        .with_context(|| format!("socket path {socket_path:?} has no file name"))?;
-    let tmp = parent.join(format!(
-        ".{}.{}.tmp",
-        file_name.to_string_lossy(),
-        std::process::id()
-    ));
-    // Leftover from a crashed start with the same PID (PID 1 in containers).
-    if let Ok(md) = std::fs::symlink_metadata(&tmp)
-        && md.file_type().is_socket()
-    {
-        let _ = std::fs::remove_file(&tmp);
-    }
+    // sun_path holds 108 bytes including the trailing NUL.
+    const SUN_PATH_MAX: usize = 107;
+    let path_len = |p: &Path| p.as_os_str().len();
+    anyhow::ensure!(
+        path_len(socket_path) <= SUN_PATH_MAX,
+        "socket path {socket_path:?} is {} bytes, the limit for Unix sockets is {SUN_PATH_MAX}",
+        path_len(socket_path)
+    );
 
-    let std_listener = std::os::unix::net::UnixListener::bind(&tmp)
-        .with_context(|| format!("binding Unix socket {tmp:?}"))?;
-    let finish = || -> anyhow::Result<()> {
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))
-            .with_context(|| format!("chmod {mode:o} {tmp:?}"))?;
-        std::fs::rename(&tmp, socket_path)
-            .with_context(|| format!("moving socket into place at {socket_path:?}"))?;
-        Ok(())
+    // Short temporary name (".<pid hex>.tmp", at most 11 bytes) so that it
+    // fits wherever the final path fits in practice.
+    let tmp = parent.join(format!(".{:x}.tmp", std::process::id()));
+
+    let std_listener = if path_len(&tmp) <= SUN_PATH_MAX {
+        // Leftover from a crashed start with the same PID (PID 1 in containers).
+        if let Ok(md) = std::fs::symlink_metadata(&tmp)
+            && md.file_type().is_socket()
+        {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        let l = std::os::unix::net::UnixListener::bind(&tmp)
+            .with_context(|| format!("binding Unix socket {tmp:?}"))?;
+        let finish = || -> anyhow::Result<()> {
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))
+                .with_context(|| format!("chmod {mode:o} {tmp:?}"))?;
+            std::fs::rename(&tmp, socket_path)
+                .with_context(|| format!("moving socket into place at {socket_path:?}"))?;
+            Ok(())
+        };
+        if let Err(e) = finish() {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+        l
+    } else {
+        // Only a socket name shorter than the temp name can get here: bind in
+        // place and chmod right away (short window with umask permissions).
+        let l = std::os::unix::net::UnixListener::bind(socket_path)
+            .with_context(|| format!("binding Unix socket {socket_path:?}"))?;
+        std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(mode))
+            .with_context(|| format!("chmod {mode:o} {socket_path:?}"))?;
+        l
     };
-    if let Err(e) = finish() {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
-    }
 
     std_listener.set_nonblocking(true)?;
     let listener = UnixListener::from_std(std_listener)?;
@@ -226,6 +241,32 @@ mod bind_tests {
         tokio::net::UnixStream::connect(&sock)
             .await
             .expect("connectable");
+    }
+
+    /// Regression: the temporary name used to be ".<name>.<pid>.tmp", so a
+    /// final path close to the 107-byte limit failed to bind although it fits.
+    #[tokio::test]
+    async fn final_path_at_limit_binds() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().as_os_str().len() + 1;
+        let name = "s".repeat(107 - base);
+        let sock = dir.path().join(&name);
+        assert_eq!(sock.as_os_str().len(), 107);
+        let _l = bind_unix(&sock, DEFAULT_SOCKET_MODE).unwrap();
+        assert_eq!(mode_of(&sock), 0o600);
+        tokio::net::UnixStream::connect(&sock)
+            .await
+            .expect("connectable");
+    }
+
+    #[tokio::test]
+    async fn too_long_path_has_clear_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("x".repeat(120));
+        let err = bind_unix(&sock, DEFAULT_SOCKET_MODE)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("limit for Unix sockets"), "{err}");
     }
 
     #[tokio::test]

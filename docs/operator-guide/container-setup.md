@@ -52,7 +52,8 @@ LABEL org.opencontainers.image.description="My application supervised by vigil-r
 | Flag | Env var | Default | Description |
 |---|---|---|---|
 | `--layers-dir <PATH>` | `VIGIL_LAYERS` | `/etc/vigil/layers` | Directory containing layer YAML files |
-| `--socket <PATH>` | `VIGIL_SOCKET` | `/run/vigil/vigild.sock` | Unix socket path for the HTTP API. vigild refuses to start if the path is a symlink, a non-socket file, or a stale socket it cannot remove. |
+| `--path-prefix <DIR>` | `VIGIL_PATH_PREFIX` | `/run/vigil` | Directory for everything vigild creates at runtime (control socket, sd_notify sockets). Checked at startup: must be a directory owned by vigild's UID, not a symlink, not writable by others (`g+w` is fine). A missing **last** component is created with mode 0700. vigild refuses to start otherwise. On OpenShift use e.g. `/tmp/vigil`. |
+| `--socket <PATH>` | `VIGIL_SOCKET` | `<path-prefix>/vigild.sock` | Unix socket path for the HTTP API. vigild refuses to start if the path is a symlink, a non-socket file, or a stale socket it cannot remove. |
 | `--socket-mode <OCTAL>` | `VIGIL_SOCKET_MODE` | `600` | Permission bits of the Unix socket. Without identities every caller that can connect is admin, so widen this (e.g. `660`) only together with local identities. |
 | `--tls-addr <ADDR>` | `VIGIL_TLS_ADDR` | — | Enable HTTPS listener, e.g. `0.0.0.0:8443` |
 | `--cert <PATH>` | `VIGIL_CERT` | — | PEM certificate file for TLS (auto-generated if omitted) |

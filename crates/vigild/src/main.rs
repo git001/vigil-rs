@@ -6,7 +6,7 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-use vigild::{api, identity, logs, overlord, reaper, server, tls};
+use vigild::{api, identity, logs, overlord, path_prefix, reaper, server, tls};
 
 use clap::Parser;
 use nix::sys::signal::Signal;
@@ -48,9 +48,16 @@ struct Args {
     #[arg(long, env = "VIGIL_LAYERS", default_value = "/etc/vigil/layers")]
     layers_dir: PathBuf,
 
-    /// Unix socket path for the HTTP API.
-    #[arg(long, env = "VIGIL_SOCKET", default_value = "/run/vigil/vigild.sock")]
-    socket: PathBuf,
+    /// Directory for everything vigild creates at runtime (control socket,
+    /// sd_notify sockets). Checked at startup: must be a directory owned by
+    /// vigild's UID, not a symlink, not writable by others. A missing last
+    /// component is created (mode 0700). On OpenShift use e.g. /tmp/vigil.
+    #[arg(long, env = "VIGIL_PATH_PREFIX", default_value = path_prefix::DEFAULT_PATH_PREFIX)]
+    path_prefix: PathBuf,
+
+    /// Unix socket path for the HTTP API. Default: <path-prefix>/vigild.sock.
+    #[arg(long, env = "VIGIL_SOCKET")]
+    socket: Option<PathBuf>,
 
     /// Permission bits of the Unix socket (octal). Default 600: owner only.
     /// Widen (e.g. 660 or 666) only together with local identities, because
@@ -139,7 +146,7 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
     info!(
         version = env!("CARGO_PKG_VERSION"),
         layers_dir = %args.layers_dir.display(),
-        socket = %args.socket.display(),
+        path_prefix = %args.path_prefix.display(),
         "vigild starting"
     );
 
@@ -148,11 +155,17 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
         reaper::spawn_reaper()?;
     }
 
-    // Bind the control socket before any service starts: a bind failure is
-    // fatal and must not leave already spawned services behind.
-    let unix_listener = server::bind_unix(&args.socket, args.socket_mode)?;
+    // Check/create the runtime directory and bind the control socket before
+    // any service starts: both are fatal on error and must not leave already
+    // spawned services behind.
+    path_prefix::prepare(&args.path_prefix, args.socket_mode)?;
+    let socket = args
+        .socket
+        .clone()
+        .unwrap_or_else(|| path_prefix::socket_path(&args.path_prefix));
+    let unix_listener = server::bind_unix(&socket, args.socket_mode)?;
 
-    let http_address = args.socket.to_string_lossy().into_owned();
+    let http_address = socket.to_string_lossy().into_owned();
     let https_address = args.tls_addr.clone();
     let (overlord, log_store, metrics, overlord_task) = overlord::spawn(
         args.layers_dir,

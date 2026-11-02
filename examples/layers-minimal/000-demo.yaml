@@ -4,13 +4,13 @@ summary: Minimal demo — requires only a POSIX shell
 # on any Linux system without installing additional packages.
 # Start vigild pointing at this directory:
 #
-#   vigild --layers-dir examples/layers-minimal --socket /tmp/vigild.sock
+#   vigild --layers-dir examples/layers-minimal --path-prefix /tmp/vigil-demo
 #
 # Then in another terminal:
 #
-#   vigil --socket /tmp/vigild.sock services
-#   vigil --socket /tmp/vigild.sock logs --n 20
-#   vigil --socket /tmp/vigild.sock checks
+#   vigil --path-prefix /tmp/vigil-demo services
+#   vigil --path-prefix /tmp/vigil-demo logs --n 20
+#   vigil --path-prefix /tmp/vigil-demo checks
 
 services:
 

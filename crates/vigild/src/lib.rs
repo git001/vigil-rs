@@ -9,6 +9,7 @@ pub mod identity;
 pub mod logs;
 pub mod metrics;
 pub mod overlord;
+pub mod path_prefix;
 pub mod process_util;
 pub mod reaper;
 pub mod server;

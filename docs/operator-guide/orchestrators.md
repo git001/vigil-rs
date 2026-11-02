@@ -136,8 +136,12 @@ Configure which pods to collect via env vars in the Deployment manifest:
 | `POD_SELECTOR` | *(all pods)* | Label selector, e.g. `app=myapp` |
 | `WATCH_INTERVAL` | `30` | Seconds between pod-list refreshes |
 
-**OpenShift:** the image uses `WORKDIR /tmp` and `--socket /tmp/vigild.sock`
-because OpenShift mounts `/run` as a root-owned tmpfs at runtime. An
+**OpenShift:** the image uses `WORKDIR /tmp` and `VIGIL_PATH_PREFIX=/tmp/vigil`
+because OpenShift mounts `/run` as a root-owned tmpfs at runtime. vigild
+creates `/tmp/vigil` (mode 0700) at startup; the `vigil` client reads the same
+variable and finds the socket. With `readOnlyRootFilesystem: true`, mount an
+`emptyDir` at `/tmp` (or point the prefix at a subdirectory of another
+`emptyDir`). An
 `image.openshift.io/triggers` annotation in `k8s/deployment.yaml` rolls the
 Deployment automatically on `oc start-build`.
 

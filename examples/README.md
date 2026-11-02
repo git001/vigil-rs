@@ -27,9 +27,9 @@ lifecycle:
 | `canary`  | Crashes after 10 s to demonstrate `on-failure: restart` |
 
 ```
-vigild --layers-dir examples/layers-minimal --socket /tmp/vigild.sock &
-vigil --socket /tmp/vigild.sock services list
-vigil --socket /tmp/vigild.sock logs -f
+vigild --layers-dir examples/layers-minimal --path-prefix /tmp/vigil-demo &
+vigil --path-prefix /tmp/vigil-demo services list
+vigil --path-prefix /tmp/vigil-demo logs -f
 ```
 
 ---
@@ -51,8 +51,8 @@ receivers that require a specific JSON shape.
 export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 export TEAMS_WEBHOOK_URL=https://your-org.webhook.office.com/webhookb2/...
 export CLUSTER_NAME=prod-eu-1
-vigild --layers-dir examples/alerts-webhook/layers --socket /tmp/vigild.sock
-vigil --socket /tmp/vigild.sock alerts list
+vigild --layers-dir examples/alerts-webhook/layers --path-prefix /tmp/vigil-demo
+vigil --path-prefix /tmp/vigil-demo alerts list
 ```
 
 ---

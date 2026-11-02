@@ -22,11 +22,18 @@ use vigil_client::client::{HttpConfig, VigilClient};
 struct Args {
     #[arg(
         long,
-        env = "VIGIL_SOCKET",
-        default_value = "/run/vigil/vigild.sock",
-        help = "Unix socket path of the vigild daemon.\nIgnored when --url is set."
+        env = "VIGIL_PATH_PREFIX",
+        default_value = "/run/vigil",
+        help = "Runtime directory of vigild (same as vigild --path-prefix).\nThe socket is <path-prefix>/vigild.sock unless --socket is set."
     )]
-    socket: PathBuf,
+    path_prefix: PathBuf,
+
+    #[arg(
+        long,
+        env = "VIGIL_SOCKET",
+        help = "Unix socket path of the vigild daemon.\nDefault: <path-prefix>/vigild.sock. Ignored when --url is set."
+    )]
+    socket: Option<PathBuf>,
 
     #[arg(
         long,
@@ -174,7 +181,11 @@ async fn main() -> anyhow::Result<()> {
             },
         )?
     } else {
-        VigilClient::new_unix_trusting(args.socket, args.socket_uid)
+        VigilClient::new_unix_trusting(
+            args.socket
+                .unwrap_or_else(|| args.path_prefix.join("vigild.sock")),
+            args.socket_uid,
+        )
     };
 
     match args.cmd {
