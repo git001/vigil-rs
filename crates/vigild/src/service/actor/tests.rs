@@ -1084,3 +1084,128 @@ async fn notify_socket_is_not_inherited_without_ready_notify() {
     let _ = actor.child.as_mut().unwrap().wait().await;
     assert_eq!(std::fs::read_to_string(&out).unwrap().trim(), "unset");
 }
+
+// -----------------------------------------------------------------------
+// type: oneshot, schedule, UpdateConfig
+// -----------------------------------------------------------------------
+
+fn oneshot(command: &str) -> ServiceConfig {
+    ServiceConfig {
+        command: Some(command.into()),
+        service_type: Some(vigil_types::plan::ServiceType::Oneshot),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn oneshot_success_ends_done_and_stays_starting_while_running() {
+    let (tx, mut rx) = spawn_run(oneshot("sleep 0.3"), std::env::temp_dir());
+    start(&tx).await;
+    let seen = wait_event(&mut rx, is_state(ServiceState::Done)).await;
+    assert!(
+        !seen.iter().any(|k| matches!(
+            k,
+            EventKind::StateChanged {
+                new_state: ServiceState::Active
+            }
+        )),
+        "a oneshot is never active: {seen:?}"
+    );
+    assert!(
+        seen.iter()
+            .any(|k| matches!(k, EventKind::ProcessExited { success: true, .. }))
+    );
+    tx.send(Cmd::Shutdown).await.unwrap();
+}
+
+#[tokio::test]
+async fn unscheduled_oneshot_failure_restarts_by_default() {
+    let (tx, mut rx) = spawn_run(oneshot("/bin/sh -c 'exit 3'"), std::env::temp_dir());
+    start(&tx).await;
+    wait_event(&mut rx, is_state(ServiceState::Backoff)).await;
+    tx.send(Cmd::Shutdown).await.unwrap();
+}
+
+#[tokio::test]
+async fn scheduled_oneshot_failure_is_ignored_by_default() {
+    let mut cfg = oneshot("/bin/sh -c 'exit 3'");
+    cfg.schedule = Some("0 0 1 1 *".into()); // far away; started manually
+    let (tx, mut rx) = spawn_run(cfg, std::env::temp_dir());
+    start(&tx).await;
+    let seen = wait_event(&mut rx, is_state(ServiceState::Inactive)).await;
+    assert!(
+        !seen.iter().any(|k| matches!(
+            k,
+            EventKind::StateChanged {
+                new_state: ServiceState::Backoff
+            }
+        )),
+        "{seen:?}"
+    );
+    tx.send(Cmd::Shutdown).await.unwrap();
+}
+
+#[tokio::test]
+async fn schedule_runs_job_and_skips_overlapping_runs() {
+    let mut cfg = oneshot("sleep 2.5");
+    cfg.schedule = Some("* * * * * *".into()); // every second
+    cfg.startup = vigil_types::plan::Startup::Enabled;
+    let (tx, mut rx) = spawn_run(cfg, std::env::temp_dir());
+
+    // Armed at actor start without any Start command.
+    let first = wait_event(&mut rx, |k| matches!(k, EventKind::NextRun { at: Some(_) })).await;
+    assert!(first.is_empty(), "{first:?}");
+    wait_event(&mut rx, is_state(ServiceState::Starting)).await;
+
+    // While the 2.5 s run is active, the per-second schedule must not
+    // start another one.
+    let mut starts = 0;
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(2000);
+    while let Ok(Some(ev)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+        if matches!(
+            ev.kind,
+            EventKind::StateChanged {
+                new_state: ServiceState::Starting
+            }
+        ) {
+            starts += 1;
+        }
+    }
+    assert_eq!(starts, 0, "overlapping run started");
+    tx.send(Cmd::Shutdown).await.unwrap();
+}
+
+#[tokio::test]
+async fn schedule_is_not_armed_for_startup_disabled() {
+    let mut cfg = oneshot("true");
+    cfg.schedule = Some("* * * * * *".into());
+    let (mut actor, _rx) = make_actor_with_config(cfg);
+    actor.arm_schedule().await;
+    assert!(actor.next_run.is_none());
+}
+
+#[tokio::test]
+async fn update_config_applies_and_rearms_schedule() {
+    let (mut actor, mut rx) = make_actor_with_config(oneshot("true"));
+    actor.arm_schedule().await;
+    assert!(actor.next_run.is_none());
+
+    let mut cfg = oneshot("false");
+    cfg.schedule = Some("0 3 * * *".into());
+    cfg.startup = vigil_types::plan::Startup::Enabled;
+    actor.handle_update_config(cfg).await;
+    assert_eq!(actor.config.command.as_deref(), Some("false"));
+    assert!(actor.next_run.is_some());
+    assert!(matches!(
+        rx.try_recv().unwrap().kind,
+        EventKind::NextRun { at: Some(_) }
+    ));
+
+    // Removing the schedule disarms it.
+    actor.handle_update_config(oneshot("false")).await;
+    assert!(actor.next_run.is_none());
+    assert!(matches!(
+        rx.try_recv().unwrap().kind,
+        EventKind::NextRun { at: None }
+    ));
+}

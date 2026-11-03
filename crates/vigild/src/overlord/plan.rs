@@ -53,6 +53,7 @@ fn validate(plan: &Plan) -> anyhow::Result<()> {
     for (name, svc) in &plan.services {
         EnvPolicy::for_service(svc).with_context(|| format!("service {name:?}"))?;
         validate_ready(plan, svc).with_context(|| format!("service {name:?}"))?;
+        validate_oneshot(svc).with_context(|| format!("service {name:?}"))?;
     }
     for (name, check) in &plan.checks {
         if let Some(exec) = &check.exec {
@@ -62,6 +63,34 @@ fn validate(plan: &Plan) -> anyhow::Result<()> {
                 .and_then(|s| plan.services.get(s));
             EnvPolicy::for_exec_check(exec, ctx).with_context(|| format!("check {name:?}"))?;
         }
+    }
+    Ok(())
+}
+
+fn validate_oneshot(svc: &vigil_types::plan::ServiceConfig) -> anyhow::Result<()> {
+    use vigil_types::plan::{OnExit, ServiceType};
+
+    let oneshot = svc.service_type == Some(ServiceType::Oneshot);
+    if let Some(pattern) = &svc.schedule {
+        anyhow::ensure!(oneshot, "schedule needs type: oneshot");
+        crate::service::schedule::Schedule::parse(pattern, svc.schedule_tz.as_deref())?;
+    } else {
+        anyhow::ensure!(
+            svc.schedule_tz.is_none(),
+            "schedule-tz is only valid with schedule"
+        );
+    }
+    if oneshot {
+        anyhow::ensure!(
+            svc.ready.is_none() && svc.ready_check.is_none() && svc.ready_timeout.is_none(),
+            "ready, ready-check and ready-timeout do not apply to type: oneshot \
+             (a oneshot is ready when it exits successfully)"
+        );
+        anyhow::ensure!(
+            svc.on_success != Some(OnExit::Restart),
+            "on-success: restart does not apply to type: oneshot \
+             (use a schedule to run it repeatedly)"
+        );
     }
     Ok(())
 }
@@ -370,6 +399,58 @@ mod tests {
         assert_eq!(
             plan.services["web"].ready,
             Some(vigil_types::plan::ReadyMode::Notify)
+        );
+    }
+
+    #[test]
+    fn oneshot_fields_are_validated() {
+        let cases = [
+            (
+                "    schedule: '* * * * *'\n",
+                "schedule needs type: oneshot",
+            ),
+            (
+                "    type: oneshot\n    schedule: 'nope'\n",
+                "invalid schedule",
+            ),
+            (
+                "    type: oneshot\n    schedule: '0 3 * * *'\n    schedule-tz: Mars/Olympus\n",
+                "unknown schedule-tz",
+            ),
+            ("    schedule-tz: UTC\n", "only valid with schedule"),
+            (
+                "    type: oneshot\n    ready: notify\n",
+                "do not apply to type: oneshot",
+            ),
+            (
+                "    type: oneshot\n    on-success: restart\n",
+                "on-success: restart",
+            ),
+        ];
+        for (fields, want) in cases {
+            let dir = TempDir::new().unwrap();
+            write(
+                &dir,
+                "001.yaml",
+                &format!("services:\n  job:\n    command: /bin/true\n{fields}"),
+            );
+            let err = format!("{:#}", load_plan(dir.path()).unwrap_err());
+            assert!(err.contains(want), "{fields}: {err}");
+        }
+    }
+
+    #[test]
+    fn valid_oneshot_config_loads() {
+        let dir = TempDir::new().unwrap();
+        write(
+            &dir,
+            "001.yaml",
+            "services:\n  job:\n    command: /bin/true\n    type: oneshot\n    schedule: '*/5 * * * *'\n    on-failure: restart\n",
+        );
+        let plan = load_plan(dir.path()).unwrap();
+        assert_eq!(
+            plan.services["job"].service_type,
+            Some(vigil_types::plan::ServiceType::Oneshot)
         );
     }
 }

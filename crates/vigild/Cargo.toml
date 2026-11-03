@@ -85,6 +85,8 @@ prometheus-client  = { workspace = true }
 mimalloc           = { workspace = true }
 utoipa             = { workspace = true }
 minijinja          = { workspace = true }
+croner             = { workspace = true }
+jiff               = { workspace = true }
 
 [dev-dependencies]
 tempfile           = { workspace = true }

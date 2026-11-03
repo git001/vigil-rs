@@ -62,6 +62,9 @@ mimalloc           = { version = "0.1",  default-features = false }
 utoipa             = { version = "5",    features = ["axum_extras", "chrono", "uuid"] }
 # Templating
 minijinja          = { version = "2" }
+# Scheduling (oneshot `schedule`): jiff for time zones, system tzdb only
+croner             = { version = "4.0.2", default-features = false, features = ["jiff"] }
+jiff               = { version = "0.2.39", default-features = false, features = ["std", "tzdb-zoneinfo"] }
 # Testing
 tempfile           = { version = "3" }
 wiremock           = { version = "0.6" }

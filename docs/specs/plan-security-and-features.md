@@ -340,6 +340,41 @@ from 2026-11-03 marked *decided*):
     are not caught up.
 - Metrics and alerts: result and time of the last run.
 
+**Status:** done on the `v4` branch. As implemented (maintainer decisions
+from 2026-11-03 marked *decided*):
+
+- `type: simple | oneshot`, `schedule`, `schedule-tz`; croner 4.0.2 with
+  `jiff` (no chrono feature), 5 or 6 fields (seconds first), no year field,
+  Vixie OR semantics for day-of-month/day-of-week. Validated at load and
+  replan.
+- *Decided:* time zones only from the system tzdb (`jiff` with
+  `tzdb-zoneinfo`, no bundled database). Alpine images need `tzdata`; an
+  unknown zone rejects the layer.
+- *Decided:* scheduled jobs default to `on-failure: ignore`; unscheduled
+  oneshots keep `restart`.
+- *Decided:* `startup: enabled` only arms the schedule, the job does not run
+  at vigild start; `vigil start` runs it by hand.
+- A oneshot is `starting` while it runs and `done` after success; `after` /
+  `requires` / `before` accept `active` or `done`. `ready*` and
+  `on-success: restart` are rejected for oneshots.
+- Overlapping runs are skipped. The next run is recomputed from the wall
+  clock on every actor loop iteration. DST verified: a nonexistent time runs
+  once at the shifted time, a doubled time runs once.
+- API `done` and `next-run`; CLI `Next-Run` column; metrics
+  `vigil_service_last_run_timestamp_seconds`,
+  `vigil_service_last_run_success`, `vigil_service_runs_total{result}`
+  (counter, so failures between scrapes are not lost) and
+  `vigil_service_running` (also `1` while a oneshot runs or a service waits
+  for readiness, where `vigil_service_active` is `0`).
+- Fix found on the way: `replan` never passed changed service configs to
+  existing actors (the docs promised "takes effect on the next restart").
+  Actors now get `UpdateConfig`; the new config applies from the next start,
+  a changed schedule is re-armed immediately.
+- Found in the smoke test: `replan` re-ran oneshots in `done` (autostart
+  starts every enabled service that is not running). Autostart now skips
+  `done` oneshots, so a migration is not repeated on every config change
+  (important for phase 4c).
+
 ## Phase 4: templating
 
 - **Syntax:** `{{.VAR}}`, `{{.VAR:-default}}`, `{{file "/p"}}`, `{{mem 75%}}`, `{{cpu 50%}}`.

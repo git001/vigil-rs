@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use tokio::sync::oneshot;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use vigil_types::api::CheckStatus;
 use vigil_types::plan::Startup;
 
@@ -20,7 +20,17 @@ use super::{CheckEntry, Overlord, ServiceEntry};
 impl Overlord {
     pub(super) fn sync_actors(&mut self) {
         for (name, config) in &self.plan.services {
-            if self.services.contains_key(name) {
+            if let Some(entry) = self.services.get_mut(name) {
+                // Existing actor: hand over the (possibly changed) config.
+                entry.snapshot.startup = config.startup;
+                if entry
+                    .handle
+                    .tx
+                    .try_send(SvcCmd::UpdateConfig(Box::new(config.clone())))
+                    .is_err()
+                {
+                    warn!(service = %name, "could not pass the new config to the service actor");
+                }
                 continue;
             }
             let handle = service::spawn(
@@ -42,6 +52,7 @@ impl Overlord {
                 pid: None,
                 last_exit: None,
                 status_message: None,
+                next_run: None,
             };
             self.services.insert(
                 name.clone(),
@@ -100,7 +111,14 @@ impl Overlord {
             .plan
             .services
             .iter()
-            .filter(|(_, c)| c.startup == Startup::Enabled)
+            // Scheduled jobs are started by their schedule, not at startup.
+            .filter(|(_, c)| c.startup == Startup::Enabled && c.schedule.is_none())
+            // A finished oneshot is not run again by a replan.
+            .filter(|(n, _)| {
+                self.services
+                    .get(*n)
+                    .is_none_or(|e| e.snapshot.state != ServiceState::Done)
+            })
             .map(|(n, _)| n.clone())
             .collect();
 
@@ -119,7 +137,8 @@ impl Overlord {
     }
 
     /// Returns `true` if all ordering dependencies of `name` are ready
-    /// (`Active`; a service still `Starting` has not reached readiness).
+    /// (`Active`, or `Done` for a oneshot; a service still `Starting` has not
+    /// reached readiness).
     ///
     /// Three sources contribute:
     /// - `after: [X]`    — X must be running before name starts
@@ -138,7 +157,7 @@ impl Overlord {
             .all(|dep| {
                 self.services
                     .get(dep)
-                    .map(|e| e.snapshot.state == ServiceState::Active)
+                    .map(|e| e.snapshot.state.is_ready())
                     .unwrap_or(false)
             });
 
@@ -151,7 +170,7 @@ impl Overlord {
             .all(|(dep, _)| {
                 self.services
                     .get(dep)
-                    .map(|e| e.snapshot.state == ServiceState::Active)
+                    .map(|e| e.snapshot.state.is_ready())
                     .unwrap_or(false)
             });
 

@@ -59,6 +59,7 @@ pub(super) fn make_overlord(
             pid: None,
             last_exit: None,
             status_message: None,
+            next_run: None,
         };
         svc_map.insert(name.to_string(), ServiceEntry { handle, snapshot });
     }
@@ -874,4 +875,61 @@ async fn check_pass_is_forwarded_only_to_starting_ready_check_services() {
     }
     assert!(rxs.get_mut("active").unwrap().try_recv().is_err());
     assert!(rxs.get_mut("other").unwrap().try_recv().is_err());
+}
+
+// ------------------------------------------------------------------
+// oneshot: Done unblocks dependents; scheduled jobs are not autostarted;
+// replan passes changed config to existing actors
+// ------------------------------------------------------------------
+
+#[test]
+fn done_oneshot_unblocks_dependents() {
+    let ov = make_overlord(
+        &[("migrate", &[], &[], &[]), ("app", &["migrate"], &[], &[])],
+        &[("migrate", ServiceState::Done)],
+    );
+    assert!(ov.after_deps_running("app"));
+}
+
+#[tokio::test]
+async fn autostart_skips_scheduled_jobs() {
+    let mut ov = make_overlord(&[("job", &[], &[], &[])], &[]);
+    ov.plan.services.get_mut("job").unwrap().startup = Startup::Enabled;
+    ov.plan.services.get_mut("job").unwrap().schedule = Some("0 3 * * *".into());
+    let (tx, mut rx) = mpsc::channel(4);
+    ov.services.get_mut("job").unwrap().handle = service::Handle { tx };
+    ov.autostart().await;
+    assert!(rx.try_recv().is_err(), "scheduled job must not be started");
+    assert!(ov.pending_autostart.is_empty());
+}
+
+#[tokio::test]
+async fn sync_actors_passes_config_to_existing_actors() {
+    let mut ov = make_overlord(&[("svc", &[], &[], &[])], &[]);
+    let (tx, mut rx) = mpsc::channel(4);
+    ov.services.get_mut("svc").unwrap().handle = service::Handle { tx };
+    ov.plan.services.get_mut("svc").unwrap().command = Some("/bin/new".into());
+    ov.sync_actors();
+    match rx.try_recv() {
+        Ok(service::Cmd::UpdateConfig(cfg)) => {
+            assert_eq!(cfg.command.as_deref(), Some("/bin/new"));
+        }
+        _ => panic!("no UpdateConfig sent"),
+    }
+}
+
+#[tokio::test]
+async fn autostart_does_not_rerun_done_oneshot() {
+    let mut ov = make_overlord(
+        &[("migrate", &[], &[], &[])],
+        &[("migrate", ServiceState::Done)],
+    );
+    ov.plan.services.get_mut("migrate").unwrap().startup = Startup::Enabled;
+    let (tx, mut rx) = mpsc::channel(4);
+    ov.services.get_mut("migrate").unwrap().handle = service::Handle { tx };
+    ov.autostart().await;
+    assert!(
+        rx.try_recv().is_err(),
+        "done oneshot must not run again on replan"
+    );
 }

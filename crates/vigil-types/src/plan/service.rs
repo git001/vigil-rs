@@ -43,6 +43,19 @@ pub enum LogsPushFormat {
     Ndjson,
 }
 
+/// How a service's process is meant to run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ServiceType {
+    /// A long-running process (default).
+    #[default]
+    Simple,
+    /// A job that runs to completion. Exit success ends in state `done`;
+    /// services ordered after it start then. Optionally run on a
+    /// `schedule`.
+    Oneshot,
+}
+
 /// When a started service counts as ready (state `active`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -84,6 +97,16 @@ pub struct ServiceConfig {
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// `simple` (default) or `oneshot`.
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub service_type: Option<ServiceType>,
+    /// Cron pattern (5 fields, or 6 with seconds first) for a `oneshot`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<String>,
+    /// IANA time zone for `schedule` (default `UTC`), e.g. `Europe/Vienna`.
+    /// Needs the system time zone database (`tzdata`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule_tz: Option<String>,
     #[serde(default)]
     pub startup: Startup,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -185,6 +208,9 @@ pub(super) fn merge_service(base: &mut ServiceConfig, overlay: &ServiceConfig) {
     opt!(summary);
     opt!(description);
     opt!(command);
+    opt!(service_type);
+    opt!(schedule);
+    opt!(schedule_tz);
     base.startup = overlay.startup;
     for v in &overlay.after {
         if !base.after.contains(v) {

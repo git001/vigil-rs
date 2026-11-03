@@ -19,6 +19,8 @@ pub enum ServiceState {
     Backoff,
     /// Permanent failure: backoff limit exceeded.
     Error,
+    /// A `oneshot` service finished successfully.
+    Done,
 }
 
 impl ServiceState {
@@ -30,7 +32,14 @@ impl ServiceState {
             ServiceState::Active => ServiceStatus::Active,
             ServiceState::Backoff => ServiceStatus::Backoff,
             ServiceState::Error => ServiceStatus::Error,
+            ServiceState::Done => ServiceStatus::Done,
         }
+    }
+
+    /// Whether services ordered after this one may start: it is ready
+    /// (`Active`), or it is a oneshot that finished successfully (`Done`).
+    pub fn is_ready(self) -> bool {
+        matches!(self, ServiceState::Active | ServiceState::Done)
     }
 
     pub fn is_running(self) -> bool {
@@ -63,6 +72,7 @@ mod tests {
             ServiceStatus::Backoff
         );
         assert_eq!(ServiceState::Error.to_api_status(), ServiceStatus::Error);
+        assert_eq!(ServiceState::Done.to_api_status(), ServiceStatus::Done);
     }
 
     #[test]
@@ -73,5 +83,6 @@ mod tests {
         assert!(!ServiceState::Stopping.is_running());
         assert!(!ServiceState::Backoff.is_running());
         assert!(!ServiceState::Error.is_running());
+        assert!(!ServiceState::Done.is_running());
     }
 }

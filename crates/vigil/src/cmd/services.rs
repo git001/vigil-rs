@@ -42,7 +42,9 @@ pub async fn run(client: &VigilClient, sub: ServicesCmd) -> anyhow::Result<()> {
                 println!("No services.");
                 return Ok(());
             }
-            // The sd_notify STATUS= column only appears when a service set one.
+            // Optional columns only appear when a service has a value:
+            // Next-Run (schedule) and Message (sd_notify STATUS=).
+            let with_next = services.iter().any(|s| s.next_run.is_some());
             let with_msg = services.iter().any(|s| s.status_message.is_some());
             let header = format!(
                 "{:<24} {:<10} {:<10} {:<18} {:<18} {:<12} {:<10}",
@@ -54,11 +56,14 @@ pub async fn run(client: &VigilClient, sub: ServicesCmd) -> anyhow::Result<()> {
                 "Stop-Signal",
                 "Last-Exit"
             );
-            if with_msg {
-                println!("{header} Message");
-            } else {
-                println!("{header}");
+            let mut header = header;
+            if with_next {
+                header.push_str(&format!(" {:<20}", "Next-Run"));
             }
+            if with_msg {
+                header.push_str(" Message");
+            }
+            println!("{}", header.trim_end());
             println!("{}", "-".repeat(108));
             for svc in services {
                 let row = format!(
@@ -71,11 +76,19 @@ pub async fn run(client: &VigilClient, sub: ServicesCmd) -> anyhow::Result<()> {
                     svc.stop_signal,
                     fmt_last_exit(svc.last_exit),
                 );
-                match (&svc.status_message, with_msg) {
-                    (Some(m), _) => println!("{row} {m}"),
-                    (None, true) => println!("{row} -"),
-                    (None, false) => println!("{row}"),
+                let mut row = row;
+                if with_next {
+                    let next = svc
+                        .next_run
+                        .map(|t| t.format("%Y-%m-%d %H:%M:%SZ").to_string())
+                        .unwrap_or_else(|| "-".into());
+                    row.push_str(&format!(" {next:<20}"));
                 }
+                if with_msg {
+                    row.push(' ');
+                    row.push_str(svc.status_message.as_deref().unwrap_or("-"));
+                }
+                println!("{}", row.trim_end());
             }
         }
 

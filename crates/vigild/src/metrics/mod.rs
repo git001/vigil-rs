@@ -19,6 +19,13 @@ struct ServiceLabel {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct RunLabel {
+    service: String,
+    /// `success` or `failure`.
+    result: String,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
 struct CheckLabel {
     check: String,
 }
@@ -37,7 +44,11 @@ struct AlertLabel {
 /// Compatible with Pebble's metric names and types:
 /// - `vigil_service_start_count{service}` counter
 /// - `vigil_service_active{service}`      gauge (0/1)
+/// - `vigil_service_running{service}`     gauge (0/1, process alive: starting/active/stopping)
 /// - `vigil_service_last_exit_code{service}` gauge (128+signal, -1 unknown)
+/// - `vigil_service_last_run_timestamp_seconds{service}` gauge (oneshot end)
+/// - `vigil_service_last_run_success{service}` gauge (oneshot result, 0/1)
+/// - `vigil_service_runs{service,result}` counter (oneshot runs, result success|failure)
 /// - `vigil_check_up{check}`              gauge (0/1)
 /// - `vigil_check_success_count{check}`   counter
 /// - `vigil_check_failure_count{check}`   counter
@@ -55,6 +66,10 @@ pub struct MetricsStore {
     check_failure_count: Family<CheckLabel, Counter>,
     alert_fire_count: Family<AlertLabel, Counter>,
     service_last_exit_code: Family<ServiceLabel, Gauge>,
+    service_last_run_timestamp: Family<ServiceLabel, Gauge>,
+    service_last_run_success: Family<ServiceLabel, Gauge>,
+    service_running: Family<ServiceLabel, Gauge>,
+    service_runs: Family<RunLabel, Counter>,
 }
 
 impl MetricsStore {
@@ -70,6 +85,10 @@ impl MetricsStore {
         let check_failure_count = Family::<CheckLabel, Counter>::default();
         let alert_fire_count = Family::<AlertLabel, Counter>::default();
         let service_last_exit_code = Family::<ServiceLabel, Gauge>::default();
+        let service_last_run_timestamp = Family::<ServiceLabel, Gauge>::default();
+        let service_last_run_success = Family::<ServiceLabel, Gauge>::default();
+        let service_running = Family::<ServiceLabel, Gauge>::default();
+        let service_runs = Family::<RunLabel, Counter>::default();
 
         registry.register(
             "vigil_service_start_count",
@@ -117,6 +136,26 @@ impl MetricsStore {
             "Exit code of the service's last process (128+signal if killed by a signal, -1 if unknown)",
             service_last_exit_code.clone(),
         );
+        registry.register(
+            "vigil_service_last_run_timestamp_seconds",
+            "Unix time when the last run of a oneshot service ended",
+            service_last_run_timestamp.clone(),
+        );
+        registry.register(
+            "vigil_service_last_run_success",
+            "Whether the last run of a oneshot service succeeded (1) or not (0)",
+            service_last_run_success.clone(),
+        );
+        registry.register(
+            "vigil_service_running",
+            "Whether a process of the service is alive (starting, active or stopping)",
+            service_running.clone(),
+        );
+        registry.register(
+            "vigil_service_runs",
+            "Finished runs of a oneshot service, by result (success or failure)",
+            service_runs.clone(),
+        );
 
         Arc::new(Self {
             registry,
@@ -129,6 +168,10 @@ impl MetricsStore {
             check_failure_count,
             alert_fire_count,
             service_last_exit_code,
+            service_last_run_timestamp,
+            service_last_run_success,
+            service_running,
+            service_runs,
         })
     }
 
@@ -160,6 +203,14 @@ impl MetricsStore {
             .set(if active { 1 } else { 0 });
     }
 
+    pub fn set_service_running(&self, service: &str, running: bool) {
+        self.service_running
+            .get_or_create(&ServiceLabel {
+                service: service.to_owned(),
+            })
+            .set(i64::from(running));
+    }
+
     /// Record how the service's last process ended (`None`: unknown → -1).
     pub fn set_service_last_exit_code(&self, service: &str, code: Option<i32>) {
         self.service_last_exit_code
@@ -167,6 +218,25 @@ impl MetricsStore {
                 service: service.to_owned(),
             })
             .set(code.map(i64::from).unwrap_or(-1));
+    }
+
+    /// Record the end of a oneshot run.
+    pub fn record_oneshot_run(&self, service: &str, success: bool) {
+        let label = ServiceLabel {
+            service: service.to_owned(),
+        };
+        self.service_last_run_timestamp
+            .get_or_create(&label)
+            .set(jiff::Timestamp::now().as_second());
+        self.service_last_run_success
+            .get_or_create(&label)
+            .set(i64::from(success));
+        self.service_runs
+            .get_or_create(&RunLabel {
+                service: service.to_owned(),
+                result: if success { "success" } else { "failure" }.to_owned(),
+            })
+            .inc();
     }
 
     pub fn record_check_success(&self, check: &str) {

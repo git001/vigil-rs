@@ -136,8 +136,9 @@ migrate                  enabled    inactive   ignore             ignore        
 ```
 
 `Last-Exit` is the exit code of the service's last process, the signal name
-if it was killed by a signal, or `-` if it has not exited yet. A `Message`
-column is added when a service reported a `STATUS=` text via sd_notify.
+if it was killed by a signal, or `-` if it has not exited yet. A `Next-Run`
+column (UTC) is added when a service has a `schedule`, a `Message` column when
+a service reported a `STATUS=` text via sd_notify.
 
 **Status values:**
 
@@ -148,6 +149,7 @@ column is added when a service reported a `STATUS=` text via sd_notify.
 | `inactive` | Not running (stopped or not yet started) |
 | `backoff` | Waiting before the next restart attempt |
 | `error` | Exceeded backoff limit or `requires` dependency failed |
+| `done` | A `type: oneshot` service finished successfully |
 
 #### `services start [NAME...]`
 
@@ -247,9 +249,11 @@ vigil replan
 ```
 
 After replan:
-- New services with `startup: enabled` are started.
+- New services with `startup: enabled` are started (a `oneshot` that is
+  already `done` is not run again; scheduled jobs only re-arm their schedule).
 - Services removed from the plan are stopped.
-- Configuration changes take effect on the next restart of each service.
+- Configuration changes take effect on the next start of each service; a
+  running process is not restarted. A changed `schedule` is re-armed at once.
 
 ---
 

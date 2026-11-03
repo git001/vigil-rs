@@ -72,6 +72,8 @@ pub enum ServiceStatus {
     Inactive,
     Backoff,
     Error,
+    /// A `oneshot` service finished successfully.
+    Done,
 }
 
 /// How a service process ended.
@@ -114,6 +116,9 @@ pub struct ServiceInfo {
     /// Last `STATUS=` text the service sent via sd_notify (`ready: notify`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_message: Option<String>,
+    /// Next scheduled run (`schedule`); absent for unscheduled services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_run: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

@@ -26,6 +26,9 @@ fn all_metric_family_names_present_in_empty_render() {
         "vigil_check_success_count",
         "vigil_check_failure_count",
         "vigil_alert_fire_count",
+        "vigil_service_running",
+        "vigil_service_runs",
+        "vigil_service_last_run_success",
     ] {
         assert!(
             out.contains(name),
@@ -139,4 +142,37 @@ fn alert_fire_count_independent_per_alert() {
         out.contains(r#"vigil_alert_fire_count_total{alert="beta"} 1"#),
         "beta=1 missing in: {out}"
     );
+}
+
+#[test]
+fn set_service_running_gauge_value() {
+    let m = MetricsStore::new();
+    m.set_service_running("job", true);
+    assert!(
+        m.render()
+            .contains(r#"vigil_service_running{service="job"} 1"#)
+    );
+    m.set_service_running("job", false);
+    assert!(
+        m.render()
+            .contains(r#"vigil_service_running{service="job"} 0"#)
+    );
+}
+
+#[test]
+fn record_oneshot_run_counts_by_result() {
+    let m = MetricsStore::new();
+    m.record_oneshot_run("job", true);
+    m.record_oneshot_run("job", false);
+    m.record_oneshot_run("job", false);
+    let out = m.render();
+    assert!(
+        out.contains(r#"vigil_service_runs_total{service="job",result="success"} 1"#),
+        "expected success=1 in: {out}"
+    );
+    assert!(
+        out.contains(r#"vigil_service_runs_total{service="job",result="failure"} 2"#),
+        "expected failure=2 in: {out}"
+    );
+    assert!(out.contains(r#"vigil_service_last_run_success{service="job"} 0"#));
 }

@@ -55,6 +55,9 @@ services:
 
     # --- Process ---
     command: /usr/local/bin/myapp --config /etc/myapp.yaml
+    type: simple                       # simple | oneshot (default: simple)
+    schedule: '0 3 * * *'              # cron pattern, type: oneshot only
+    schedule-tz: Europe/Vienna         # time zone for schedule (default: UTC)
     working-dir: /var/lib/myapp        # working directory (default: /)
     user: myapp                        # run as this username
     user-id: 1000                      # or by UID
@@ -119,6 +122,83 @@ whitespace; no shell expansion). To use shell features, wrap in `sh -c`:
 ```yaml
 command: sh -c "echo starting && exec /usr/local/bin/myapp"
 ```
+
+#### `type` / `schedule` / `schedule-tz`
+
+| `type` | Meaning |
+|---|---|
+| `simple` | A long-running process. **Default.** |
+| `oneshot` | A job that runs to completion (migration, backup, cache warm-up, …) |
+
+A `oneshot` service is `starting` while it runs. When it exits successfully
+(see `success-exit-codes`) it ends in the state **`done`** and is not
+restarted; services ordered after it (`after`, `requires`, `before`) start
+only then. A failure goes through `on-failure` as usual (default `restart`
+with backoff, so a migration is retried). `vigil start <name>` runs it again;
+`replan` does not (a finished migration is not repeated on every config
+change).
+
+```yaml
+services:
+  migrate:
+    type: oneshot
+    command: /app/migrate
+    startup: enabled
+  app:
+    command: /app/server
+    startup: enabled
+    after: [migrate]              # starts once migrate is done
+```
+
+**`schedule`** runs a `oneshot` periodically (cron replacement):
+
+```yaml
+services:
+  backup:
+    type: oneshot
+    command: /usr/local/bin/backup
+    startup: enabled              # arms the schedule
+    schedule: '0 3 * * *'         # daily at 03:00
+    schedule-tz: Europe/Vienna    # default UTC
+```
+
+- Pattern: 5 fields (`minute hour day-of-month month day-of-week`) or 6 with
+  seconds first (`*/30 * * * * *`). Ranges, lists, steps, names (`MON`,
+  `JAN`) and the usual cron extensions (`L`, `#`, `W`) are supported. As in
+  Vixie cron, day-of-month and day-of-week are OR-ed when both are set.
+  Parsing is done by [croner](https://github.com/hexagon/croner-rust); its
+  README describes the full pattern syntax
+  ([API docs](https://docs.rs/croner/4.0.2/croner/)). croner also accepts a
+  7th field for the year (e.g. `0 0 3 * * * 2027`); vigild rejects such
+  patterns, use 5 or 6 fields.
+- `startup: enabled` **arms** the schedule; the job does not run when vigild
+  starts, only at the scheduled times. With `startup: disabled` the schedule
+  is not armed. `vigil start <name>` always runs the job once by hand.
+- A run that is still active when the next one is due is **skipped** (no
+  overlapping runs).
+- Default `on-failure` for scheduled jobs is `ignore`: a failed run is
+  recorded (status, `last-exit`, metrics) and the next run comes at the next
+  scheduled time. Set `on-failure: restart` to retry with backoff.
+- `schedule-tz` needs the system time zone database
+  (`/usr/share/zoneinfo`). On Alpine-based images install it with
+  `apk add tzdata`; without it vigild rejects the layer. Daylight saving
+  time is handled: a time that does not exist (spring forward) or exists
+  twice (fall back) still runs once.
+- `replan` re-arms a changed schedule immediately.
+- There is no state on disk: runs missed while vigild was not running (e.g.
+  during a pod restart) are not caught up.
+- The next run is shown as `next-run` in the API and in the `Next-Run` column
+  of `vigil services list`. Metrics: `vigil_service_last_run_timestamp_seconds`
+  and `vigil_service_last_run_success` describe the last run,
+  `vigil_service_runs_total{result="success|failure"}` counts all runs and
+  `vigil_service_running` is `1` while a job runs. Example alerts:
+  `increase(vigil_service_runs_total{result="failure"}[1h]) > 0` (a run
+  failed) and `vigil_service_running == 1 and time() - vigil_service_last_run_timestamp_seconds > 3600`
+  (a job hangs).
+
+Not allowed with `type: oneshot`: `ready`, `ready-check`, `ready-timeout` (a
+oneshot is ready when it is done) and `on-success: restart` (use `schedule`).
+`schedule` requires `type: oneshot`.
 
 #### `user` / `user-id` / `group` / `group-id`
 

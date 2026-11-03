@@ -127,12 +127,13 @@ impl Overlord {
                     .and_then(|c| c.stop_signal)
                     .map(|s| format!("{:?}", s.0))
                     .unwrap_or_else(|| "SIGTERM".into());
-                let on_success = cfg
-                    .and_then(|c| c.on_success)
-                    .map(fmt_on_exit)
-                    .unwrap_or_else(|| "restart".into());
+                let on_success = match cfg.map(crate::service::effective_on_success) {
+                    Some(Some(p)) => fmt_on_exit(p),
+                    Some(None) => "done".into(), // oneshot
+                    None => "restart".into(),
+                };
                 let on_failure = cfg
-                    .and_then(|c| c.on_failure)
+                    .map(crate::service::effective_on_failure)
                     .map(fmt_on_exit)
                     .unwrap_or_else(|| "restart".into());
                 ServiceInfo {
@@ -145,6 +146,7 @@ impl Overlord {
                     on_failure,
                     last_exit: e.snapshot.last_exit,
                     status_message: e.snapshot.status_message.clone(),
+                    next_run: e.snapshot.next_run,
                 }
             })
             .collect()

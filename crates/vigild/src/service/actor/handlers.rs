@@ -12,7 +12,7 @@ use vigil_types::plan::OnExit;
 
 use crate::state::ServiceState;
 
-use super::super::shutdown_code;
+use super::super::{effective_on_failure, effective_on_success, shutdown_code};
 use super::{Actor, Event, EventKind};
 
 impl Actor {
@@ -59,7 +59,10 @@ impl Actor {
         backoff_sleep: &mut Option<Pin<Box<Sleep>>>,
     ) {
         match self.state {
-            ServiceState::Inactive | ServiceState::Error | ServiceState::Stopping => {
+            ServiceState::Inactive
+            | ServiceState::Error
+            | ServiceState::Stopping
+            | ServiceState::Done => {
                 let _ = reply.send(Ok(()));
                 return;
             }
@@ -172,13 +175,23 @@ impl Actor {
             return;
         }
 
+        if self.is_oneshot() {
+            self.metrics.record_oneshot_run(&self.name, success);
+        }
         let policy = if success {
-            self.config.on_success
+            effective_on_success(&self.config)
         } else {
-            self.config.on_failure
+            Some(effective_on_failure(&self.config))
         };
 
         match policy {
+            // A finished oneshot: `done` (dependents may start now).
+            None => {
+                self.transition(ServiceState::Done).await;
+            }
+            Some(OnExit::Ignore) if success && self.is_oneshot() => {
+                self.transition(ServiceState::Done).await;
+            }
             Some(OnExit::Ignore) => {
                 self.transition(ServiceState::Inactive).await;
             }
@@ -197,7 +210,7 @@ impl Actor {
                     })
                     .await;
             }
-            Some(OnExit::Restart) | None => {
+            Some(OnExit::Restart) => {
                 if self.backoff_limit_exceeded() {
                     error!(service = %self.name, "backoff limit exceeded, giving up");
                     self.transition(ServiceState::Error).await;
@@ -209,6 +222,17 @@ impl Actor {
                 }
             }
         }
+    }
+
+    pub(super) async fn handle_update_config(&mut self, config: vigil_types::plan::ServiceConfig) {
+        let old = serde_json::to_string(&self.config).unwrap_or_default();
+        let new = serde_json::to_string(&config).unwrap_or_default();
+        if old == new {
+            return;
+        }
+        info!(service = %self.name, "config changed, applies from the next start");
+        self.config = config;
+        self.arm_schedule().await;
     }
 
     pub(super) async fn handle_kill_deadline(&mut self) {

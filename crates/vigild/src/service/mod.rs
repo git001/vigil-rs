@@ -14,6 +14,7 @@ use crate::metrics::MetricsStore;
 
 mod actor;
 pub mod notify;
+pub mod schedule;
 
 // ---------------------------------------------------------------------------
 // Public interface
@@ -28,6 +29,9 @@ pub enum Cmd {
     Status(oneshot::Sender<Snapshot>),
     /// Forward a signal to the service's process group (if running).
     ForwardSignal(nix::sys::signal::Signal),
+    /// The plan changed (`replan`). The new config applies from the next
+    /// start; a running process is left alone.
+    UpdateConfig(Box<ServiceConfig>),
     /// A probe of `check` that started at `started_at` succeeded
     /// (for `ready: check`).
     CheckPassed {
@@ -51,6 +55,8 @@ pub struct Snapshot {
     pub last_exit: Option<ExitInfo>,
     /// Last `STATUS=` text received via sd_notify.
     pub status_message: Option<String>,
+    /// Next scheduled run (`schedule`).
+    pub next_run: Option<DateTime<Utc>>,
 }
 
 /// Event emitted by the actor to the Overlord.
@@ -75,6 +81,8 @@ pub enum EventKind {
     DaemonShutdown { exit_code: i32 },
     /// The service sent a `STATUS=` text (or a new start cleared it).
     StatusMessage { message: Option<String> },
+    /// The next scheduled run changed (`None`: no schedule armed).
+    NextRun { at: Option<DateTime<Utc>> },
 }
 
 /// How vigild's own exit code is chosen when a policy shuts it down
@@ -127,6 +135,26 @@ pub struct Context {
     pub exit_code_mode: ExitCodeMode,
     /// `<path-prefix>/notify`, where `ready: notify` sockets are created.
     pub notify_dir: std::path::PathBuf,
+}
+
+/// Effective `on-success` policy. `None` for a oneshot without one: it ends
+/// in state `done`.
+pub fn effective_on_success(cfg: &ServiceConfig) -> Option<OnExit> {
+    match (cfg.on_success, cfg.service_type.unwrap_or_default()) {
+        (Some(p), _) => Some(p),
+        (None, vigil_types::plan::ServiceType::Oneshot) => None,
+        (None, vigil_types::plan::ServiceType::Simple) => Some(OnExit::Restart),
+    }
+}
+
+/// Effective `on-failure` policy: `ignore` for scheduled jobs (the next
+/// run comes at the next scheduled time), else `restart`.
+pub fn effective_on_failure(cfg: &ServiceConfig) -> OnExit {
+    cfg.on_failure.unwrap_or(if cfg.schedule.is_some() {
+        OnExit::Ignore
+    } else {
+        OnExit::Restart
+    })
 }
 
 /// Handle returned to the caller; wraps the command sender.

@@ -157,8 +157,12 @@ until the service has exited once. The values are raw (before
 `status-message` is the last `STATUS=` text the service sent via sd_notify
 (`ready: notify`); it is omitted if there is none and cleared on every start.
 
+`next-run` is the next scheduled run of a `type: oneshot` service with a
+`schedule` (only while the schedule is armed, i.e. `startup: enabled`).
+
 **Service status values:** `starting` | `active` | `inactive` | `backoff` |
-`error`. `starting` (new in v4) means the process runs but is not ready yet
+`error` | `done`. `done` (new in v4) means a `type: oneshot` service finished
+successfully. `starting` (new in v4) means the process runs but is not ready yet
 (`ready: notify` or `ready: check`); clients written for v3 must accept it.
 
 **Example:**
@@ -458,7 +462,11 @@ Metrics exposed:
 | `vigil_services_count` | gauge | Total number of configured services |
 | `vigil_service_info{service}` | gauge (always 1) | Enumerates all configured service names |
 | `vigil_service_active{service}` | gauge | `1` if service is active, `0` otherwise |
+| `vigil_service_running{service}` | gauge | `1` while a process of the service is alive (`starting`, `active` or stopping), `0` otherwise; unlike `vigil_service_active` also `1` for a running `oneshot` job or a service still waiting for readiness |
 | `vigil_service_last_exit_code{service}` | gauge | Exit code of the last process (`128 + signal` if killed by a signal, `-1` if unknown); absent until the service has exited once |
+| `vigil_service_last_run_timestamp_seconds{service}` | gauge | Unix time when the last run of a `type: oneshot` service ended |
+| `vigil_service_last_run_success{service}` | gauge | `1` if the last run of a `type: oneshot` service succeeded, else `0` |
+| `vigil_service_runs_total{service,result}` | counter | Finished runs of a `type: oneshot` service; `result` is `success` or `failure` |
 | `vigil_service_start_count_total{service}` | counter | Number of times the service has started |
 | `vigil_check_up{check}` | gauge | `1` if check is up, `0` if down |
 | `vigil_check_success_count_total{check}` | counter | Number of successful check runs |

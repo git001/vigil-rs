@@ -21,6 +21,7 @@ use super::{Cmd, Context, DEFAULT_BACKOFF_DELAY, Event, EventKind, ExitCodeMode,
 
 mod backoff;
 mod handlers;
+mod oneshot;
 mod ready;
 mod signals;
 mod spawn;
@@ -69,6 +70,10 @@ pub(super) struct Actor {
     ready_failed: bool,
     /// Last `STATUS=` text from sd_notify.
     status_message: Option<String>,
+    /// Armed cron schedule (`schedule` with `startup: enabled`).
+    schedule: Option<crate::service::schedule::Schedule>,
+    /// Next scheduled run.
+    next_run: Option<jiff::Timestamp>,
 }
 
 impl Actor {
@@ -104,6 +109,8 @@ impl Actor {
             ready_deadline: None,
             ready_failed: false,
             status_message: None,
+            schedule: None,
+            next_run: None,
         }
     }
 
@@ -116,6 +123,9 @@ impl Actor {
             pid: self.child.as_ref().and_then(|c| c.id()),
             last_exit: self.last_exit,
             status_message: self.status_message.clone(),
+            next_run: self
+                .next_run
+                .and_then(|t| DateTime::from_timestamp(t.as_second(), 0)),
         }
     }
 
@@ -125,6 +135,13 @@ impl Actor {
         self.since = Utc::now();
         self.metrics
             .set_service_active(&self.name, new_state == ServiceState::Active);
+        self.metrics.set_service_running(
+            &self.name,
+            matches!(
+                new_state,
+                ServiceState::Starting | ServiceState::Active | ServiceState::Stopping
+            ),
+        );
         let _ = self
             .event_tx
             .send(Event {
@@ -148,6 +165,7 @@ pub(super) async fn run(
     let log_store = Arc::clone(&ctx.log_store);
     let mut actor = Actor::new(name.clone(), config, ctx);
     let mut notify_rx = actor.notify_rx.take().expect("fresh actor");
+    actor.arm_schedule().await;
     let mut backoff_sleep: Option<Pin<Box<Sleep>>> = None;
     let mut stop_deadline: Option<Pin<Box<Sleep>>> = None;
     let mut pending_restart = false;
@@ -174,6 +192,7 @@ pub(super) async fn run(
 
     loop {
         let ready_deadline = actor.ready_deadline;
+        let next_run = actor.next_run_deadline();
         tokio::select! {
             biased;
 
@@ -194,6 +213,9 @@ pub(super) async fn run(
                     }
                     Some(Cmd::ForwardSignal(sig)) => {
                         actor.send_signal(sig);
+                    }
+                    Some(Cmd::UpdateConfig(config)) => {
+                        actor.handle_update_config(*config).await;
                     }
                     Some(Cmd::CheckPassed { check, started_at }) => {
                         actor.handle_check_passed(&check, started_at).await;
@@ -241,6 +263,15 @@ pub(super) async fn run(
                 }
             }, if ready_deadline.is_some() => {
                 actor.handle_ready_timeout(&mut stop_deadline).await;
+            }
+
+            _ = async {
+                match next_run {
+                    Some(d) => tokio::time::sleep_until(d).await,
+                    None => std::future::pending().await,
+                }
+            }, if next_run.is_some() => {
+                actor.handle_schedule_due(&mut stop_deadline).await;
             }
         }
     }

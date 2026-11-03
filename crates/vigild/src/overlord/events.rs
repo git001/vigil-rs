@@ -23,8 +23,9 @@ impl Overlord {
                     e.snapshot.state = *new_state;
                     e.snapshot.since = Utc::now();
                 }
-                // When a service becomes ready, unblock any services waiting on it.
-                if *new_state == ServiceState::Active && !self.pending_autostart.is_empty() {
+                // When a service becomes ready (or a oneshot is done), unblock
+                // any services waiting on it.
+                if new_state.is_ready() && !self.pending_autostart.is_empty() {
                     self.try_start_pending().await;
                 }
                 // Warn if a service enters Error and others are still waiting for it.
@@ -89,6 +90,12 @@ impl Overlord {
             service::EventKind::ProcessExited { exit, .. } => {
                 if let Some(e) = self.services.get_mut(&event.service) {
                     e.snapshot.last_exit = *exit;
+                }
+                None
+            }
+            service::EventKind::NextRun { at } => {
+                if let Some(e) = self.services.get_mut(&event.service) {
+                    e.snapshot.next_run = *at;
                 }
                 None
             }

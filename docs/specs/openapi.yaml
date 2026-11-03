@@ -472,7 +472,7 @@ components:
 
     ServiceStatus:
       type: string
-      enum: [starting, active, inactive, backoff, error]
+      enum: [starting, active, inactive, backoff, error, done]
       description: |
         - `starting` — process is running but not ready yet (`ready: notify`
           or `ready: check`); dependent services wait. New in v4.
@@ -480,6 +480,7 @@ components:
         - `inactive` — process is not running
         - `backoff` — waiting before the next restart attempt
         - `error` — failed to start or exceeded backoff limit
+        - `done` — a `type: oneshot` service finished successfully. New in v4.
 
     ServiceInfo:
       type: object
@@ -518,6 +519,13 @@ components:
             Last `STATUS=` text the service sent via sd_notify
             (`ready: notify`). Cleared on every start. New in v4.
           example: "loading cache 3/5"
+        next-run:
+          type: string
+          format: date-time
+          description: |
+            Next scheduled run of a `type: oneshot` service with `schedule`
+            (and `startup: enabled`). New in v4.
+          example: "2026-11-04T03:00:00Z"
       required: [name, startup, current, stop-signal, on-success, on-failure]
 
     ExitInfo:

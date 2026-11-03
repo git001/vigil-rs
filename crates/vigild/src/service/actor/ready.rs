@@ -40,6 +40,10 @@ impl Actor {
         if self.status_message.take().is_some() {
             self.send_status_message().await;
         }
+        if self.is_oneshot() {
+            // Ready = finished successfully; stays `Starting` while it runs.
+            return;
+        }
         match self.ready_mode() {
             ReadyMode::Process => self.transition(ServiceState::Active).await,
             mode => {
