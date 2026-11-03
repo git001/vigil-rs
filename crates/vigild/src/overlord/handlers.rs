@@ -93,7 +93,7 @@ impl Overlord {
                 ServiceAction::Replan => self.reload_layers().await,
             };
             if let Err(e) = res {
-                errors.push(format!("{}: {}", name, e));
+                errors.push(format!("{name}: {e:#}"));
             }
         }
 

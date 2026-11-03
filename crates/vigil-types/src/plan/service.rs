@@ -121,6 +121,11 @@ pub struct ServiceConfig {
     pub requires: Vec<String>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub environment: IndexMap<String, String>,
+    /// Files with `KEY=value` lines (e.g. written by the Vault Agent), read
+    /// on every start. Their variables come after pass-env and before
+    /// `environment`. A leading `-` makes a file optional.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_file: Vec<String>,
     /// Pass vigild's whole environment to the service. Default (unset):
     /// `false`, i.e. only PATH, HOME, USER, LOGNAME, TZ plus variables
     /// matched by `pass-env-glob` / `pass-env-regex`, plus `environment`.
@@ -233,6 +238,11 @@ pub(super) fn merge_service(base: &mut ServiceConfig, overlay: &ServiceConfig) {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone())),
     );
+    for v in &overlay.env_file {
+        if !base.env_file.contains(v) {
+            base.env_file.push(v.clone());
+        }
+    }
     opt!(pass_env);
     for v in &overlay.pass_env_glob {
         if !base.pass_env_glob.contains(v) {

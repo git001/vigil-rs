@@ -54,6 +54,7 @@ fn validate(plan: &Plan) -> anyhow::Result<()> {
         EnvPolicy::for_service(svc).with_context(|| format!("service {name:?}"))?;
         validate_ready(plan, svc).with_context(|| format!("service {name:?}"))?;
         validate_oneshot(svc).with_context(|| format!("service {name:?}"))?;
+        crate::template::check_service(svc).with_context(|| format!("service {name:?}"))?;
     }
     for (name, check) in &plan.checks {
         if let Some(exec) = &check.exec {
@@ -62,6 +63,8 @@ fn validate(plan: &Plan) -> anyhow::Result<()> {
                 .as_deref()
                 .and_then(|s| plan.services.get(s));
             EnvPolicy::for_exec_check(exec, ctx).with_context(|| format!("check {name:?}"))?;
+            crate::template::check_exec_environment(&exec.environment)
+                .with_context(|| format!("check {name:?}"))?;
         }
     }
     Ok(())
@@ -437,6 +440,48 @@ mod tests {
             let err = format!("{:#}", load_plan(dir.path()).unwrap_err());
             assert!(err.contains(want), "{fields}: {err}");
         }
+    }
+
+    #[test]
+    fn template_syntax_is_checked_at_load() {
+        let dir = TempDir::new().unwrap();
+        write(
+            &dir,
+            "001.yaml",
+            "services:\n  web:\n    command: app --port {{ env.PORT | }}\n",
+        );
+        let err = format!("{:#}", load_plan(dir.path()).unwrap_err());
+        assert!(
+            err.contains("service \"web\"") && err.contains("template in command"),
+            "{err}"
+        );
+
+        write(
+            &dir,
+            "001.yaml",
+            "services:\n  web:\n    command: app\n    env-file: [relative.env]\n",
+        );
+        let err = format!("{:#}", load_plan(dir.path()).unwrap_err());
+        assert!(err.contains("path must be absolute"), "{err}");
+
+        write(
+            &dir,
+            "001.yaml",
+            "services:\n  web:\n    command: app\nchecks:\n  c:\n    exec:\n      command: 'true'\n      environment:\n        X: '{{ nope('\n",
+        );
+        let err = format!("{:#}", load_plan(dir.path()).unwrap_err());
+        assert!(
+            err.contains("check \"c\"") && err.contains("template in environment"),
+            "{err}"
+        );
+
+        // valid templates load; undefined variables only fail at start
+        write(
+            &dir,
+            "001.yaml",
+            "services:\n  web:\n    command: app --port {{ env.PORT }}\n    environment:\n      PW: \"{{ file('/run/secrets/pw') }}\"\n",
+        );
+        load_plan(dir.path()).unwrap();
     }
 
     #[test]

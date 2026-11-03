@@ -309,3 +309,39 @@ async fn apply_credentials_from_root_drops_all_groups() {
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines, vec!["54123", "54456", "54456"], "{out}");
 }
+
+// template-aware command splitting
+#[test]
+fn templated_command_keeps_tags_in_one_word() {
+    use crate::process_util::parse_command_templated;
+    assert_eq!(
+        parse_command_templated(r#"app --port {{ env.PORT | default("8080") }} -v"#).unwrap(),
+        vec!["app", "--port", r#"{{ env.PORT | default("8080") }}"#, "-v"]
+    );
+    // inside double quotes, and glued to other text
+    assert_eq!(
+        parse_command_templated(r#"app "--name={{ env.N | default("a b") }}x" y"#).unwrap(),
+        vec!["app", r#"--name={{ env.N | default("a b") }}x"#, "y"]
+    );
+    // string literal containing the closing delimiter
+    assert_eq!(
+        parse_command_templated(r#"echo {{ "}}" }}"#).unwrap(),
+        vec!["echo", r#"{{ "}}" }}"#]
+    );
+    // single quotes are literal as in the shell
+    assert_eq!(
+        parse_command_templated(r#"sh -c 'echo {{ env.X }} "q"'"#).unwrap(),
+        vec!["sh", "-c", r#"echo {{ env.X }} "q""#]
+    );
+    // block tags
+    assert_eq!(
+        parse_command_templated("a {% if true %}b c{% endif %}").unwrap(),
+        vec!["a", "{% if true %}b", "c{% endif %}"]
+    );
+    assert!(parse_command_templated("a {{ b").is_err());
+    // parse_command itself is unchanged
+    assert_eq!(
+        parse_command(r#"a {{ b "c d" }}"#).unwrap(),
+        vec!["a", "{{", "b", "c d", "}}"]
+    );
+}

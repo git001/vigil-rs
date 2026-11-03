@@ -377,23 +377,56 @@ from 2026-11-03 marked *decided*):
 
 ## Phase 4: templating
 
-- **Syntax:** `{{.VAR}}`, `{{.VAR:-default}}`, `{{file "/p"}}`, `{{mem 75%}}`, `{{cpu 50%}}`.
-- **Where:** `command` and the values of `environment`.
+- **Syntax:** minijinja (Jinja2), the same as `body-template` of alerts, not
+  gopherd's `{{.VAR}}` dialect (decided 2026-11-03: one template syntax in
+  vigil, no own parser): `{{ env.VAR | default("x") }}`, `{{ file("/p") }}`,
+  `{{ mem("90% - 64MiB") }}`, `{{ cpu("100% - 1") }}`.
+- **Where:** `command` and the values of `environment` (services only, not
+  exec checks).
 - **When:** only a syntax check when the plan is loaded. Values are resolved
-  at spawn time, so `{{file}}` is read fresh on every (re)start of a service.
-- **Parser:** new module `crates/vigild/src/template/`, hand-written, no regex
-  or template engine. Everything is resolved in a single pass over the
-  original text (that was gopherd's template bug). Fuzzing with proptest.
-- **`file`:** regular files only, at most 64 KiB, a trailing newline is
-  stripped. Resolved values never appear in logs or the plan API.
+  at spawn time, so `{{ file }}` is read fresh on every (re)start of a service.
+- **Undefined variables are errors** (decided): the start fails;
+  `default(...)` or `is defined` handle optional ones.
+- **Single pass:** minijinja renders once; substituted values are never
+  evaluated again (gopherd's template bug cannot happen).
+- **`command`:** split into arguments first (template tags are kept intact),
+  then each argument is rendered on its own, so a value is always exactly one
+  argument. Only values containing `{{` or `{%` are rendered, so shell
+  `${#VAR}` (Jinja comment syntax) keeps working.
+- **`env` sources:** in `environment` values the variables vigild passes
+  (base set + pass-env); in `command` the child's final environment.
+- **`file`:** absolute paths, regular files only, at most 64 KiB, UTF-8
+  without NUL, one trailing newline is stripped, optional default for a
+  missing file. Resolved values never appear in logs or the API.
   - Symlinks must be allowed: Kubernetes secret volumes consist of symlinks
     (`key -> ..data/key`, `..data -> ..2026_11_02_...`). No `O_NOFOLLOW` on
     the path, but `fstat` after opening to make sure it is a regular file.
-- **`mem` / `cpu`:** cgroup v2 `memory.max` / `cpu.max`, otherwise
-  `/proc/meminfo` / `sched_getaffinity`. On OpenShift these reflect the pod
-  limits.
-- **`.VAR`:** sources are the service's `environment` plus vigild variables
-  allowed through `pass-env`.
+- **`mem` / `cpu`:** smallest cgroup v2 `memory.max` of the own cgroup and
+  its ancestors (v1 `memory.limit_in_bytes`), capped by `MemTotal`, as MiB.
+  CPUs: `sched_getaffinity`, capped by the cgroup quota rounded up
+  (`cpu.max` / `cpu.cfs_quota_us`), at least 1. On OpenShift these reflect
+  the pod limits; without limits the node is used and a warning logged.
+
+- **`env-file`** (added 2026-11-03 at the user's request: Vault Agent and
+  ESO templates usually write one file with `KEY=value` lines, not one file
+  per secret): list of files read on every start, between pass-env and
+  `environment`; `export `, quotes and comments allowed; leading `-` =
+  optional; at most 1 MiB. Visible to templates.
+- **Exec checks:** a check with `service-context` used to copy the service's
+  `environment` unrendered; now the service's env-file and environment and
+  the check's environment go through the same builder (`template::child_env`)
+  on every run. The check's `command` (`sh -c`) is deliberately not a
+  template.
+
+**Status (2026-11-03):** implemented in `crates/vigild/src/template/`
+(minijinja with `UndefinedBehavior::Strict`, functions `file`, `mem`, `cpu`),
+template-aware `parse_command_templated`, syntax check in plan validation.
+Tested with unit tests (fake cgroup trees for v1/v2/nested/unlimited, K8s
+symlink secret layout), actor tests (real process, undefined variable,
+values not leaked into errors) and a smoke test (secret rotation via
+`..data` swap picked up on restart). Fix found on the way: API errors and
+change errors only showed the outermost context (`service "app"`), now the
+whole chain.
 
 ### Phase 4b: watching files (replacement for stakater Reloader)
 

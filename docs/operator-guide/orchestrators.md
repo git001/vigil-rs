@@ -59,6 +59,86 @@ services:
 
 Use `pass-env: true` to restore the pre-v4 behaviour for a service.
 
+#### Secret files
+
+A Secret mounted as a volume (without `subPath`) can be read with a
+[`file` template](../user-guide/configuration.md#templates-in-command-and-environment).
+Unlike `env:`, the kubelet updates the file when the Secret changes (after
+about a minute); the service gets the new value on its next start.
+
+```yaml
+services:
+  api:
+    command: /usr/local/bin/api
+    environment:
+      DB_PASSWORD: "{{ file('/etc/secrets/db-password') }}"
+```
+
+#### Vault Agent and other env files
+
+The Vault Agent Injector writes rendered secrets to `/vault/secrets/<name>`,
+usually as `KEY=value` lines. Read such a file with
+[`env-file`](../user-guide/configuration.md#env-file):
+
+```yaml
+# Pod annotations
+vault.hashicorp.com/agent-inject: "true"
+vault.hashicorp.com/agent-inject-secret-db: database/creds/app
+vault.hashicorp.com/agent-inject-template-db: |
+  {{- with secret "database/creds/app" -}}
+  export DB_USER="{{ .Data.username }}"
+  export DB_PASSWORD="{{ .Data.password }}"
+  {{- end }}
+```
+
+```yaml
+# vigil layer
+services:
+  api:
+    command: /usr/local/bin/api
+    env-file: [/vault/secrets/db]
+```
+
+The file is read on every start of the service. When the agent renews the
+credentials, restart the service (`vigil services restart api`) to use them.
+
+#### Memory and CPU templates
+
+`{{ mem(…) }}` and `{{ cpu(…) }}` follow the container's `resources.limits`:
+
+| Kubernetes | Seen by vigild | Template |
+|---|---|---|
+| `limits.memory: 2Gi` | cgroup `memory.max` = 2147483648 | `mem("75%")` = `1536` |
+| `limits.cpu: 1500m` | cgroup `cpu.max` = `150000 100000` | `cpu()` = `2` (rounded up) |
+| Guaranteed pod, static CPU manager | exclusive cpuset | `cpu()` = number of pinned CPUs |
+| `requests.*` only | nothing | — |
+
+Requests are not visible inside the container, only limits are. **Without
+limits** the templates use the whole node (all its RAM and CPUs) and vigild
+logs a warning. To size by requests, expose them with the Downward API and
+read the variable:
+
+```yaml
+# Pod spec
+env:
+  - name: CPU_REQUEST
+    valueFrom:
+      resourceFieldRef: {containerName: app, resource: requests.cpu, divisor: "1"}
+  - name: MEM_REQUEST_MIB
+    valueFrom:
+      resourceFieldRef: {containerName: app, resource: requests.memory, divisor: 1Mi}
+```
+
+```yaml
+# vigil layer
+services:
+  app:
+    command: /usr/local/bin/app --workers {{ env.CPU_REQUEST }}
+    pass-env-glob: [CPU_REQUEST, MEM_REQUEST_MIB]
+```
+
+A `divisor: "1"` rounds a CPU request up to whole CPUs.
+
 ### ConfigMap for layers
 
 ```yaml

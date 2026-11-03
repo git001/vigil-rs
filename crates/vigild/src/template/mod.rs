@@ -1,0 +1,160 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 vigil-rs contributors
+
+//! Templates in a service's `command` and `environment` values.
+//!
+//! The syntax is minijinja (Jinja2), the same as `body-template` of alerts:
+//!
+//! ```text
+//! {{ env.PORT | default("8080") }}      variable with fallback
+//! {{ file("/etc/secrets/db") }}         file content (read on every start)
+//! {{ mem("90% - 64MiB") }}              memory budget in MiB
+//! {{ cpu("100% - 1") }}                 CPU count
+//! ```
+//!
+//! Only values containing `{{` or `{%` are rendered, so plain values (and
+//! shell constructs like `${#VAR}`) are left alone. Rendering happens in one
+//! pass: a substituted value is never parsed as a template again. Undefined
+//! variables are errors (use `default` or `is defined`). Rendered values are
+//! never logged.
+
+pub mod env_file;
+mod file;
+mod resources;
+
+use std::collections::BTreeMap;
+use std::ffi::OsString;
+
+use indexmap::IndexMap;
+
+use minijinja::{Environment, UndefinedBehavior, context};
+
+/// Whether `s` would be rendered at all.
+pub fn is_template(s: &str) -> bool {
+    s.contains("{{") || s.contains("{%")
+}
+
+fn environment() -> Environment<'static> {
+    let mut env = Environment::new();
+    env.set_undefined_behavior(UndefinedBehavior::Strict);
+    env.set_keep_trailing_newline(true);
+    env.add_function("file", file::file);
+    env.add_function("mem", resources::mem);
+    env.add_function("cpu", resources::cpu);
+    env
+}
+
+/// Check the syntax of a service's templates (at load and replan).
+/// Values are not resolved.
+pub fn check_service(cfg: &vigil_types::plan::ServiceConfig) -> anyhow::Result<()> {
+    let env = environment();
+    if let Some(cmd) = &cfg.command {
+        for word in crate::process_util::parse_command_templated(cmd)? {
+            if is_template(&word) {
+                env.template_from_str(&word)
+                    .map_err(|e| anyhow::anyhow!("template in command word {word:?}: {e}"))?;
+            }
+        }
+    }
+    check_environment(&env, &cfg.environment)?;
+    for entry in &cfg.env_file {
+        env_file::check_entry(entry)?;
+    }
+    Ok(())
+}
+
+/// Check the syntax of an exec check's `environment` templates.
+pub fn check_exec_environment(values: &IndexMap<String, String>) -> anyhow::Result<()> {
+    check_environment(&environment(), values)
+}
+
+fn check_environment(
+    env: &Environment<'static>,
+    values: &IndexMap<String, String>,
+) -> anyhow::Result<()> {
+    for (k, v) in values {
+        if is_template(v) {
+            env.template_from_str(v)
+                .map_err(|e| anyhow::anyhow!("template in environment {k:?}: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Explicit variables of a service (or exec check): `env-file` contents,
+/// then the rendered `environment` values.
+pub struct EnvLayer<'a> {
+    pub env_file: &'a [String],
+    pub environment: &'a IndexMap<String, String>,
+}
+
+/// Build a child's environment: what `policy` lets through from vigild's
+/// environment, then each layer's env files and `environment` values.
+///
+/// Templates in a layer's `environment` see everything before them (base
+/// set, pass-env, env files, earlier layers), but not the other entries of
+/// the same `environment`. vigild's whole environment is never visible.
+pub fn child_env(
+    policy: &crate::process_util::EnvPolicy,
+    creds: Option<&crate::process_util::Credentials>,
+    layers: &[EnvLayer<'_>],
+) -> anyhow::Result<Vec<(OsString, OsString)>> {
+    let renderer = Renderer::new();
+    // Read once so every build uses the same snapshot.
+    let parent: Vec<_> = std::env::vars_os().collect();
+    let mut explicit: IndexMap<String, String> = IndexMap::new();
+    for layer in layers {
+        env_file::load(layer.env_file, &mut explicit)?;
+        let vars = vars_of(&policy.build(parent.clone(), creds, &explicit));
+        for (k, v) in layer.environment {
+            let v = renderer
+                .render(v, &vars)
+                .map_err(|e| anyhow::anyhow!("environment {k:?}: {e}"))?;
+            explicit.insert(k.clone(), v);
+        }
+    }
+    Ok(policy.build(parent, creds, &explicit))
+}
+
+/// Environment entries with UTF-8 names and values, as template variables.
+pub fn vars_of(env: &[(OsString, OsString)]) -> BTreeMap<String, String> {
+    env.iter()
+        .filter_map(|(k, v)| Some((k.to_str()?.to_owned(), v.to_str()?.to_owned())))
+        .collect()
+}
+
+/// Renders templates for one service start.
+pub struct Renderer {
+    env: Environment<'static>,
+}
+
+impl Default for Renderer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Renderer {
+    pub fn new() -> Self {
+        Self { env: environment() }
+    }
+
+    /// Render `s` with `vars` available as `env`. Plain strings are returned
+    /// unchanged.
+    /// Errors carry minijinja's message (never the rendered value).
+    pub fn render(&self, s: &str, vars: &BTreeMap<String, String>) -> anyhow::Result<String> {
+        if !is_template(s) {
+            return Ok(s.to_owned());
+        }
+        let out = self
+            .env
+            .template_from_str(s)
+            .and_then(|t| t.render(context! { env => vars }))
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        anyhow::ensure!(!out.contains('\0'), "rendered value contains a NUL byte");
+        Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests;

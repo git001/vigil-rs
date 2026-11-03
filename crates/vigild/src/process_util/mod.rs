@@ -10,4 +10,4 @@ mod tests;
 
 pub use env::{EnvPolicy, apply_env, glob_match};
 pub use identity::{Credentials, apply_credentials, resolve_credentials, resolve_gid, resolve_uid};
-pub use parse::parse_command;
+pub use parse::{parse_command, parse_command_templated};

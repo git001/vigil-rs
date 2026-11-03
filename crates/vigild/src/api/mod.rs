@@ -142,7 +142,9 @@ impl IntoResponse for ApiError {
             "status-code": code,
             "status": status_text,
             "result": null,
-            "message": self.1.to_string()
+            // `{:#}`: the whole context chain, not just the outermost
+            // message (e.g. `service "web": invalid pass-env-regex …`).
+            "message": format!("{:#}", self.1)
         }));
         (self.0, body).into_response()
     }

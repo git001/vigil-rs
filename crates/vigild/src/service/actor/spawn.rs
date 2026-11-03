@@ -12,9 +12,10 @@ use vigil_types::plan::{LogsForward, ReadyMode};
 
 use crate::logs::spawn_reader;
 use crate::process_util::{
-    EnvPolicy, apply_credentials, apply_env, parse_command, resolve_credentials,
+    EnvPolicy, apply_credentials, apply_env, parse_command_templated, resolve_credentials,
 };
 use crate::service::notify::NotifySocket;
+use crate::template::{EnvLayer, Renderer, child_env, vars_of};
 
 use super::Actor;
 
@@ -30,20 +31,6 @@ impl Actor {
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("service '{}' has no command", self.name))?;
 
-        let argv = parse_command(cmd_str)?;
-        if argv.is_empty() {
-            return Err(anyhow::anyhow!("empty command for service '{}'", self.name));
-        }
-
-        let mut cmd = Command::new(&argv[0]);
-        if argv.len() > 1 {
-            cmd.args(&argv[1..]);
-        }
-
-        if let Some(dir) = &self.config.working_dir {
-            cmd.current_dir(dir);
-        }
-
         let creds = resolve_credentials(
             self.config.user.as_deref(),
             self.config.user_id,
@@ -55,11 +42,37 @@ impl Actor {
             &self.config.pass_env_glob,
             &self.config.pass_env_regex,
         )?;
-        let mut env = policy.build(
-            std::env::vars_os(),
+        // Templates never see vigild's whole environment, only what the
+        // pass-env policy lets through plus env-file (see `child_env`);
+        // `command` sees the child's final environment.
+        let mut env = child_env(
+            &policy,
             creds.as_ref(),
-            &self.config.environment,
-        );
+            &[EnvLayer {
+                env_file: &self.config.env_file,
+                environment: &self.config.environment,
+            }],
+        )?;
+
+        let renderer = Renderer::new();
+        let vars = vars_of(&env);
+        let argv = parse_command_templated(cmd_str)?
+            .iter()
+            .map(|w| {
+                renderer
+                    .render(w, &vars)
+                    .map_err(|e| anyhow::anyhow!("command word {w:?}: {e}"))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        if argv.is_empty() {
+            return Err(anyhow::anyhow!("empty command for service '{}'", self.name));
+        }
+        let mut cmd = Command::new(&argv[0]);
+        cmd.args(&argv[1..]);
+        if let Some(dir) = &self.config.working_dir {
+            cmd.current_dir(dir);
+        }
+
         // Never leak a NOTIFY_SOCKET vigild itself got (e.g. from systemd);
         // `ready: notify` services get their own one.
         env.retain(|(k, _)| k != "NOTIFY_SOCKET");

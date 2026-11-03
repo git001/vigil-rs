@@ -9,6 +9,7 @@ use tracing::{debug, warn};
 use vigil_types::plan::{ExecCheck, ServiceConfig};
 
 use crate::process_util::{EnvPolicy, apply_credentials, apply_env, resolve_credentials};
+use crate::template::{EnvLayer, child_env};
 
 pub(super) async fn probe_exec(
     exec: &ExecCheck,
@@ -21,11 +22,6 @@ pub(super) async fn probe_exec(
         .service_context
         .as_deref()
         .and_then(|n| service_configs.get(n));
-
-    // Build effective environment: service env first, check env on top.
-    let mut env: IndexMap<String, String> =
-        ctx_svc.map(|s| s.environment.clone()).unwrap_or_default();
-    env.extend(exec.environment.iter().map(|(k, v)| (k.clone(), v.clone())));
 
     // Effective user/group: check setting wins, fall back to service context.
     let eff_user = exec
@@ -60,7 +56,26 @@ pub(super) async fn probe_exec(
             return false;
         }
     };
-    let env = policy.build(std::env::vars_os(), creds.as_ref(), &env);
+    // Service context first (env-file, environment), the check's
+    // environment on top; templates rendered as for the service.
+    let mut layers = Vec::with_capacity(2);
+    if let Some(s) = ctx_svc {
+        layers.push(EnvLayer {
+            env_file: &s.env_file,
+            environment: &s.environment,
+        });
+    }
+    layers.push(EnvLayer {
+        env_file: &[],
+        environment: &exec.environment,
+    });
+    let env = match child_env(&policy, creds.as_ref(), &layers) {
+        Ok(env) => env,
+        Err(e) => {
+            warn!(error = %e, "exec check: cannot build environment");
+            return false;
+        }
+    };
 
     let command = exec.command.clone();
     let working_dir = eff_working_dir.map(str::to_owned);

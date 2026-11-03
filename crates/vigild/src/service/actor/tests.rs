@@ -1209,3 +1209,182 @@ async fn update_config_applies_and_rearms_schedule() {
         EventKind::NextRun { at: None }
     ));
 }
+
+// -----------------------------------------------------------------------
+// Templates in command and environment
+// -----------------------------------------------------------------------
+
+async fn wait_for_file(path: &std::path::Path) -> String {
+    for _ in 0..100 {
+        if let Ok(s) = std::fs::read_to_string(path)
+            && !s.is_empty()
+        {
+            return s;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("{path:?} not written");
+}
+
+#[tokio::test]
+async fn templates_render_command_and_environment() {
+    let dir = tempfile::tempdir().unwrap();
+    let secret = dir.path().join("secret");
+    std::fs::write(&secret, "s3cr3t\n").unwrap();
+    let out = dir.path().join("out");
+    let cfg = ServiceConfig {
+        command: Some(format!(
+            r#"sh -c 'printf "%s|%s|%s|%s" "$1" "$2" "$SECRET" "$MSG" > {}' x {{{{ env.PORT }}}} "{{{{ env.N | default("a b") }}}}""#,
+            out.display()
+        )),
+        environment: [
+            ("PORT".to_string(), "9090".to_string()),
+            (
+                "SECRET".to_string(),
+                format!("{{{{ file('{}') }}}}", secret.display()),
+            ),
+            (
+                "MSG".to_string(),
+                "{{ env.NOPE | default('fallback') }}".to_string(),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    };
+    let (mut actor, _rx) = make_actor_with_config(cfg);
+    actor.do_start().await.unwrap();
+    // "a b" stays one argument; the file's trailing newline is removed.
+    assert_eq!(wait_for_file(&out).await, "9090|a b|s3cr3t|fallback");
+}
+
+#[tokio::test]
+async fn template_errors_fail_the_start_without_revealing_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let secret = dir.path().join("secret");
+    std::fs::write(&secret, "s3cr3t").unwrap();
+
+    // undefined variable in command
+    let cfg = ServiceConfig {
+        command: Some("echo {{ env.MISSING }}".into()),
+        environment: [(
+            "SECRET".to_string(),
+            format!("{{{{ file('{}') }}}}", secret.display()),
+        )]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    };
+    let (mut actor, _rx) = make_actor_with_config(cfg);
+    let err = format!("{:#}", actor.do_start().await.unwrap_err());
+    assert!(
+        err.contains("command word") && err.contains("undefined"),
+        "{err}"
+    );
+    assert!(!err.contains("s3cr3t"), "{err}");
+    assert!(actor.child.is_none());
+
+    // `environment` values cannot see other `environment` entries
+    let cfg = ServiceConfig {
+        command: Some("true".into()),
+        environment: [
+            ("A".to_string(), "1".to_string()),
+            ("B".to_string(), "{{ env.A }}".to_string()),
+        ]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    };
+    let (mut actor, _rx) = make_actor_with_config(cfg);
+    let err = format!("{:#}", actor.do_start().await.unwrap_err());
+    assert!(err.contains("environment \"B\""), "{err}");
+}
+
+#[tokio::test]
+async fn templates_only_see_variables_allowed_by_pass_env() {
+    // cargo sets CARGO_PKG_NAME for the test process, i.e. for "vigild".
+    assert!(std::env::var("CARGO_PKG_NAME").is_ok());
+    let cfg = |glob: Vec<String>, command: &str| ServiceConfig {
+        command: Some(command.into()),
+        pass_env_glob: glob,
+        environment: [("PKG".to_string(), "{{ env.CARGO_PKG_NAME }}".to_string())]
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    };
+
+    // not passed: neither `environment` nor `command` templates see it
+    let (mut actor, _rx) = make_actor_with_config(cfg(vec![], "true"));
+    let err = format!("{:#}", actor.do_start().await.unwrap_err());
+    assert!(
+        err.contains("environment \"PKG\"") && err.contains("undefined"),
+        "{err}"
+    );
+
+    // passed via pass-env-glob: both see it
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out");
+    let (mut actor, _rx) = make_actor_with_config(cfg(
+        vec!["CARGO_PKG_*".into()],
+        &format!(
+            r#"sh -c 'printf "%s|%s" "$PKG" "$1" > {}' x {{{{ env.CARGO_PKG_NAME }}}}"#,
+            out.display()
+        ),
+    ));
+    actor.do_start().await.unwrap();
+    assert_eq!(wait_for_file(&out).await, "vigild|vigild");
+}
+
+#[tokio::test]
+async fn env_file_feeds_environment_templates_and_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let envf = dir.path().join("vault.env");
+    // Vault Agent style; PORT is overridden by `environment`.
+    std::fs::write(
+        &envf,
+        "export DB_USER=\"app\"\nexport DB_PASSWORD='p@ss w0rd'\nPORT=1\n",
+    )
+    .unwrap();
+    let out = dir.path().join("out");
+    let cfg = ServiceConfig {
+        command: Some(format!(
+            r#"sh -c 'printf "%s|%s|%s|%s" "$1" "$DB_PASSWORD" "$URL" "$PORT" > {}' x {{{{ env.DB_USER }}}}"#,
+            out.display()
+        )),
+        env_file: vec![
+            envf.display().to_string(),
+            format!("-{}", dir.path().join("optional.env").display()),
+        ],
+        environment: [
+            (
+                "URL".to_string(),
+                "postgres://{{ env.DB_USER }}@db/app".to_string(),
+            ),
+            ("PORT".to_string(), "2".to_string()),
+        ]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    };
+    let (mut actor, _rx) = make_actor_with_config(cfg);
+    actor.do_start().await.unwrap();
+    assert_eq!(
+        wait_for_file(&out).await,
+        "app|p@ss w0rd|postgres://app@db/app|2"
+    );
+}
+
+#[tokio::test]
+async fn missing_env_file_fails_the_start() {
+    let cfg = ServiceConfig {
+        command: Some("true".into()),
+        env_file: vec!["/nonexistent/vigil-test.env".into()],
+        ..Default::default()
+    };
+    let (mut actor, _rx) = make_actor_with_config(cfg);
+    let err = format!("{:#}", actor.do_start().await.unwrap_err());
+    assert!(
+        err.contains("env-file") && err.contains("No such file"),
+        "{err}"
+    );
+}

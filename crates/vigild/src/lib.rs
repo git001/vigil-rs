@@ -15,6 +15,7 @@ pub mod reaper;
 pub mod server;
 pub mod service;
 pub mod state;
+pub mod template;
 pub mod tls;
 
 pub mod testutil;

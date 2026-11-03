@@ -481,3 +481,39 @@ async fn exec_check_uses_service_context_pass_env() {
     e.service_context = Some("app".to_string());
     assert!(probe_exec(&e, Duration::from_secs(5), &svcs).await);
 }
+
+/// The service context's env-file and `environment` templates are resolved
+/// for the check exactly as for the service; the check's own `environment`
+/// templates see them.
+#[tokio::test]
+async fn exec_check_renders_service_context_templates_and_env_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let pw = dir.path().join("pw");
+    std::fs::write(&pw, "s3cret\n").unwrap();
+    let envf = dir.path().join("db.env");
+    std::fs::write(&envf, "export DB_USER=\"app\"\n").unwrap();
+
+    let mut svcs = IndexMap::new();
+    svcs.insert(
+        "app".to_string(),
+        vigil_types::plan::ServiceConfig {
+            env_file: vec![envf.display().to_string()],
+            environment: [(
+                "PW".to_string(),
+                format!("{{{{ file('{}') }}}}", pw.display()),
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        },
+    );
+    let mut e = exec(r#"[ "$PW" = s3cret ] && [ "$WHO" = app-check ]"#);
+    e.service_context = Some("app".to_string());
+    e.environment
+        .insert("WHO".into(), "{{ env.DB_USER }}-check".into());
+    assert!(probe_exec(&e, Duration::from_secs(5), &svcs).await);
+
+    // a missing env file fails the probe (no panic, no values logged)
+    svcs["app"].env_file = vec![dir.path().join("nope").display().to_string()];
+    assert!(!probe_exec(&e, Duration::from_secs(5), &svcs).await);
+}

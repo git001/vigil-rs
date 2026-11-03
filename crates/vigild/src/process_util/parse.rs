@@ -14,6 +14,18 @@
 /// (they can be overridden in a future `--args` extension; for now they are
 /// unconditionally appended).
 pub fn parse_command(s: &str) -> anyhow::Result<Vec<String>> {
+    split_command(s, false)
+}
+
+/// Like [`parse_command`], but `{{ … }}` and `{% … %}` template tags are kept
+/// intact: whitespace and quotes inside them do not split or quote words.
+/// Each returned word is then rendered on its own (see `crate::template`),
+/// so a substituted value is always exactly one argument.
+pub fn parse_command_templated(s: &str) -> anyhow::Result<Vec<String>> {
+    split_command(s, true)
+}
+
+fn split_command(s: &str, templates: bool) -> anyhow::Result<Vec<String>> {
     let s = s.trim();
     // Look for " [ " ... " ]" bracket section, but only outside quoted strings
     // so that shell `if [ ... ]` constructs inside single-quoted arguments are
@@ -32,11 +44,11 @@ pub fn parse_command(s: &str) -> anyhow::Result<Vec<String>> {
         } else {
             ""
         };
-        let mut args = shell_words(base)?;
-        args.extend(shell_words(defaults)?);
+        let mut args = split_words(base, templates)?;
+        args.extend(split_words(defaults, templates)?);
         Ok(args)
     } else {
-        shell_words(s)
+        split_words(s, templates)
     }
 }
 
@@ -74,14 +86,35 @@ pub(super) fn find_unquoted(s: &str, needle: &str) -> Option<usize> {
 
 /// Minimal shell-word splitter: handles single/double quotes and backslash
 /// escapes. Does NOT perform variable expansion.
+#[cfg(test)]
 pub fn shell_words(s: &str) -> anyhow::Result<Vec<String>> {
+    split_words(s, false)
+}
+
+fn split_words(s: &str, templates: bool) -> anyhow::Result<Vec<String>> {
+    let chars: Vec<char> = s.chars().collect();
     let mut words: Vec<String> = Vec::new();
     let mut current = String::new();
     let mut in_single = false;
     let mut in_double = false;
     let mut escaped = false;
 
-    for c in s.chars() {
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        i += 1;
+        if templates
+            && !escaped
+            && !in_single
+            && c == '{'
+            && matches!(chars.get(i), Some('{' | '%'))
+        {
+            let end = template_tag_end(&chars, i - 1)
+                .ok_or_else(|| anyhow::anyhow!("unterminated template tag in command: {s:?}"))?;
+            current.extend(&chars[i - 1..end]);
+            i = end;
+            continue;
+        }
         if escaped {
             current.push(c);
             escaped = false;
@@ -107,4 +140,29 @@ pub fn shell_words(s: &str) -> anyhow::Result<Vec<String>> {
         words.push(current);
     }
     Ok(words)
+}
+
+/// End (exclusive) of the template tag starting at `start` (`{{` or `{%`),
+/// skipping string literals inside it. `None` if it is not closed.
+fn template_tag_end(chars: &[char], start: usize) -> Option<usize> {
+    let close = if chars[start + 1] == '{' { '}' } else { '%' };
+    let mut quote: Option<char> = None;
+    let mut i = start + 2;
+    while i < chars.len() {
+        let c = chars[i];
+        match quote {
+            Some(q) => {
+                if c == '\\' {
+                    i += 1;
+                } else if c == q {
+                    quote = None;
+                }
+            }
+            None if c == '"' || c == '\'' => quote = Some(c),
+            None if c == close && chars.get(i + 1) == Some(&'}') => return Some(i + 2),
+            None => {}
+        }
+        i += 1;
+    }
+    None
 }

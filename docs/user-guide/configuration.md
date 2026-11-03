@@ -54,7 +54,7 @@ services:
     description: Longer description (optional)
 
     # --- Process ---
-    command: /usr/local/bin/myapp --config /etc/myapp.yaml
+    command: /usr/local/bin/myapp --config /etc/myapp.yaml --workers {{ cpu() }}  # templates, see below
     type: simple                       # simple | oneshot (default: simple)
     schedule: '0 3 * * *'              # cron pattern, type: oneshot only
     schedule-tz: Europe/Vienna         # time zone for schedule (default: UTC)
@@ -66,9 +66,11 @@ services:
     environment:
       FOO: bar
       DATABASE_URL: postgres://localhost/mydb
+      DB_PASSWORD: "{{ file('/etc/secrets/db-password') }}"  # read on every start
     pass-env: false                    # inherit vigild's whole environment? (default: false)
     pass-env-glob: [APP_*, LOG_LEVEL]  # pass these vigild variables (wildcards * and ?)
     pass-env-regex: ['^K8S_[A-Z]+_URL$']  # pass vigild variables matching (anchored)
+    env-file: [/vault/secrets/db, -/etc/app/optional.env]  # KEY=value files, read on every start (- = optional)
 
     # --- Startup ---
     startup: enabled                   # enabled | disabled (default: disabled)
@@ -122,6 +124,85 @@ whitespace; no shell expansion). To use shell features, wrap in `sh -c`:
 ```yaml
 command: sh -c "echo starting && exec /usr/local/bin/myapp"
 ```
+
+`command` and the values of `environment` may contain
+[templates](#templates-in-command-and-environment).
+
+#### Templates in `command` and `environment`
+
+`command` and the values of `environment` are templates in the
+[minijinja](https://docs.rs/minijinja) (Jinja2) syntax, the same as
+[`body-template`](#body-template) of alerts. They are resolved on **every
+start** of the service, so a rotated secret file or a changed limit is picked
+up on the next (re)start.
+
+```yaml
+services:
+  api:
+    command: /usr/local/bin/api --port {{ env.PORT | default("8080") }} --workers {{ cpu("100% - 1") }}
+    environment:
+      PORT: "9090"
+      DB_PASSWORD: "{{ file('/etc/secrets/db-password') }}"
+      GOMEMLIMIT: "{{ mem('90% - 64MiB') }}MiB"
+```
+
+| Template | Result |
+|---|---|
+| `{{ env.NAME }}` | Value of an environment variable (see below which ones). An undefined variable is an **error**: the service does not start. |
+| `{{ env.NAME \| default("x") }}` | `x` if `NAME` is not defined. An empty value counts as defined; `default("x", true)` also replaces empty values. |
+| `{% if env.NAME is defined %}…{% endif %}` | Conditions, as in Jinja. |
+| `{{ file("/path") }}` | Content of a file, without one trailing newline. |
+| `{{ file("/path", "x") }}` | `x` if the file does not exist. Any other problem (not readable, not a regular file, …) is still an error. |
+| `{{ mem("75%") }}` | 75 % of the memory limit, as a whole number of **MiB**. |
+| `{{ mem("90% - 64MiB") }}` | 90 % minus 64 MiB. Units: `B`, `KiB`, `MiB`, `GiB`, `KB`, `MB`, `GB`. |
+| `{{ mem("512MiB") }}` | A fixed amount, in MiB. |
+| `{{ cpu() }}` | Number of CPUs available to the container. |
+| `{{ cpu("50%") }}` / `{{ cpu("100% - 1") }}` | A share of them (rounded), or minus a number of CPUs. Never less than 1. |
+
+**Variables (`env`):**
+
+- In `environment` values: the variables vigild passes to the service
+  (the base set and `pass-env` / `pass-env-glob` / `pass-env-regex`) and the
+  [`env-file`](#env-file) variables, *not* the other `environment` entries.
+  vigild's whole environment is never visible.
+- In `command`: the service's final environment, i.e. including the resolved
+  `environment` entries (`--port {{ env.PORT }}` with `environment: {PORT: "9090"}`).
+
+**`file`:** the path must be absolute. Symlinks are followed (Kubernetes
+secret volumes consist of them); the target must be a regular file of at most
+64 KiB, UTF-8 and without NUL bytes.
+
+**`mem` / `cpu`:** the memory limit is the smallest cgroup limit of the
+container (cgroup v2 `memory.max`, else v1 `memory.limit_in_bytes`), at most
+the RAM of the machine. The CPU count is the number of CPUs the process may
+run on, limited by the cgroup CPU quota rounded up (`cpu.max`, else
+`cpu.cfs_quota_us`). In Kubernetes and OpenShift these are the container's
+`resources.limits`; see [orchestrators](../operator-guide/orchestrators.md#memory-and-cpu-templates)
+for containers without limits. A `mem` result below 1 MiB is an error.
+
+**Rules:**
+
+- Only values containing `{{` or `{%` are templates; everything else is used
+  as is. Shell constructs such as `${#VAR}` are therefore unaffected, unless
+  the same value also contains a template. Then write them inside
+  `{% raw %}…{% endraw %}`: `sh -c 'echo {{ env.X }} {% raw %}${#Y}{% endraw %}'`.
+- In `command`, each argument is rendered on its own after the command has
+  been split into arguments. A substituted value is always exactly one
+  argument, even if it contains spaces or quotes. A template tag
+  (`{{ … }}`, `{% … %}`) may contain spaces and quotes, but a block such as
+  `{% if %}…{% endif %}` must stay within one argument (quote it).
+- Rendering is a single pass: a value that itself contains `{{` is inserted
+  literally and never evaluated.
+- In YAML, quote a value that **starts** with `{{` or `{%`
+  (`PORT: "{{ env.X }}"`); unquoted, YAML reads `{` as the start of a map.
+- The syntax is checked when layers are loaded and on `replan`; a syntax
+  error makes the layer invalid. Undefined variables, missing files and
+  similar problems are only detected at start: the service goes to `error`
+  and the reason is logged.
+- Resolved values are never logged and never shown by the API, which returns
+  the templates as written.
+- `command` and `environment` of services and `environment` of exec checks are
+  templates; an exec check's `command` is not (see [Exec check](#exec-check)).
 
 #### `type` / `schedule` / `schedule-tz`
 
@@ -226,7 +307,8 @@ Secrets) that a service does not need. A service gets:
    set, and `HOME`, `USER`, `LOGNAME`. With `user`/`user-id` these describe
    the target user from `/etc/passwd`; otherwise they are vigild's.
 2. vigild variables selected by `pass-env-glob` or `pass-env-regex`.
-3. `environment`, which overrides everything above.
+3. Variables from [`env-file`](#env-file) files.
+4. `environment`, which overrides everything above.
 
 | Field | Meaning |
 |---|---|
@@ -255,6 +337,47 @@ services:
     command: /usr/local/bin/worker
     pass-env-glob: [APP_*]       # no database credentials for the worker
 ```
+
+#### `env-file`
+
+Files with one `KEY=value` per line, read on **every start** of the service
+(so a secret rotated by the Vault Agent or ESO is picked up on the next
+restart). Typical sources: a [Vault Agent](https://developer.hashicorp.com/vault/docs/agent-and-proxy/agent/template)
+template, an External Secrets `target.template`, docker-style `.env` files.
+
+```yaml
+services:
+  api:
+    command: /usr/local/bin/api --db-user {{ env.DB_USER }}
+    env-file:
+      - /vault/secrets/db              # must exist, otherwise the start fails
+      - -/etc/api/overrides.env        # leading "-": optional
+    environment:
+      DATABASE_URL: "postgres://{{ env.DB_USER }}@db:5432/app"
+```
+
+```sh
+# /vault/secrets/db
+# comments and empty lines are ignored
+export DB_USER="app"        # "export " is optional
+DB_PASSWORD='p@ss$word'     # single quotes: literal
+GREETING="line1\nline2"     # double quotes: \" \\ \n \t \$
+PLAIN=value with spaces     # unquoted: up to the end of the line, # included
+```
+
+- Paths must be absolute. Files are read in order; a later file overrides an
+  earlier one, and `environment` overrides all of them.
+- Unquoted values run to the end of the line (trailing whitespace removed); a
+  `#` is part of the value. After a closing quote only whitespace or a
+  `# comment` may follow. No variable expansion, no multi-line values.
+- The variables are visible to [templates](#templates-in-command-and-environment)
+  in `environment` and `command` (`{{ env.DB_USER }}`).
+- Symlinks are followed; the target must be a regular file of at most 1 MiB,
+  UTF-8 without NUL bytes. A missing file (without `-`), an unreadable file or
+  a syntax error fails the start; the error names the file and line, never a
+  value.
+- Exec checks with `service-context` read the service's `env-file` too.
+- In layer merges the lists are appended.
 
 #### `startup`
 
@@ -670,9 +793,16 @@ exec:
 The check passes if the command exits with code 0. stdout and stderr are
 suppressed (they do not appear in container logs).
 
-`service-context` inherits the environment variables, user, group, and working
-directory from the named service. Individual fields (`user`, `user-id`, `group`,
-`group-id`, `working-dir`, `environment`) override the inherited values.
+`service-context` inherits the environment variables (including `env-file`),
+user, group, and working directory from the named service. Individual fields
+(`user`, `user-id`, `group`, `group-id`, `working-dir`, `environment`) override
+the inherited values.
+
+[Templates](#templates-in-command-and-environment) in the service's and the
+check's `environment` are resolved on every check run, the same way as for the
+service; the check's values can use the service's (`{{ env.DB_USER }}`). The
+check's `command` is a shell script (`sh -c`) and is **not** a template: use
+`$VAR` there, so that a value can never become shell code.
 
 Exec checks follow the same environment rules as services (see
 [`pass-env`](#environment--pass-env--pass-env-glob--pass-env-regex)): they
