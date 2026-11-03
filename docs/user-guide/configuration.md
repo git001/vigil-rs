@@ -85,7 +85,7 @@ services:
     on-success: restart                # what to do when the exit counts as success
     on-failure: restart                # what to do otherwise
     success-exit-codes: [0]            # exit codes that count as success (default: [0])
-    exit-code-map: {143: 0}            # rewrite codes first (signal N → 128+N)
+    exit-code-map: {143: 0}            # treat SIGTERM (128+15) as exit 0, see below
 
     # --- Health-check-triggered actions ---
     on-check-failure:
@@ -256,10 +256,34 @@ services:
     on-failure: shutdown
 ```
 
-- A process killed by a signal has the code `128 + signal` (SIGTERM → 143,
-  SIGKILL → 137), as in a shell.
-- `exit-code-map` is applied first. Both the success check and the
-  propagated code use the mapped value.
+**Signals become exit codes.** A process killed by a signal has no exit code
+of its own. vigild converts it the same way a shell does (`$?`):
+**128 + signal number**.
+
+| Signal | Number | Code |
+|---|---|---|
+| SIGHUP | 1 | 129 |
+| SIGINT | 2 | 130 |
+| SIGKILL | 9 | 137 |
+| SIGTERM | 15 | 143 |
+
+So `exit-code-map: {143: 0}` means "a process that died from SIGTERM counts
+as a clean exit". This is useful for programs that do not handle SIGTERM
+(e.g. many JVM apps or shell scripts without a `trap`): without the mapping,
+every regular stop is a failure and the container ends with 143.
+
+**Order of evaluation** when a process ends:
+
+1. Take the exit code, or `128 + signal` if it was killed by a signal.
+2. Apply `exit-code-map` (e.g. 143 → 0).
+3. Check the mapped code against `success-exit-codes` to pick `on-success` or
+   `on-failure`.
+4. If that policy shuts vigild down, the mapped code is what vigild exits with
+   (with `--exit-code propagate`).
+
+`last-exit` in the API and the `Last-Exit` column always show the raw result
+(`"signal": 15` in the API, `SIGTERM` in the CLI), before the mapping.
+
 - `success-exit-codes` replaces the default `[0]`. If you list codes, include
   `0` yourself when it should still be a success.
 - In layer merges, `exit-code-map` entries are merged and a non-empty
