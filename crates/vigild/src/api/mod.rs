@@ -36,7 +36,7 @@ mod handlers;
 #[openapi(
     info(
         title = "vigil API",
-        version = "1",
+        version = "4",
         description = "HTTP API for the vigild service supervisor daemon.\n\nEndpoints are available over two transports:\n- **Unix socket** (default `/run/vigil/vigild.sock`) — local access only\n- **HTTPS** (optional, enabled via `--tls-addr`) — network access with TLS\n\n**Unix socket example:**\n```\ncurl --unix-socket /run/vigil/vigild.sock http://localhost/v1/system-info\n```\n\n**HTTPS example** (self-signed cert):\n```\ncurl --insecure https://localhost:8443/v1/system-info\n```"
     ),
     paths(
@@ -60,6 +60,7 @@ mod handlers;
         ServiceInfo, ServicesAction,
         vigil_types::api::ServiceAction,
         vigil_types::api::ServiceStatus,
+        vigil_types::api::ExitInfo,
         vigil_types::api::ChangeStatus,
         ChangeInfo,
         CheckInfo,

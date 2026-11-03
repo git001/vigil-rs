@@ -37,9 +37,10 @@ Consequences for every new file and socket:
     images commonly use `chmod g=u` for GID 0.
   - Writable for vigild (checked with `access(W_OK)`).
   - The error names the path, the owner and mode found, and what is expected.
-- **Subdirectories** such as `notify/` are created by vigild with mode 0700.
+- **Subdirectories** such as `notify/` are created by vigild with mode 0711
+  (see phase 2: services running as another user must reach their socket).
 - **Creating the last component:** if the last path component is missing and
-  its parent exists, vigild creates it with mode 0700 and then checks it as
+  its parent exists, vigild creates it with mode 0711 and then checks it as
   above. Deeper missing levels are an error. Reason: an `emptyDir` mount point
   is root-owned with mode 0777 and would be rejected as a prefix itself; this
   way `emptyDir` on `/data` works with `--path-prefix /data/my-vigil` without
@@ -290,6 +291,35 @@ statuses older than the spawn are ignored). As implemented:
   OpenAPI version to v4. `vigil` v4 and `vigil-log-relay` must know the new
   value.
 
+**Status:** done on the `v4` branch. As implemented (maintainer decisions
+from 2026-11-03 marked *decided*):
+
+- `ready`, `ready-check`, `ready-timeout` (`0s` = wait forever), validated at
+  load and replan (`ready-check` must name an existing check that is not
+  `startup: disabled`; `ready-check` without `ready: check` is an error).
+- `after` / `requires` / `before` wait for `Active`; a dependency that is
+  still `Starting` blocks.
+- *Decided:* on `ready-timeout` the service is stopped (`stop-signal`, then
+  `kill-delay`) and the exit always counts as a failure, so `on-failure`
+  applies; `exit-code-map` cannot turn it into a success and a propagated
+  shutdown exits 10.
+- *Decided:* vigild creates `<path-prefix>` (if missing) and `notify/` with
+  mode 0711 instead of 0700, so a service with `user:` can reach its socket.
+  Sockets are 0600 and chowned to the service user; listing the directory
+  is impossible.
+- Notify socket per start (new random name, removed on exit); messages
+  carry a generation number, stale ones are dropped. Sender check: main PID
+  or its process group; a sender that already exited (`systemd-notify`) is
+  accepted only with the service's UID. Truncated datagrams are dropped,
+  passed file descriptors closed.
+- `NOTIFY_SOCKET` inherited by vigild is never passed to services.
+- `ready: check`: the check actor reports every pass with the probe's start
+  time; only probes started after the spawn count. Alerts are unchanged
+  (they still fire on status changes only).
+- API: `starting`, `status-message`, `ExitInfo` schema; OpenAPI and utoipa
+  version `4`. CLI shows `starting` and a `Message` column when set.
+- `vigil-log-relay` does not use `ServiceStatus`, nothing to change there.
+
 ## Phase 3: oneshot and cron (builds on phase 2)
 
 - `type: simple | oneshot`
@@ -420,7 +450,7 @@ steps; it feeds the changelog's "Breaking Changes" section.
   `pass-env-glob` and `pass-env-regex`.
 - Exit codes: `propagate` is the default in v4.
 - A single `--path-prefix` directory for all runtime files, checked at
-  startup, abort on failure. vigild creates the last component (mode 0700)
+  startup, abort on failure. vigild creates the last component (mode 0711)
   if it is missing.
 - Everything must run on OpenShift without write access to `/run` and
   without capabilities.

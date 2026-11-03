@@ -120,16 +120,23 @@ pub(super) async fn run(
 
             _ = tick.tick() => {
                 last_tick_at = tokio::time::Instant::now();
+                let probe_started = std::time::Instant::now();
                 let ok = perform(&config, timeout_dur, &http_client, &service_configs).await;
+                let first = std::mem::replace(&mut first_run, false);
                 if ok {
                     metrics.record_check_success(&name);
                     if status == CheckStatus::Down {
                         info!(check = %name, "check recovered");
                         status = CheckStatus::Up;
                         metrics.set_check_up(&name, true);
-                        let _ = event_tx.send(CheckEvent { check: name.clone(), status }).await;
                     }
                     failures = 0;
+                    // Every pass is reported (for `ready: check`); it also
+                    // covers recovery and the initial status. Alerts only
+                    // fire on status changes.
+                    let _ = event_tx
+                        .send(CheckEvent { check: name.clone(), status, passed_at: Some(probe_started) })
+                        .await;
                 } else {
                     metrics.record_check_failure(&name);
                     failures += 1;
@@ -138,14 +145,16 @@ pub(super) async fn run(
                         info!(check = %name, "check is down");
                         status = CheckStatus::Down;
                         metrics.set_check_up(&name, false);
-                        let _ = event_tx.send(CheckEvent { check: name.clone(), status }).await;
+                        let _ = event_tx
+                            .send(CheckEvent { check: name.clone(), status, passed_at: None })
+                            .await;
+                    } else if first {
+                        // On the first run, always report the current status
+                        // so AlertSender knows the initial state.
+                        let _ = event_tx
+                            .send(CheckEvent { check: name.clone(), status, passed_at: None })
+                            .await;
                     }
-                }
-                // On the first run, always report current status so AlertSender
-                // knows the initial state (e.g. a healthy check shows "up" instead
-                // of "unknown" in `vigil alerts list`).
-                if std::mem::replace(&mut first_run, false) {
-                    let _ = event_tx.send(CheckEvent { check: name.clone(), status }).await;
                 }
             }
         }

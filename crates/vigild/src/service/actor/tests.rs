@@ -4,7 +4,7 @@
 use nix::sys::signal::Signal;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use vigil_types::plan::ServiceConfig;
+use vigil_types::plan::{ReadyMode, ServiceConfig};
 use vigil_types::signal::StopSignal;
 
 use super::*;
@@ -13,6 +13,20 @@ use crate::metrics::MetricsStore;
 use crate::service::{Cmd, DEFAULT_BACKOFF_DELAY, DEFAULT_BACKOFF_LIMIT, Event, EventKind};
 use crate::state::ServiceState;
 
+fn test_ctx(
+    event_tx: mpsc::Sender<Event>,
+    log_store: std::sync::Arc<LogStore>,
+    metrics: std::sync::Arc<MetricsStore>,
+) -> crate::service::Context {
+    crate::service::Context {
+        event_tx,
+        log_store,
+        metrics,
+        exit_code_mode: crate::service::ExitCodeMode::Propagate,
+        notify_dir: std::env::temp_dir(),
+    }
+}
+
 fn make_actor() -> (Actor, mpsc::Receiver<Event>) {
     let (event_tx, event_rx) = mpsc::channel(64);
     let log_store = LogStore::new(100, 64);
@@ -20,9 +34,7 @@ fn make_actor() -> (Actor, mpsc::Receiver<Event>) {
     let actor = Actor::new(
         "test-svc".into(),
         ServiceConfig::default(),
-        event_tx,
-        log_store,
-        metrics,
+        test_ctx(event_tx, log_store, metrics),
     );
     (actor, event_rx)
 }
@@ -31,7 +43,11 @@ fn make_actor_with_config(config: ServiceConfig) -> (Actor, mpsc::Receiver<Event
     let (event_tx, event_rx) = mpsc::channel(64);
     let log_store = LogStore::new(100, 64);
     let metrics = MetricsStore::new();
-    let actor = Actor::new("test-svc".into(), config, event_tx, log_store, metrics);
+    let actor = Actor::new(
+        "test-svc".into(),
+        config,
+        test_ctx(event_tx, log_store, metrics),
+    );
     (actor, event_rx)
 }
 
@@ -139,10 +155,10 @@ async fn start_process_becomes_active_then_exits_to_backoff() {
         "svc".into(),
         config,
         rx,
-        event_tx,
-        log_store,
-        metrics,
-        crate::service::ExitCodeMode::Propagate,
+        crate::service::Context {
+            notify_dir: std::env::temp_dir(),
+            ..test_ctx(event_tx, log_store, metrics)
+        },
     ));
 
     // Start the service
@@ -175,7 +191,7 @@ async fn start_nonexistent_command_returns_error() {
     let (event_tx, _event_rx) = mpsc::channel(64);
     let log_store = LogStore::new(100, 64);
     let metrics = MetricsStore::new();
-    let mut actor = Actor::new("svc".into(), config, event_tx, log_store, metrics);
+    let mut actor = Actor::new("svc".into(), config, test_ctx(event_tx, log_store, metrics));
 
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     let mut stop_deadline = None;
@@ -194,7 +210,7 @@ async fn start_empty_command_returns_error() {
     let (event_tx, _event_rx) = mpsc::channel(64);
     let log_store = LogStore::new(100, 64);
     let metrics = MetricsStore::new();
-    let mut actor = Actor::new("svc".into(), config, event_tx, log_store, metrics);
+    let mut actor = Actor::new("svc".into(), config, test_ctx(event_tx, log_store, metrics));
 
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     let mut stop_deadline = None;
@@ -211,9 +227,7 @@ async fn start_no_command_returns_error() {
     let mut actor = Actor::new(
         "svc".into(),
         ServiceConfig::default(),
-        event_tx,
-        log_store,
-        metrics,
+        test_ctx(event_tx, log_store, metrics),
     );
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     let mut stop_deadline = None;
@@ -277,7 +291,7 @@ async fn start_when_already_running_is_noop() {
     let (event_tx, _event_rx) = mpsc::channel(64);
     let log_store = LogStore::new(100, 64);
     let metrics = MetricsStore::new();
-    let mut actor = Actor::new("svc".into(), config, event_tx, log_store, metrics);
+    let mut actor = Actor::new("svc".into(), config, test_ctx(event_tx, log_store, metrics));
 
     // Start once
     let (r1_tx, r1_rx) = tokio::sync::oneshot::channel();
@@ -518,7 +532,7 @@ async fn do_start_command_with_multiple_args() {
     let (event_tx, _event_rx) = mpsc::channel(64);
     let log_store = LogStore::new(100, 64);
     let metrics = MetricsStore::new();
-    let mut actor = Actor::new("svc".into(), config, event_tx, log_store, metrics);
+    let mut actor = Actor::new("svc".into(), config, test_ctx(event_tx, log_store, metrics));
 
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     let mut stop_deadline = None;
@@ -544,7 +558,7 @@ async fn do_start_with_environment_vars() {
     let (event_tx, _event_rx) = mpsc::channel(64);
     let log_store = LogStore::new(100, 64);
     let metrics = MetricsStore::new();
-    let mut actor = Actor::new("svc".into(), config, event_tx, log_store, metrics);
+    let mut actor = Actor::new("svc".into(), config, test_ctx(event_tx, log_store, metrics));
 
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     let mut stop_deadline = None;
@@ -565,7 +579,7 @@ async fn do_start_with_working_dir() {
     let (event_tx, _event_rx) = mpsc::channel(64);
     let log_store = LogStore::new(100, 64);
     let metrics = MetricsStore::new();
-    let mut actor = Actor::new("svc".into(), config, event_tx, log_store, metrics);
+    let mut actor = Actor::new("svc".into(), config, test_ctx(event_tx, log_store, metrics));
 
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     let mut stop_deadline = None;
@@ -586,7 +600,7 @@ async fn do_start_passthrough_log_mode() {
     let (event_tx, _event_rx) = mpsc::channel(64);
     let log_store = LogStore::new(100, 64);
     let metrics = MetricsStore::new();
-    let mut actor = Actor::new("svc".into(), config, event_tx, log_store, metrics);
+    let mut actor = Actor::new("svc".into(), config, test_ctx(event_tx, log_store, metrics));
 
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     let mut stop_deadline = None;
@@ -607,7 +621,7 @@ async fn do_start_disabled_log_mode() {
     let (event_tx, _event_rx) = mpsc::channel(64);
     let log_store = LogStore::new(100, 64);
     let metrics = MetricsStore::new();
-    let mut actor = Actor::new("svc".into(), config, event_tx, log_store, metrics);
+    let mut actor = Actor::new("svc".into(), config, test_ctx(event_tx, log_store, metrics));
 
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     let mut stop_deadline = None;
@@ -709,7 +723,7 @@ async fn send_stop_signal_with_child() {
     let (event_tx, _event_rx) = mpsc::channel(64);
     let log_store = crate::logs::LogStore::new(100, 64);
     let metrics = crate::metrics::MetricsStore::new();
-    let mut actor = Actor::new("svc".into(), config, event_tx, log_store, metrics);
+    let mut actor = Actor::new("svc".into(), config, test_ctx(event_tx, log_store, metrics));
 
     // Spawn a real child process
     let child = tokio::process::Command::new("sleep")
@@ -825,4 +839,248 @@ async fn success_exit_codes_replace_zero() {
     let (code, success) = exit_with(&mut actor, &mut rx, 0).await;
     assert_eq!(success, Some(false), "0 is not in the list any more");
     assert_eq!(code, Some(10), "failure-shutdown never exits 0");
+}
+
+// -----------------------------------------------------------------------
+// Readiness (ready: process | notify | check)
+// -----------------------------------------------------------------------
+
+fn spawn_run(
+    config: ServiceConfig,
+    notify_dir: std::path::PathBuf,
+) -> (mpsc::Sender<Cmd>, mpsc::Receiver<Event>) {
+    let (event_tx, event_rx) = mpsc::channel(64);
+    let (tx, rx) = mpsc::channel(32);
+    tokio::spawn(run(
+        "svc".into(),
+        config,
+        rx,
+        crate::service::Context {
+            notify_dir,
+            ..test_ctx(event_tx, LogStore::new(100, 64), MetricsStore::new())
+        },
+    ));
+    (tx, event_rx)
+}
+
+async fn start(tx: &mpsc::Sender<Cmd>) {
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    tx.send(Cmd::Start(reply_tx)).await.unwrap();
+    reply_rx.await.unwrap().unwrap();
+}
+
+/// Wait for an event matching `f`, returning all events seen before it.
+async fn wait_event(
+    rx: &mut mpsc::Receiver<Event>,
+    f: impl Fn(&EventKind) -> bool,
+) -> Vec<EventKind> {
+    let mut seen = Vec::new();
+    loop {
+        let ev = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+            .await
+            .expect("timed out waiting for event")
+            .expect("actor gone");
+        if f(&ev.kind) {
+            return seen;
+        }
+        seen.push(ev.kind);
+    }
+}
+
+fn is_state(s: ServiceState) -> impl Fn(&EventKind) -> bool {
+    move |k| matches!(k, EventKind::StateChanged { new_state } if *new_state == s)
+}
+
+#[tokio::test]
+async fn ready_process_goes_active_immediately() {
+    let mut actor = make_actor_with_config(ServiceConfig {
+        command: Some("sleep 30".into()),
+        ..Default::default()
+    })
+    .0;
+    let (reply_tx, _r) = tokio::sync::oneshot::channel();
+    actor.handle_start(reply_tx, &mut None).await;
+    assert_eq!(actor.state, ServiceState::Active);
+    assert!(actor.ready_deadline.is_none());
+    actor.cleanup().await;
+}
+
+#[tokio::test]
+async fn ready_check_waits_for_a_pass_after_spawn() {
+    let before_spawn = std::time::Instant::now();
+    let (mut actor, _rx) = make_actor_with_config(ServiceConfig {
+        command: Some("sleep 30".into()),
+        ready: Some(ReadyMode::Check),
+        ready_check: Some("c".into()),
+        ..Default::default()
+    });
+    let (reply_tx, _r) = tokio::sync::oneshot::channel();
+    actor.handle_start(reply_tx, &mut None).await;
+    assert_eq!(actor.state, ServiceState::Starting);
+    assert!(actor.ready_deadline.is_some(), "default timeout applies");
+
+    // A probe that started before the spawn does not count.
+    actor.handle_check_passed("c", before_spawn).await;
+    assert_eq!(actor.state, ServiceState::Starting);
+    // Another check does not count either.
+    actor
+        .handle_check_passed("other", std::time::Instant::now())
+        .await;
+    assert_eq!(actor.state, ServiceState::Starting);
+
+    actor
+        .handle_check_passed("c", std::time::Instant::now())
+        .await;
+    assert_eq!(actor.state, ServiceState::Active);
+    assert!(actor.ready_deadline.is_none());
+    actor.cleanup().await;
+}
+
+#[tokio::test]
+async fn ready_notify_rejects_foreign_senders_and_accepts_the_service() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut actor, _rx) = make_actor_with_config(ServiceConfig {
+        command: Some("sleep 30".into()),
+        ready: Some(ReadyMode::Notify),
+        ready_timeout: Some("0s".into()),
+        ..Default::default()
+    });
+    actor.notify_dir = dir.path().to_owned();
+    let (reply_tx, _r) = tokio::sync::oneshot::channel();
+    actor.handle_start(reply_tx, &mut None).await;
+    assert_eq!(actor.state, ServiceState::Starting);
+    assert!(
+        actor.ready_deadline.is_none(),
+        "ready-timeout 0s = no timeout"
+    );
+    let sock = actor.notify.as_ref().unwrap().path().to_owned();
+    assert!(sock.exists());
+
+    let child = actor.child.as_ref().unwrap().id().unwrap() as i32;
+    let me = std::process::id() as i32;
+    let uid = actor.service_uid;
+    let msg = |pid, pgid, generation| crate::service::notify::NotifyMsg {
+        generation,
+        pid,
+        uid,
+        pgid: Some(pgid),
+        fields: vec![("READY".into(), "1".into()), ("STATUS".into(), "ok".into())],
+    };
+    // Same uid, but another process group (the test process).
+    let foreign = msg(me, nix::unistd::getpgrp().as_raw(), actor.notify_generation);
+    actor.handle_notify(foreign).await;
+    assert_eq!(actor.state, ServiceState::Starting);
+    // Stale generation.
+    let stale = msg(child, child, actor.notify_generation - 1);
+    actor.handle_notify(stale).await;
+    assert_eq!(actor.state, ServiceState::Starting);
+
+    let ok = msg(child, child, actor.notify_generation);
+    actor.handle_notify(ok).await;
+    assert_eq!(actor.state, ServiceState::Active);
+    assert_eq!(actor.status_message.as_deref(), Some("ok"));
+
+    actor.cleanup().await;
+    assert!(!sock.exists(), "notify socket removed with the process");
+}
+
+#[tokio::test]
+async fn ready_notify_end_to_end_with_real_sender() {
+    if std::process::Command::new("python3")
+        .arg("-c")
+        .arg("1")
+        .status()
+        .map(|s| !s.success())
+        .unwrap_or(true)
+    {
+        eprintln!("skipped: python3 not available");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("notify.py");
+    std::fs::write(
+        &script,
+        "import os, socket, time\n\
+         s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)\n\
+         s.sendto(b'STATUS=warm\\nREADY=1\\n', os.environ['NOTIFY_SOCKET'])\n\
+         time.sleep(30)\n",
+    )
+    .unwrap();
+    let (tx, mut rx) = spawn_run(
+        ServiceConfig {
+            command: Some(format!("python3 {}", script.display())),
+            ready: Some(ReadyMode::Notify),
+            ..Default::default()
+        },
+        dir.path().to_owned(),
+    );
+    start(&tx).await;
+    let before = wait_event(&mut rx, is_state(ServiceState::Active)).await;
+    assert!(
+        before.iter().any(|k| matches!(
+            k,
+            EventKind::StatusMessage { message: Some(m) } if m == "warm"
+        )),
+        "{before:?}"
+    );
+    tx.send(Cmd::Shutdown).await.unwrap();
+}
+
+#[tokio::test]
+async fn ready_timeout_stops_service_and_counts_as_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut exit_code_map = indexmap::IndexMap::new();
+    exit_code_map.insert(143, 0); // must not turn the timeout into a success
+    let (tx, mut rx) = spawn_run(
+        ServiceConfig {
+            command: Some("sleep 30".into()),
+            ready: Some(ReadyMode::Notify),
+            ready_timeout: Some("200ms".into()),
+            on_failure: Some(vigil_types::plan::OnExit::Shutdown),
+            on_success: Some(vigil_types::plan::OnExit::SuccessShutdown),
+            exit_code_map,
+            ..Default::default()
+        },
+        dir.path().to_owned(),
+    );
+    start(&tx).await;
+    let seen = wait_event(&mut rx, |k| matches!(k, EventKind::DaemonShutdown { .. })).await;
+    assert!(
+        seen.iter()
+            .any(|k| matches!(k, EventKind::ProcessExited { success: false, .. })),
+        "{seen:?}"
+    );
+    assert!(
+        !seen.iter().any(|k| matches!(
+            k,
+            EventKind::StateChanged {
+                new_state: ServiceState::Active
+            }
+        )),
+        "never became active: {seen:?}"
+    );
+    tx.send(Cmd::Shutdown).await.unwrap();
+}
+
+#[tokio::test]
+async fn notify_socket_is_not_inherited_without_ready_notify() {
+    // vigild itself may run under systemd with NOTIFY_SOCKET set.
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("env");
+    let mut actor = make_actor_with_config(ServiceConfig {
+        command: Some(format!(
+            "/bin/sh -c 'echo \"${{NOTIFY_SOCKET-unset}}\" > {}'",
+            out.display()
+        )),
+        pass_env: Some(true),
+        environment: [("NOTIFY_SOCKET".to_string(), "/x".to_string())]
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    })
+    .0;
+    let (reply_tx, _r) = tokio::sync::oneshot::channel();
+    actor.handle_start(reply_tx, &mut None).await;
+    let _ = actor.child.as_mut().unwrap().wait().await;
+    assert_eq!(std::fs::read_to_string(&out).unwrap().trim(), "unset");
 }

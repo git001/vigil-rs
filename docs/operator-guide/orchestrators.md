@@ -155,7 +155,7 @@ Configure which pods to collect via env vars in the Deployment manifest:
 
 **OpenShift:** the image uses `WORKDIR /tmp` and `VIGIL_PATH_PREFIX=/tmp/vigil`
 because OpenShift mounts `/run` as a root-owned tmpfs at runtime. vigild
-creates `/tmp/vigil` (mode 0700) at startup; the `vigil` client reads the same
+creates `/tmp/vigil` (mode 0711) at startup; the `vigil` client reads the same
 variable and finds the socket. With `readOnlyRootFilesystem: true`, mount an
 `emptyDir` at `/tmp` (or point the prefix at a subdirectory of another
 `emptyDir`). An

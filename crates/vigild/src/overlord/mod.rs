@@ -112,6 +112,8 @@ pub(super) struct Overlord {
     pub(super) pending_autostart: Vec<String>,
     /// How vigild's exit code is chosen on a shutdown policy (`--exit-code`).
     pub(super) exit_code_mode: service::ExitCodeMode,
+    /// `<path-prefix>/notify` for `ready: notify` sockets.
+    pub(super) notify_dir: PathBuf,
 }
 
 // ---------------------------------------------------------------------------
@@ -125,6 +127,7 @@ pub fn spawn(
     https_address: Option<String>,
     log_buffer: usize,
     exit_code_mode: service::ExitCodeMode,
+    notify_dir: PathBuf,
 ) -> anyhow::Result<(
     Handle,
     Arc<LogStore>,
@@ -176,6 +179,7 @@ pub fn spawn(
         layers_dir,
         pending_autostart: Vec::new(),
         exit_code_mode,
+        notify_dir,
     };
 
     let join = tokio::spawn(run(ov));

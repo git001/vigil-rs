@@ -27,20 +27,20 @@ pub fn socket_path(prefix: &Path) -> PathBuf {
     prefix.join(SOCKET_NAME)
 }
 
-/// Mode for a prefix directory vigild creates itself: owner-only, plus the
-/// search bit (never read/write) for group/other when the control socket is
-/// opened up to them via `--socket-mode`. Without it, a widened socket mode
-/// would be useless because nobody but the owner could traverse the
-/// directory.
-pub fn dir_mode_for(socket_mode: u32) -> u32 {
-    let mut mode = 0o700;
-    if socket_mode & 0o070 != 0 {
-        mode |= 0o010;
-    }
-    if socket_mode & 0o007 != 0 {
-        mode |= 0o001;
-    }
-    mode
+/// Subdirectory for the per-start sd_notify sockets (`ready: notify`).
+pub const NOTIFY_DIR: &str = "notify";
+
+/// Mode for directories vigild creates itself (the prefix's last component
+/// and `notify/`): owner rwx plus the search bit for everyone, never read or
+/// write. Services running as another `user:` must be able to reach their
+/// notify socket; listing stays impossible and every socket inside has its
+/// own restrictive mode (control socket: `--socket-mode` plus the peer-UID
+/// check; notify sockets: 0600, owned by the service user).
+pub const CREATED_DIR_MODE: u32 = 0o711;
+
+/// Directory holding the sd_notify sockets.
+pub fn notify_dir(prefix: &Path) -> PathBuf {
+    prefix.join(NOTIFY_DIR)
 }
 
 /// Make sure `prefix` is a safe directory owned by us, creating its last
@@ -53,11 +53,13 @@ pub fn dir_mode_for(socket_mode: u32) -> u32 {
 ///   commonly use `chmod g=u` for GID 0,
 /// - writable and searchable by vigild.
 ///
-/// Only the last component is created, with [`dir_mode_for`]; a missing
+/// Only the last component is created, with [`CREATED_DIR_MODE`]; a missing
 /// parent is an error. This lets `--path-prefix /data/vigil` work on top of
 /// an `emptyDir` mounted at `/data` (root-owned, mode 0777, which itself
 /// would be rejected).
-pub fn prepare(prefix: &Path, socket_mode: u32) -> anyhow::Result<()> {
+///
+/// The `notify/` subdirectory is created (and checked) the same way.
+pub fn prepare(prefix: &Path) -> anyhow::Result<()> {
     anyhow::ensure!(
         prefix.is_absolute(),
         "--path-prefix {prefix:?} must be an absolute path"
@@ -65,14 +67,21 @@ pub fn prepare(prefix: &Path, socket_mode: u32) -> anyhow::Result<()> {
 
     match std::fs::symlink_metadata(prefix) {
         Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => create_last(prefix, socket_mode)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => create_last(prefix)?,
         Err(e) => return Err(e).with_context(|| format!("inspecting --path-prefix {prefix:?}")),
     }
+    validate(prefix)?;
 
-    validate(prefix)
+    let notify = notify_dir(prefix);
+    match std::fs::symlink_metadata(&notify) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => create_last(&notify)?,
+        Err(e) => return Err(e).with_context(|| format!("inspecting {notify:?}")),
+    }
+    validate(&notify)
 }
 
-fn create_last(prefix: &Path, socket_mode: u32) -> anyhow::Result<()> {
+fn create_last(prefix: &Path) -> anyhow::Result<()> {
     let parent = prefix
         .parent()
         .with_context(|| format!("--path-prefix {prefix:?} has no parent directory"))?;
@@ -87,7 +96,7 @@ fn create_last(prefix: &Path, socket_mode: u32) -> anyhow::Result<()> {
         "--path-prefix {prefix:?}: parent {parent:?} is not a directory"
     );
 
-    let mode = dir_mode_for(socket_mode);
+    let mode = CREATED_DIR_MODE;
     match std::fs::DirBuilder::new().mode(mode).create(prefix) {
         Ok(()) => {
             // DirBuilder honours the umask; set the exact mode explicitly.
@@ -157,35 +166,30 @@ mod tests {
     }
 
     #[test]
-    fn dir_mode_follows_socket_mode() {
-        assert_eq!(dir_mode_for(0o600), 0o700);
-        assert_eq!(dir_mode_for(0o660), 0o710);
-        assert_eq!(dir_mode_for(0o666), 0o711);
-        assert_eq!(dir_mode_for(0o606), 0o701);
-    }
-
-    #[test]
-    fn creates_missing_last_component_with_0700() {
+    fn creates_missing_last_component_and_notify_dir_with_0711() {
         let base = tempfile::tempdir().unwrap();
         let p = base.path().join("vigil");
-        prepare(&p, 0o600).unwrap();
+        prepare(&p).unwrap();
         assert!(p.is_dir());
-        assert_eq!(mode_of(&p), 0o700);
+        assert_eq!(mode_of(&p), 0o711);
+        assert_eq!(mode_of(&notify_dir(&p)), 0o711);
     }
 
     #[test]
-    fn created_dir_gets_search_bit_for_widened_socket() {
+    fn symlinked_notify_dir_is_rejected() {
         let base = tempfile::tempdir().unwrap();
         let p = base.path().join("vigil");
-        prepare(&p, 0o660).unwrap();
-        assert_eq!(mode_of(&p), 0o710);
+        std::fs::create_dir(&p).unwrap();
+        std::os::unix::fs::symlink(base.path(), notify_dir(&p)).unwrap();
+        let err = prepare(&p).unwrap_err().to_string();
+        assert!(err.contains("symlink"), "{err}");
     }
 
     #[test]
     fn missing_parent_is_an_error() {
         let base = tempfile::tempdir().unwrap();
         let p = base.path().join("a/b");
-        let err = prepare(&p, 0o600).unwrap_err().to_string();
+        let err = prepare(&p).unwrap_err().to_string();
         assert!(
             err.contains("only creates the last path component"),
             "{err}"
@@ -199,7 +203,7 @@ mod tests {
         let p = base.path().join("vigil");
         std::fs::create_dir(&p).unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o770)).unwrap();
-        prepare(&p, 0o600).unwrap();
+        prepare(&p).unwrap();
         assert_eq!(
             mode_of(&p),
             0o770,
@@ -213,7 +217,7 @@ mod tests {
         let p = base.path().join("vigil");
         std::fs::create_dir(&p).unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o777)).unwrap();
-        let err = prepare(&p, 0o600).unwrap_err().to_string();
+        let err = prepare(&p).unwrap_err().to_string();
         assert!(err.contains("writable by others"), "{err}");
         assert!(err.contains("mode 777"), "{err}");
     }
@@ -224,7 +228,7 @@ mod tests {
         let p = base.path().join("tmp");
         std::fs::create_dir(&p).unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o1777)).unwrap();
-        assert!(prepare(&p, 0o600).is_err());
+        assert!(prepare(&p).is_err());
     }
 
     #[test]
@@ -234,7 +238,7 @@ mod tests {
         std::fs::create_dir(&real).unwrap();
         let link = base.path().join("vigil");
         std::os::unix::fs::symlink(&real, &link).unwrap();
-        let err = prepare(&link, 0o600).unwrap_err().to_string();
+        let err = prepare(&link).unwrap_err().to_string();
         assert!(err.contains("symlink"), "{err}");
     }
 
@@ -243,7 +247,7 @@ mod tests {
         let base = tempfile::tempdir().unwrap();
         let p = base.path().join("vigil");
         std::fs::write(&p, b"x").unwrap();
-        assert!(prepare(&p, 0o600).is_err());
+        assert!(prepare(&p).is_err());
     }
 
     #[test]
@@ -266,12 +270,12 @@ mod tests {
             eprintln!("skipped: no foreign-owned directory found");
             return;
         };
-        let err = prepare(foreign, 0o600).unwrap_err().to_string();
+        let err = prepare(foreign).unwrap_err().to_string();
         assert!(err.contains("wrong owner"), "{foreign:?}: {err}");
     }
 
     #[test]
     fn relative_path_is_rejected() {
-        assert!(prepare(Path::new("run/vigil"), 0o600).is_err());
+        assert!(prepare(Path::new("run/vigil")).is_err());
     }
 }

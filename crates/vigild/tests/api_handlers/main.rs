@@ -68,6 +68,7 @@ impl TestApp {
             None,
             100,
             vigild::service::ExitCodeMode::default(),
+            std::env::temp_dir(),
         )
         .unwrap();
         let identity_store = IdentityStore::new();

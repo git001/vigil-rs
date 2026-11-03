@@ -136,13 +136,15 @@ migrate                  enabled    inactive   ignore             ignore        
 ```
 
 `Last-Exit` is the exit code of the service's last process, the signal name
-if it was killed by a signal, or `-` if it has not exited yet.
+if it was killed by a signal, or `-` if it has not exited yet. A `Message`
+column is added when a service reported a `STATUS=` text via sd_notify.
 
 **Status values:**
 
 | Status | Meaning |
 |---|---|
-| `active` | Process is running |
+| `starting` | Process is running but not ready yet (`ready: notify` / `ready: check`) |
+| `active` | Process is running and ready |
 | `inactive` | Not running (stopped or not yet started) |
 | `backoff` | Waiting before the next restart attempt |
 | `error` | Exceeded backoff limit or `requires` dependency failed |

@@ -51,7 +51,7 @@ struct Args {
     /// Directory for everything vigild creates at runtime (control socket,
     /// sd_notify sockets). Checked at startup: must be a directory owned by
     /// vigild's UID, not a symlink, not writable by others. A missing last
-    /// component is created (mode 0700). On OpenShift use e.g. /tmp/vigil.
+    /// component is created (mode 0711). On OpenShift use e.g. /tmp/vigil.
     #[arg(long, env = "VIGIL_PATH_PREFIX", default_value = path_prefix::DEFAULT_PATH_PREFIX)]
     path_prefix: PathBuf,
 
@@ -191,7 +191,7 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
     // Check/create the runtime directory and bind the control socket before
     // any service starts: both are fatal on error and must not leave already
     // spawned services behind.
-    path_prefix::prepare(&args.path_prefix, args.socket_mode)?;
+    path_prefix::prepare(&args.path_prefix)?;
     let socket = args
         .socket
         .clone()
@@ -209,6 +209,7 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
             "fixed" => vigild::service::ExitCodeMode::Fixed,
             _ => vigild::service::ExitCodeMode::Propagate,
         },
+        path_prefix::notify_dir(&args.path_prefix),
     )?;
     let identity_store = identity::IdentityStore::new();
 

@@ -154,7 +154,12 @@ a normal exit, `{"signal": N}` if it was killed by a signal. It is omitted
 until the service has exited once. The values are raw (before
 `exit-code-map`).
 
-**Service status values:** `active` | `inactive` | `backoff` | `error`
+`status-message` is the last `STATUS=` text the service sent via sd_notify
+(`ready: notify`); it is omitted if there is none and cleared on every start.
+
+**Service status values:** `starting` | `active` | `inactive` | `backoff` |
+`error`. `starting` (new in v4) means the process runs but is not ready yet
+(`ready: notify` or `ready: check`); clients written for v3 must accept it.
 
 **Example:**
 

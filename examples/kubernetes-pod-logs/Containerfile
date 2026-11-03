@@ -37,7 +37,7 @@ RUN chmod 644 /usr/share/filebeat/vigil-filebeat.yml \
 
 # Runtime files go to /tmp/vigil: /run is a root-owned tmpfs on OpenShift and
 # any chmod done in the image layer is lost at runtime. vigild creates the
-# directory itself (mode 0700); the vigil client reads the same variable.
+# directory itself (mode 0711); the vigil client reads the same variable.
 WORKDIR /tmp
 
 ENV VIGIL_LAYERS=/etc/vigil/layers \

@@ -65,6 +65,9 @@ pub struct DaemonActionRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ServiceStatus {
+    /// Process is running but not ready yet (see `ready` in the service
+    /// config). Dependent services wait until it is `active`.
+    Starting,
     Active,
     Inactive,
     Backoff,
@@ -108,6 +111,9 @@ pub struct ServiceInfo {
     /// `exit-code-map`). Absent until the service has exited once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_exit: Option<ExitInfo>,
+    /// Last `STATUS=` text the service sent via sd_notify (`ready: notify`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_message: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

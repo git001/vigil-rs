@@ -58,6 +58,7 @@ pub(super) fn make_overlord(
             startup: Startup::Enabled,
             pid: None,
             last_exit: None,
+            status_message: None,
         };
         svc_map.insert(name.to_string(), ServiceEntry { handle, snapshot });
     }
@@ -94,6 +95,7 @@ pub(super) fn make_overlord(
         layers_dir: std::path::PathBuf::new(),
         pending_autostart: Vec::new(),
         exit_code_mode: service::ExitCodeMode::default(),
+        notify_dir: std::env::temp_dir(),
     }
 }
 
@@ -385,6 +387,7 @@ async fn on_check_failure_ignore_sends_no_command() {
     let event = crate::check::CheckEvent {
         check: "my-check".to_string(),
         status: vigil_types::api::CheckStatus::Down,
+        passed_at: None,
     };
     ov.handle_check_event(event).await;
 
@@ -428,6 +431,7 @@ async fn on_check_failure_restart_sends_restart_command() {
     let event = crate::check::CheckEvent {
         check: "my-check".to_string(),
         status: vigil_types::api::CheckStatus::Down,
+        passed_at: None,
     };
     ov.handle_check_event(event).await;
 
@@ -452,6 +456,7 @@ async fn check_event_up_does_not_trigger_action() {
     let event = crate::check::CheckEvent {
         check: "my-check".to_string(),
         status: vigil_types::api::CheckStatus::Up,
+        passed_at: None,
     };
     ov.handle_check_event(event).await;
     assert!(
@@ -775,4 +780,98 @@ async fn sync_actors_restarts_check_on_success_statuses_change() {
         updated.contains("303"),
         "updated config should have 303, got: {updated}"
     );
+}
+
+// ------------------------------------------------------------------
+// Readiness: dependents wait for Active, check passes are forwarded
+// ------------------------------------------------------------------
+
+#[test]
+fn after_dep_starting_blocks_service() {
+    let ov = make_overlord(
+        &[("dep", &[], &[], &[]), ("svc", &["dep"], &["dep"], &[])],
+        &[("dep", ServiceState::Starting)],
+    );
+    assert!(
+        !ov.after_deps_running("svc"),
+        "a dependency that is not ready yet must block"
+    );
+}
+
+#[tokio::test]
+async fn state_changed_to_starting_does_not_unblock_pending() {
+    let mut ov = make_overlord(&[("dep", &[], &[], &[]), ("svc", &["dep"], &[], &[])], &[]);
+    ov.pending_autostart.push("svc".to_string());
+    if let Some(e) = ov.services.get_mut("dep") {
+        e.snapshot.state = ServiceState::Starting;
+    }
+    ov.handle_svc_event(service::Event {
+        service: "dep".to_string(),
+        kind: service::EventKind::StateChanged {
+            new_state: ServiceState::Starting,
+        },
+    })
+    .await;
+    assert_eq!(ov.pending_autostart, vec!["svc".to_string()]);
+}
+
+#[tokio::test]
+async fn status_message_event_updates_snapshot() {
+    let mut ov = make_overlord(&[("svc", &[], &[], &[])], &[]);
+    ov.handle_svc_event(service::Event {
+        service: "svc".to_string(),
+        kind: service::EventKind::StatusMessage {
+            message: Some("loading 3/5".into()),
+        },
+    })
+    .await;
+    assert_eq!(
+        ov.services["svc"].snapshot.status_message.as_deref(),
+        Some("loading 3/5")
+    );
+}
+
+#[tokio::test]
+async fn check_pass_is_forwarded_only_to_starting_ready_check_services() {
+    let mut ov = make_overlord(
+        &[
+            ("waiting", &[], &[], &[]),
+            ("active", &[], &[], &[]),
+            ("other", &[], &[], &[]),
+        ],
+        &[
+            ("waiting", ServiceState::Starting),
+            ("active", ServiceState::Active),
+            ("other", ServiceState::Starting),
+        ],
+    );
+    for name in ["waiting", "active"] {
+        let cfg = ov.plan.services.get_mut(name).unwrap();
+        cfg.ready = Some(vigil_types::plan::ReadyMode::Check);
+        cfg.ready_check = Some("c".into());
+    }
+    let mut rxs = std::collections::HashMap::new();
+    for name in ["waiting", "active", "other"] {
+        let (tx, rx) = mpsc::channel(4);
+        ov.services.get_mut(name).unwrap().handle = service::Handle { tx };
+        rxs.insert(name, rx);
+    }
+
+    let at = std::time::Instant::now();
+    ov.handle_check_event(crate::check::CheckEvent {
+        check: "c".into(),
+        status: vigil_types::api::CheckStatus::Up,
+        passed_at: Some(at),
+    })
+    .await;
+
+    match rxs.get_mut("waiting").unwrap().try_recv() {
+        Ok(service::Cmd::CheckPassed { check, started_at }) => {
+            assert_eq!(check, "c");
+            assert_eq!(started_at, at);
+        }
+        _ => panic!("waiting service did not get CheckPassed"),
+    }
+    assert!(rxs.get_mut("active").unwrap().try_recv().is_err());
+    assert!(rxs.get_mut("other").unwrap().try_recv().is_err());
 }

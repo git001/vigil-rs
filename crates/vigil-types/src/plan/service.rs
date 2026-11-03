@@ -43,6 +43,21 @@ pub enum LogsPushFormat {
     Ndjson,
 }
 
+/// When a started service counts as ready (state `active`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReadyMode {
+    /// Ready as soon as the process is spawned (v3 behaviour).
+    #[default]
+    Process,
+    /// Ready when the service sends `READY=1` to `$NOTIFY_SOCKET`
+    /// (sd_notify protocol).
+    Notify,
+    /// Ready when the check named in `ready-check` passes for the first time
+    /// after the process was spawned.
+    Check,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum OnExit {
@@ -112,6 +127,16 @@ pub struct ServiceConfig {
     /// Grace period before SIGKILL after stop_signal.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kill_delay: Option<String>,
+    /// When the service counts as ready. Default: `process`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ready: Option<ReadyMode>,
+    /// Check that signals readiness (required for `ready: check`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ready_check: Option<String>,
+    /// How long to wait for readiness before the start counts as failed and
+    /// the service is stopped. Default `30s`; `0s` waits forever.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ready_timeout: Option<String>,
     /// Exit codes that count as success (after `exit-code-map`).
     /// Default (empty): `[0]`. A signal counts as code `128 + signal`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -200,6 +225,9 @@ pub(super) fn merge_service(base: &mut ServiceConfig, overlay: &ServiceConfig) {
     opt!(working_dir);
     opt!(stop_signal);
     opt!(kill_delay);
+    opt!(ready);
+    opt!(ready_check);
+    opt!(ready_timeout);
     if !overlay.success_exit_codes.is_empty() {
         base.success_exit_codes = overlay.success_exit_codes.clone();
     }

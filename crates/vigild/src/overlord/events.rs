@@ -23,8 +23,8 @@ impl Overlord {
                     e.snapshot.state = *new_state;
                     e.snapshot.since = Utc::now();
                 }
-                // When a service starts running, unblock any services waiting on it.
-                if new_state.is_running() && !self.pending_autostart.is_empty() {
+                // When a service becomes ready, unblock any services waiting on it.
+                if *new_state == ServiceState::Active && !self.pending_autostart.is_empty() {
                     self.try_start_pending().await;
                 }
                 // Warn if a service enters Error and others are still waiting for it.
@@ -92,6 +92,12 @@ impl Overlord {
                 }
                 None
             }
+            service::EventKind::StatusMessage { message } => {
+                if let Some(e) = self.services.get_mut(&event.service) {
+                    e.snapshot.status_message = message.clone();
+                }
+                None
+            }
             service::EventKind::DaemonShutdown { exit_code } => {
                 info!(service = %event.service, exit_code, "daemon shutdown requested by service policy");
                 Some(*exit_code)
@@ -100,6 +106,9 @@ impl Overlord {
     }
 
     pub(super) async fn handle_check_event(&mut self, event: CheckEvent) {
+        if let Some(started_at) = event.passed_at {
+            self.forward_check_passed(&event.check, started_at).await;
+        }
         let fired = self
             .alert_sender
             .handle_check_event(&event.check, event.status);
@@ -109,6 +118,9 @@ impl Overlord {
 
         if event.status != CheckStatus::Down {
             return;
+        }
+        if event.passed_at.is_some() {
+            return; // a pass is never a Down transition
         }
 
         let actions: Vec<(String, OnExit)> = self
@@ -139,6 +151,31 @@ impl Overlord {
                     self.shutdown(code).await;
                 }
             }
+        }
+    }
+
+    /// Tell services that wait for `check` (`ready: check`) about a pass.
+    async fn forward_check_passed(&self, check: &str, started_at: std::time::Instant) {
+        for (name, cfg) in &self.plan.services {
+            if cfg.ready != Some(vigil_types::plan::ReadyMode::Check)
+                || cfg.ready_check.as_deref() != Some(check)
+            {
+                continue;
+            }
+            let Some(entry) = self.services.get(name) else {
+                continue;
+            };
+            if entry.snapshot.state != ServiceState::Starting {
+                continue;
+            }
+            let _ = entry
+                .handle
+                .tx
+                .send(SvcCmd::CheckPassed {
+                    check: check.to_string(),
+                    started_at,
+                })
+                .await;
         }
     }
 }

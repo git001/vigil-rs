@@ -8,13 +8,13 @@ use std::sync::Arc;
 use tokio::process::Command;
 use tracing::info;
 use vigil_types::api::LogStream;
-use vigil_types::plan::LogsForward;
+use vigil_types::plan::{LogsForward, ReadyMode};
 
 use crate::logs::spawn_reader;
 use crate::process_util::{
     EnvPolicy, apply_credentials, apply_env, parse_command, resolve_credentials,
 };
-use crate::state::ServiceState;
+use crate::service::notify::NotifySocket;
 
 use super::Actor;
 
@@ -55,11 +55,33 @@ impl Actor {
             &self.config.pass_env_glob,
             &self.config.pass_env_regex,
         )?;
-        let env = policy.build(
+        let mut env = policy.build(
             std::env::vars_os(),
             creds.as_ref(),
             &self.config.environment,
         );
+        // Never leak a NOTIFY_SOCKET vigild itself got (e.g. from systemd);
+        // `ready: notify` services get their own one.
+        env.retain(|(k, _)| k != "NOTIFY_SOCKET");
+        self.service_uid = creds
+            .as_ref()
+            .map_or_else(nix::unistd::Uid::effective, |c| c.uid)
+            .as_raw();
+        let notify = if self.ready_mode() == ReadyMode::Notify {
+            self.notify = None; // removes the previous start's socket
+            self.notify_generation += 1;
+            let sock = NotifySocket::bind(
+                &self.notify_dir,
+                &self.name,
+                creds.as_ref().map(|c| (c.uid, c.gid)),
+                self.notify_generation,
+                self.notify_tx.clone(),
+            )?;
+            env.push(("NOTIFY_SOCKET".into(), sock.path().as_os_str().to_owned()));
+            Some(sock)
+        } else {
+            None
+        };
         apply_env(&mut cmd, env);
         apply_credentials(&mut cmd, creds);
 
@@ -106,8 +128,9 @@ impl Actor {
 
         info!(service = %self.name, pid = ?child.id(), "process started");
         self.child = Some(child);
+        self.notify = notify;
         self.metrics.record_service_start(&self.name);
-        self.transition(ServiceState::Active).await;
+        self.after_spawn().await;
         Ok(())
     }
 }

@@ -8,8 +8,8 @@ use vigil_types::api::ServiceStatus;
 pub enum ServiceState {
     /// Not running, no pending restart.
     Inactive,
-    /// Process has been spawned; waiting for it to become stable.
-    /// Transitions to Active once the process is confirmed running; health checks monitor thereafter.
+    /// Process has been spawned but is not ready yet (`ready: notify` or
+    /// `ready: check`). Transitions to Active once readiness is reached.
     Starting,
     /// Process is running normally.
     Active,
@@ -26,7 +26,8 @@ impl ServiceState {
     pub fn to_api_status(self) -> ServiceStatus {
         match self {
             ServiceState::Inactive | ServiceState::Stopping => ServiceStatus::Inactive,
-            ServiceState::Starting | ServiceState::Active => ServiceStatus::Active,
+            ServiceState::Starting => ServiceStatus::Starting,
+            ServiceState::Active => ServiceStatus::Active,
             ServiceState::Backoff => ServiceStatus::Backoff,
             ServiceState::Error => ServiceStatus::Error,
         }
@@ -50,7 +51,7 @@ mod tests {
         );
         assert_eq!(
             ServiceState::Starting.to_api_status(),
-            ServiceStatus::Active
+            ServiceStatus::Starting
         );
         assert_eq!(ServiceState::Active.to_api_status(), ServiceStatus::Active);
         assert_eq!(

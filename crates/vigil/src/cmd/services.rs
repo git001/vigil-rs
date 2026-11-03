@@ -42,7 +42,9 @@ pub async fn run(client: &VigilClient, sub: ServicesCmd) -> anyhow::Result<()> {
                 println!("No services.");
                 return Ok(());
             }
-            println!(
+            // The sd_notify STATUS= column only appears when a service set one.
+            let with_msg = services.iter().any(|s| s.status_message.is_some());
+            let header = format!(
                 "{:<24} {:<10} {:<10} {:<18} {:<18} {:<12} {:<10}",
                 "Service",
                 "Startup",
@@ -52,9 +54,14 @@ pub async fn run(client: &VigilClient, sub: ServicesCmd) -> anyhow::Result<()> {
                 "Stop-Signal",
                 "Last-Exit"
             );
+            if with_msg {
+                println!("{header} Message");
+            } else {
+                println!("{header}");
+            }
             println!("{}", "-".repeat(108));
             for svc in services {
-                println!(
+                let row = format!(
                     "{:<24} {:<10} {:<10} {:<18} {:<18} {:<12} {:<10}",
                     svc.name,
                     format!("{:?}", svc.startup).to_lowercase(),
@@ -64,6 +71,11 @@ pub async fn run(client: &VigilClient, sub: ServicesCmd) -> anyhow::Result<()> {
                     svc.stop_signal,
                     fmt_last_exit(svc.last_exit),
                 );
+                match (&svc.status_message, with_msg) {
+                    (Some(m), _) => println!("{row} {m}"),
+                    (None, true) => println!("{row} -"),
+                    (None, false) => println!("{row}"),
+                }
             }
         }
 

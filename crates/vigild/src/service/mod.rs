@@ -13,6 +13,7 @@ use crate::logs::LogStore;
 use crate::metrics::MetricsStore;
 
 mod actor;
+pub mod notify;
 
 // ---------------------------------------------------------------------------
 // Public interface
@@ -27,6 +28,12 @@ pub enum Cmd {
     Status(oneshot::Sender<Snapshot>),
     /// Forward a signal to the service's process group (if running).
     ForwardSignal(nix::sys::signal::Signal),
+    /// A probe of `check` that started at `started_at` succeeded
+    /// (for `ready: check`).
+    CheckPassed {
+        check: String,
+        started_at: std::time::Instant,
+    },
     /// Graceful shutdown of the actor (kills child if running).
     Shutdown,
 }
@@ -42,6 +49,8 @@ pub struct Snapshot {
     pub pid: Option<u32>,
     /// How the last process ended (raw, before `exit-code-map`).
     pub last_exit: Option<ExitInfo>,
+    /// Last `STATUS=` text received via sd_notify.
+    pub status_message: Option<String>,
 }
 
 /// Event emitted by the actor to the Overlord.
@@ -64,6 +73,8 @@ pub enum EventKind {
     },
     /// A service policy requires the daemon to exit with the given code.
     DaemonShutdown { exit_code: i32 },
+    /// The service sent a `STATUS=` text (or a new start cleared it).
+    StatusMessage { message: Option<String> },
 }
 
 /// How vigild's own exit code is chosen when a policy shuts it down
@@ -104,30 +115,29 @@ pub fn shutdown_code(
     }
 }
 
+/// What every service actor gets from the daemon. The same for all
+/// services; cloned into each actor.
+#[derive(Clone)]
+pub struct Context {
+    /// Events to the Overlord.
+    pub event_tx: mpsc::Sender<Event>,
+    pub log_store: Arc<LogStore>,
+    pub metrics: Arc<MetricsStore>,
+    /// How vigild's exit code is chosen on a shutdown policy.
+    pub exit_code_mode: ExitCodeMode,
+    /// `<path-prefix>/notify`, where `ready: notify` sockets are created.
+    pub notify_dir: std::path::PathBuf,
+}
+
 /// Handle returned to the caller; wraps the command sender.
 pub struct Handle {
     pub tx: mpsc::Sender<Cmd>,
 }
 
 /// Spawn a service actor task and return its handle.
-pub fn spawn(
-    name: String,
-    config: ServiceConfig,
-    event_tx: mpsc::Sender<Event>,
-    log_store: Arc<LogStore>,
-    metrics: Arc<MetricsStore>,
-    exit_code_mode: ExitCodeMode,
-) -> Handle {
+pub fn spawn(name: String, config: ServiceConfig, ctx: Context) -> Handle {
     let (tx, rx) = mpsc::channel(32);
-    tokio::spawn(actor::run(
-        name,
-        config,
-        rx,
-        event_tx,
-        log_store,
-        metrics,
-        exit_code_mode,
-    ));
+    tokio::spawn(actor::run(name, config, rx, ctx));
     Handle { tx }
 }
 
@@ -139,6 +149,7 @@ pub(super) const DEFAULT_KILL_DELAY: Duration = Duration::from_secs(5);
 pub(super) const DEFAULT_BACKOFF_DELAY: Duration = Duration::from_millis(500);
 pub(super) const DEFAULT_BACKOFF_FACTOR: f64 = 2.0;
 pub(super) const DEFAULT_BACKOFF_LIMIT: Duration = Duration::from_secs(30);
+pub(super) const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[cfg(test)]
 mod shutdown_code_tests {

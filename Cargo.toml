@@ -39,7 +39,7 @@ rustls-pemfile     = { version = "2" }
 tokio-rustls       = { version = "0.26" }
 rcgen              = { version = "0.13" }
 # Unix / signals / process
-nix                = { version = "0.29", features = ["process", "signal", "user", "fs"] }
+nix                = { version = "0.29", features = ["process", "signal", "user", "fs", "socket", "uio"] }
 # Concurrency utilities
 crossbeam-channel  = { version = "0.5" }
 crossbeam-queue    = { version = "0.3" }

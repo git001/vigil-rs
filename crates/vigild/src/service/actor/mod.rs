@@ -16,10 +16,12 @@ use crate::logs::LogStore;
 use crate::metrics::MetricsStore;
 use crate::state::ServiceState;
 
-use super::{Cmd, DEFAULT_BACKOFF_DELAY, Event, EventKind, ExitCodeMode, Snapshot};
+use super::notify::{NotifyMsg, NotifySocket};
+use super::{Cmd, Context, DEFAULT_BACKOFF_DELAY, Event, EventKind, ExitCodeMode, Snapshot};
 
 mod backoff;
 mod handlers;
+mod ready;
 mod signals;
 mod spawn;
 
@@ -48,16 +50,37 @@ pub(super) struct Actor {
     exit_code_mode: ExitCodeMode,
     /// How the last process ended.
     last_exit: Option<vigil_types::api::ExitInfo>,
+    /// `<path-prefix>/notify`, where `ready: notify` sockets are created.
+    notify_dir: std::path::PathBuf,
+    /// Notify socket of the current start (`ready: notify` only).
+    notify: Option<NotifySocket>,
+    /// Incremented for every notify socket; messages from older sockets
+    /// are ignored.
+    notify_generation: u64,
+    notify_tx: mpsc::Sender<NotifyMsg>,
+    /// Taken by `run`; `None` afterwards.
+    notify_rx: Option<mpsc::Receiver<NotifyMsg>>,
+    /// UID the current process runs as (for notify sender checks).
+    service_uid: u32,
+    /// Deadline for reaching readiness while `Starting`.
+    ready_deadline: Option<tokio::time::Instant>,
+    /// Readiness timed out; the process is being stopped and its exit
+    /// counts as a failure.
+    ready_failed: bool,
+    /// Last `STATUS=` text from sd_notify.
+    status_message: Option<String>,
 }
 
 impl Actor {
-    pub(super) fn new(
-        name: String,
-        config: ServiceConfig,
-        event_tx: mpsc::Sender<Event>,
-        log_store: Arc<LogStore>,
-        metrics: Arc<MetricsStore>,
-    ) -> Self {
+    pub(super) fn new(name: String, config: ServiceConfig, ctx: Context) -> Self {
+        let Context {
+            event_tx,
+            log_store,
+            metrics,
+            exit_code_mode,
+            notify_dir,
+        } = ctx;
+        let (notify_tx, notify_rx) = mpsc::channel(16);
         Actor {
             name,
             config,
@@ -70,8 +93,17 @@ impl Actor {
             event_tx,
             log_store,
             metrics,
-            exit_code_mode: ExitCodeMode::default(),
+            exit_code_mode,
             last_exit: None,
+            notify_dir,
+            notify: None,
+            notify_generation: 0,
+            notify_tx,
+            notify_rx: Some(notify_rx),
+            service_uid: nix::unistd::Uid::effective().as_raw(),
+            ready_deadline: None,
+            ready_failed: false,
+            status_message: None,
         }
     }
 
@@ -83,6 +115,7 @@ impl Actor {
             startup: self.config.startup,
             pid: self.child.as_ref().and_then(|c| c.id()),
             last_exit: self.last_exit,
+            status_message: self.status_message.clone(),
         }
     }
 
@@ -110,19 +143,11 @@ pub(super) async fn run(
     name: String,
     config: ServiceConfig,
     mut rx: mpsc::Receiver<Cmd>,
-    event_tx: mpsc::Sender<Event>,
-    log_store: Arc<LogStore>,
-    metrics: Arc<MetricsStore>,
-    exit_code_mode: ExitCodeMode,
+    ctx: Context,
 ) {
-    let mut actor = Actor::new(
-        name.clone(),
-        config,
-        event_tx,
-        Arc::clone(&log_store),
-        metrics,
-    );
-    actor.exit_code_mode = exit_code_mode;
+    let log_store = Arc::clone(&ctx.log_store);
+    let mut actor = Actor::new(name.clone(), config, ctx);
+    let mut notify_rx = actor.notify_rx.take().expect("fresh actor");
     let mut backoff_sleep: Option<Pin<Box<Sleep>>> = None;
     let mut stop_deadline: Option<Pin<Box<Sleep>>> = None;
     let mut pending_restart = false;
@@ -148,6 +173,7 @@ pub(super) async fn run(
     }
 
     loop {
+        let ready_deadline = actor.ready_deadline;
         tokio::select! {
             biased;
 
@@ -169,7 +195,14 @@ pub(super) async fn run(
                     Some(Cmd::ForwardSignal(sig)) => {
                         actor.send_signal(sig);
                     }
+                    Some(Cmd::CheckPassed { check, started_at }) => {
+                        actor.handle_check_passed(&check, started_at).await;
+                    }
                 }
+            }
+
+            Some(msg) = notify_rx.recv() => {
+                actor.handle_notify(msg).await;
             }
 
             status = async {
@@ -199,6 +232,15 @@ pub(super) async fn run(
             }, if backoff_sleep.is_some() => {
                 actor.handle_backoff_expired(&mut stop_deadline).await;
                 backoff_sleep = None;
+            }
+
+            _ = async {
+                match ready_deadline {
+                    Some(d) => tokio::time::sleep_until(d).await,
+                    None => std::future::pending().await,
+                }
+            }, if ready_deadline.is_some() => {
+                actor.handle_ready_timeout(&mut stop_deadline).await;
             }
         }
     }

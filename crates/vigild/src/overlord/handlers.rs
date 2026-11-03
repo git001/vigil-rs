@@ -144,6 +144,7 @@ impl Overlord {
                     on_success,
                     on_failure,
                     last_exit: e.snapshot.last_exit,
+                    status_message: e.snapshot.status_message.clone(),
                 }
             })
             .collect()

@@ -27,6 +27,9 @@ pub enum Cmd {
 pub struct CheckEvent {
     pub check: String,
     pub status: CheckStatus,
+    /// Set for every successful probe: when that probe started. Used for
+    /// `ready: check`; status-only events (first run, Down) carry `None`.
+    pub passed_at: Option<std::time::Instant>,
 }
 
 pub struct Handle {

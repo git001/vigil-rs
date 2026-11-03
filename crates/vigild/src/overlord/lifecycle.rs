@@ -26,10 +26,13 @@ impl Overlord {
             let handle = service::spawn(
                 name.clone(),
                 config.clone(),
-                self.event_tx.clone(),
-                Arc::clone(&self.log_store),
-                Arc::clone(&self.metrics),
-                self.exit_code_mode,
+                service::Context {
+                    event_tx: self.event_tx.clone(),
+                    log_store: Arc::clone(&self.log_store),
+                    metrics: Arc::clone(&self.metrics),
+                    exit_code_mode: self.exit_code_mode,
+                    notify_dir: self.notify_dir.clone(),
+                },
             );
             let snap = service::Snapshot {
                 name: name.clone(),
@@ -38,6 +41,7 @@ impl Overlord {
                 startup: config.startup,
                 pid: None,
                 last_exit: None,
+                status_message: None,
             };
             self.services.insert(
                 name.clone(),
@@ -106,7 +110,7 @@ impl Overlord {
                     error!(service = %name, error = %e, "autostart failed");
                 }
             } else {
-                info!(service = %name, "deferring autostart: waiting for 'after' dependencies");
+                info!(service = %name, "deferring autostart: waiting for dependencies to become ready");
                 if !self.pending_autostart.contains(&name) {
                     self.pending_autostart.push(name);
                 }
@@ -114,7 +118,8 @@ impl Overlord {
         }
     }
 
-    /// Returns `true` if all ordering dependencies of `name` are running.
+    /// Returns `true` if all ordering dependencies of `name` are ready
+    /// (`Active`; a service still `Starting` has not reached readiness).
     ///
     /// Three sources contribute:
     /// - `after: [X]`    — X must be running before name starts
@@ -133,7 +138,7 @@ impl Overlord {
             .all(|dep| {
                 self.services
                     .get(dep)
-                    .map(|e| e.snapshot.state.is_running())
+                    .map(|e| e.snapshot.state == ServiceState::Active)
                     .unwrap_or(false)
             });
 
@@ -146,7 +151,7 @@ impl Overlord {
             .all(|(dep, _)| {
                 self.services
                     .get(dep)
-                    .map(|e| e.snapshot.state.is_running())
+                    .map(|e| e.snapshot.state == ServiceState::Active)
                     .unwrap_or(false)
             });
 
@@ -164,7 +169,7 @@ impl Overlord {
 
         for name in ready {
             self.pending_autostart.retain(|n| n != &name);
-            info!(service = %name, "starting deferred service: 'after' dependencies are now running");
+            info!(service = %name, "starting deferred service: dependencies are ready");
             if let Err(e) = self.svc_cmd(&name, SvcCmd::Start).await {
                 error!(service = %name, error = %e, "deferred autostart failed");
             }

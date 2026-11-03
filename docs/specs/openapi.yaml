@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: vigil API
-  version: v1
+  version: v4
   description: |
     HTTP API for the vigild service supervisor daemon.
 
@@ -472,9 +472,11 @@ components:
 
     ServiceStatus:
       type: string
-      enum: [active, inactive, backoff, error]
+      enum: [starting, active, inactive, backoff, error]
       description: |
-        - `active` — process is running
+        - `starting` — process is running but not ready yet (`ready: notify`
+          or `ready: check`); dependent services wait. New in v4.
+        - `active` — process is running and ready
         - `inactive` — process is not running
         - `backoff` — waiting before the next restart attempt
         - `error` — failed to start or exceeded backoff limit
@@ -496,7 +498,42 @@ components:
           format: date-time
           description: When the service entered its current state.
           example: "2026-03-18T10:00:01Z"
-      required: [name, startup, current]
+        stop-signal:
+          type: string
+          description: Effective stop signal.
+          example: SIGTERM
+        on-success:
+          type: string
+          description: Effective on-success policy.
+          example: restart
+        on-failure:
+          type: string
+          description: Effective on-failure policy.
+          example: restart
+        last-exit:
+          $ref: "#/components/schemas/ExitInfo"
+        status-message:
+          type: string
+          description: |
+            Last `STATUS=` text the service sent via sd_notify
+            (`ready: notify`). Cleared on every start. New in v4.
+          example: "loading cache 3/5"
+      required: [name, startup, current, stop-signal, on-success, on-failure]
+
+    ExitInfo:
+      type: object
+      description: |
+        How the last process of the service ended, before `exit-code-map`.
+        Absent until the service has exited once. New in v4.
+      properties:
+        code:
+          type: integer
+          description: Exit code, if the process exited normally.
+          example: 3
+        signal:
+          type: integer
+          description: Signal number, if the process was killed by a signal.
+          example: 15
 
     ServicesResponse:
       type: object

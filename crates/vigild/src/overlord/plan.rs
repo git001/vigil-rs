@@ -52,6 +52,7 @@ fn validate(plan: &Plan) -> anyhow::Result<()> {
 
     for (name, svc) in &plan.services {
         EnvPolicy::for_service(svc).with_context(|| format!("service {name:?}"))?;
+        validate_ready(plan, svc).with_context(|| format!("service {name:?}"))?;
     }
     for (name, check) in &plan.checks {
         if let Some(exec) = &check.exec {
@@ -61,6 +62,31 @@ fn validate(plan: &Plan) -> anyhow::Result<()> {
                 .and_then(|s| plan.services.get(s));
             EnvPolicy::for_exec_check(exec, ctx).with_context(|| format!("check {name:?}"))?;
         }
+    }
+    Ok(())
+}
+
+fn validate_ready(plan: &Plan, svc: &vigil_types::plan::ServiceConfig) -> anyhow::Result<()> {
+    use vigil_types::plan::{ReadyMode, Startup};
+
+    if let Some(t) = &svc.ready_timeout {
+        crate::duration::parse_duration(t)
+            .map_err(|e| anyhow::anyhow!("invalid ready-timeout {t:?}: {e}"))?;
+    }
+    match (svc.ready.unwrap_or_default(), &svc.ready_check) {
+        (ReadyMode::Check, None) => anyhow::bail!("ready: check needs ready-check"),
+        (ReadyMode::Check, Some(c)) => {
+            let check = plan
+                .checks
+                .get(c)
+                .with_context(|| format!("ready-check {c:?} is not a defined check"))?;
+            anyhow::ensure!(
+                check.startup != Startup::Disabled,
+                "ready-check {c:?} has startup: disabled and would never run"
+            );
+        }
+        (_, Some(_)) => anyhow::bail!("ready-check is only valid with ready: check"),
+        (_, None) => {}
     }
     Ok(())
 }
@@ -286,5 +312,64 @@ mod tests {
         write(&dir, "001-empty.yaml", "");
         let plan = load_plan(dir.path()).unwrap();
         assert!(plan.services.is_empty());
+    }
+
+    #[test]
+    fn ready_fields_are_validated() {
+        let cases = [
+            ("    ready: check\n", "needs ready-check"),
+            (
+                "    ready: check\n    ready-check: nope\n",
+                "not a defined check",
+            ),
+            (
+                "    ready: notify\n    ready-check: c\n",
+                "only valid with ready: check",
+            ),
+            ("    ready-timeout: soon\n", "invalid ready-timeout"),
+        ];
+        for (fields, want) in cases {
+            let dir = TempDir::new().unwrap();
+            write(
+                &dir,
+                "001.yaml",
+                &format!(
+                    "services:\n  app:\n    command: /bin/true\n{fields}\
+                     checks:\n  c:\n    exec:\n      command: 'true'\n"
+                ),
+            );
+            let err = format!("{:#}", load_plan(dir.path()).unwrap_err());
+            assert!(err.contains(want), "{fields}: {err}");
+        }
+    }
+
+    #[test]
+    fn ready_check_must_not_be_disabled() {
+        let dir = TempDir::new().unwrap();
+        write(
+            &dir,
+            "001.yaml",
+            "services:\n  app:\n    command: /bin/true\n    ready: check\n    ready-check: c\n\
+             checks:\n  c:\n    startup: disabled\n    exec:\n      command: 'true'\n",
+        );
+        let err = format!("{:#}", load_plan(dir.path()).unwrap_err());
+        assert!(err.contains("startup: disabled"), "{err}");
+    }
+
+    #[test]
+    fn valid_ready_config_loads() {
+        let dir = TempDir::new().unwrap();
+        write(
+            &dir,
+            "001.yaml",
+            "services:\n  app:\n    command: /bin/true\n    ready: check\n    ready-check: c\n    ready-timeout: 0s\n\
+             \x20 web:\n    command: /bin/true\n    ready: notify\n\
+             checks:\n  c:\n    startup: enabled\n    exec:\n      command: 'true'\n",
+        );
+        let plan = load_plan(dir.path()).unwrap();
+        assert_eq!(
+            plan.services["web"].ready,
+            Some(vigil_types::plan::ReadyMode::Notify)
+        );
     }
 }

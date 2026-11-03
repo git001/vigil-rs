@@ -76,6 +76,9 @@ services:
       - frontend
     requires:                          # fail if these services are not Active
       - database
+    ready: process                     # process | notify | check (default: process)
+    ready-check: myservice-alive       # check that signals readiness (ready: check)
+    ready-timeout: 30s                 # stop + on-failure if not ready in time (0s = wait forever)
 
     # --- Stop behaviour ---
     stop-signal: SIGTERM               # signal sent on stop (default: SIGTERM)
@@ -188,12 +191,86 @@ Startup ordering and dependency constraints. All referenced service names must
 exist in the merged plan.
 
 - `after: [a, b]` — this service starts after `a` and `b` reach `Active`
+  (that is, after they are ready, see [`ready`](#ready--ready-check--ready-timeout))
 - `before: [c]` — syntactic sugar for `after` from the reverse direction:
   `B before: [A]` is equivalent to `A after: [B]`. B must be running before A starts.
 - `requires: [a]` — implies `after` ordering **and** a runtime stop cascade:
   if `a` leaves the running state (Inactive, Backoff, Error), this service is
   stopped automatically. Use this for hard dependencies where the dependent
   service cannot function without the required one.
+
+#### `ready` / `ready-check` / `ready-timeout`
+
+When a started service counts as ready. Until then its status is `starting`,
+and services that wait for it (`after`, `requires`, `before`) are not started.
+
+| Value | Ready when |
+|---|---|
+| `process` | the process has been spawned. **Default** (v3 behaviour) |
+| `notify` | the service sends `READY=1` to `$NOTIFY_SOCKET` (systemd's sd_notify protocol) |
+| `check` | the check named in `ready-check` passes for the first time after the process was spawned |
+
+```yaml
+services:
+  db:
+    command: /usr/local/bin/db-server
+    ready: notify                 # db-server calls sd_notify("READY=1")
+  migrate:
+    command: /usr/local/bin/migrate
+    after: [db]                   # starts only when db sent READY=1
+  web:
+    command: /usr/local/bin/web
+    ready: check
+    ready-check: web-http         # first pass of this check makes web active
+    ready-timeout: 1m
+
+checks:
+  web-http:
+    startup: enabled              # the check must run
+    period: 2s                    # short period = fast readiness
+    http:
+      url: http://localhost:8080/healthz
+```
+
+**`ready-timeout`** (default `30s`, `0s` = wait forever): if the service is not
+ready in time, vigild stops it (`stop-signal`, then SIGKILL after
+`kill-delay`). This exit always counts as a failure, so `on-failure` applies
+(restart with backoff, shutdown, …), regardless of `success-exit-codes` and
+`exit-code-map`. With `--exit-code propagate`, a resulting shutdown exits with
+`10`, because the stop signal's code says nothing about the service.
+
+**`ready: check`:** only probes that *started* after the process was spawned
+count, so an earlier pass (e.g. of a previous process) cannot make a new
+process ready. The check must exist and must not be `startup: disabled`. The
+check keeps running afterwards as usual. Its `delay` and `period` decide how
+quickly readiness is detected.
+
+**`ready: notify`:**
+
+- For every start vigild creates a datagram socket
+  `<path-prefix>/notify/<service>-<random>.sock` (mode 0600, owned by the
+  service user) and passes its path in `NOTIFY_SOCKET`, also with
+  `pass-env: false`. The socket is removed when the process exits, so a
+  leftover process of an earlier start cannot report into a later one.
+- Understood messages: `READY=1`, `STATUS=<text>` (shown as `status-message`
+  in the API and in `vigil services list`), `STOPPING=1` (logged). Other
+  fields are ignored; file descriptors (`FDSTORE=1`) are closed. Watchdog
+  messages are not supported yet.
+- Only messages from the service's main process or its process group are
+  accepted (checked via `SCM_CREDENTIALS`). A sender that has already exited
+  when vigild reads the message (e.g. a short-lived `systemd-notify` helper)
+  is accepted only if it ran as the service's UID.
+- vigild never passes on a `NOTIFY_SOCKET` it got itself (e.g. from systemd);
+  services without `ready: notify` do not see the variable at all.
+- Directories: vigild creates `<path-prefix>` (if missing) and
+  `<path-prefix>/notify` with mode 0711: services running as another `user`
+  can reach their socket, but nobody can list the directory. If you create
+  `<path-prefix>` yourself and use `ready: notify` together with `user:`,
+  give it the search bit for others (`chmod 711`).
+
+Senders: any sd_notify implementation works, e.g. `sd_notify(3)` from
+libsystemd, the `sd-notify` crate, Python's `socket` module, or
+`systemd-notify --ready` (if installed in the image).
 
 #### `stop-signal`
 

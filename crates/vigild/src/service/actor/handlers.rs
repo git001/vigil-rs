@@ -116,12 +116,20 @@ impl Actor {
         });
         // Shell-style code (128 + signal for signals), then exit-code-map.
         let raw_code = exit_info.and_then(|e| e.shell_code());
-        let code = raw_code.map(|c| self.config.exit_code_map.get(&c).copied().unwrap_or(c));
-        let success = match code {
+        let mut code = raw_code.map(|c| self.config.exit_code_map.get(&c).copied().unwrap_or(c));
+        let mut success = match code {
             Some(c) if self.config.success_exit_codes.is_empty() => c == 0,
             Some(c) => self.config.success_exit_codes.contains(&c),
             None => false,
         };
+        // Stopped because it never became ready: always a failure, and the
+        // stop signal's code (e.g. 143) says nothing about the service.
+        if std::mem::take(&mut self.ready_failed) {
+            success = false;
+            code = None;
+        }
+        self.ready_deadline = None;
+        self.notify = None;
         self.last_exit = exit_info;
         self.metrics
             .set_service_last_exit_code(&self.name, raw_code);
@@ -227,6 +235,7 @@ impl Actor {
     }
 
     pub(super) async fn cleanup(&mut self) {
+        self.notify = None;
         if self.child.is_some() {
             self.send_stop_signal();
             tokio::time::sleep(Duration::from_millis(500)).await;
