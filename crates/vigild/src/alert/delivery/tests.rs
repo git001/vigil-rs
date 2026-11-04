@@ -17,6 +17,8 @@ fn empty_cfg() -> AlertConfig {
         url: "http://example.com".into(),
         format: AlertFormat::Webhook,
         on_check: vec![],
+        on_service: vec![],
+        on_vigild: vec![],
         headers: IndexMap::new(),
         labels: IndexMap::new(),
         send_info_fields: IndexMap::new(),

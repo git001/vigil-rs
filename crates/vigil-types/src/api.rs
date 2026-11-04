@@ -211,6 +211,12 @@ pub struct AlertInfo {
     pub format: crate::plan::AlertFormat,
     /// Check names that trigger this alert.
     pub on_check: Vec<String>,
+    /// Service names whose failures trigger this alert (`*` = all).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub on_service: Vec<String>,
+    /// vigild events that trigger this alert (`layers`, `*`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub on_vigild: Vec<String>,
     /// Last known status per watched check.
     pub check_status: Vec<AlertCheckStatus>,
 }

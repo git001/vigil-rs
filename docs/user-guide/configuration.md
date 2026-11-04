@@ -88,6 +88,7 @@ services:
     ready: process                     # process | notify | check (default: process)
     ready-check: myservice-alive       # check that signals readiness (ready: check)
     ready-timeout: 30s                 # stop + on-failure if not ready in time (0s = wait forever)
+    healthy-time: 10s                  # healthy after running for this time without a crash (default: 10s, 1s..1h)
 
     # --- Stop behaviour ---
     stop-signal: SIGTERM               # signal sent on stop (default: SIGTERM)
@@ -556,6 +557,24 @@ Senders: any sd_notify implementation works, e.g. `sd_notify(3)` from
 libsystemd, the `sd-notify` crate, Python's `socket` module, or
 `systemd-notify --ready` (if installed in the image).
 
+#### `healthy-time`
+
+How long a service must stay `active` without interruption before it counts
+as healthy again. Default: **10s**; allowed **`1s` to `1h`**. It only
+affects [alerts](#service-events): a service alert resolves once the service
+is healthy, and the checks of a service send no alerts while it is not
+healthy. A crash within `healthy-time` belongs to the same problem and sends
+no new alert, so a crash loop does not flap between firing and resolved.
+
+Oneshot jobs do not use `healthy-time`: a successful run makes them healthy.
+
+```yaml
+services:
+  api:
+    command: /usr/local/bin/api
+    healthy-time: 30s   # slow warm-up: count as healthy after 30s
+```
+
 #### `stop-signal`
 
 The POSIX signal sent to the process group when stopping a service.
@@ -758,6 +777,9 @@ checks:
     timeout: 3s                        # per-check timeout (default: 3s)
     threshold: 3                       # consecutive failures to declare Down (default: 3)
 
+    # --- Alerts ---
+    service: myservice                 # quiet while this service is not healthy
+
     # --- Check type (exactly one) ---
     http:
       url: https://localhost:8080/healthz
@@ -817,6 +839,19 @@ Default: **3s**.
 
 Number of consecutive failures required before the check is declared `Down` and
 `on-check-failure` actions are triggered. Default: **3**.
+
+#### `service`
+
+The service this check tests. While that service is not healthy (see
+[`healthy-time`](#healthy-time)), the check sends no alerts: the service alert
+already says what is wrong. Its status is still recorded; once the service is
+healthy again, a check that is still down alerts then, one that recovered
+meanwhile does not alert at all. See [Checks of an unhealthy
+service](#checks-of-an-unhealthy-service).
+
+Only needed for checks the service does not name itself: a check in the
+service's `ready-check` or `on-check-failure` belongs to it anyway. The
+service must be defined.
 
 #### HTTP check
 
@@ -898,11 +933,28 @@ combined with the service context's lists.
 
 ## Alerts
 
-Alerts send HTTP(S) notifications when a check changes state. They fire on
-**state transitions only** — not on every check cycle — and support four
-wire formats to integrate with common observability stacks.
+Alerts send HTTP(S) notifications for events of checks, services and vigild
+itself. An alert subscribes to them with `on-check`, `on-service` and
+`on-vigild`. They fire on **changes only** — not on every check cycle or
+every restart — and support four wire formats to integrate with common
+observability stacks.
 
-### Firing and recovery behaviour
+```yaml
+alerts:
+  ops:
+    url: https://hooks.example.com/vigil
+    on-check: [website-alive]   # check down / recovered
+    on-service: ["*"]           # every service: failures / healthy again
+    on-vigild: [layers]         # invalid layers with --watch-layers
+```
+
+Every event has a source (`check`, `service`, `vigild`), a name (of the check
+or service; `layers` for vigild), an event name, a status (`down` for a
+problem, `up` for its end) and a message. Events are deduplicated per source
+and name: a problem is sent when it differs from the last one sent, its end
+only after a problem was sent.
+
+### Check events
 
 | Transition | Alert sent? |
 |---|---|
@@ -912,6 +964,49 @@ wire formats to integrate with common observability stacks.
 | Down → Up | **Yes** — resolved / recovered |
 | Down → Down | **No** — deduplicated |
 | Up → Up | **No** — deduplicated |
+
+Event names: `failed` (down) and `recovered` (up).
+
+### Service events
+
+One event per failure, named after what vigild does next:
+
+| Event | When | Example message |
+|---|---|---|
+| `backoff` | The process failed and vigild restarts it | `exited with code 3, restarting in 2s` |
+| `error` | vigild gives up (backoff limit reached), or the start failed | `failed to start: …` |
+| `failed` | Any other failure: a oneshot or cron run failed, `on-failure: ignore`, a shutdown policy | `did not become ready within 30s` |
+| `recovered` | The service is healthy again: `active` for [`healthy-time`](#healthy-time), or a oneshot run succeeded | `service api is healthy again` |
+
+A crash loop sends one `backoff`, then one `error` when vigild gives up; a
+crash within `healthy-time` sends nothing new. A process that exits with
+success (e.g. a service restarted by `on-success: restart`) and a stop
+requested by you or by vigild (`vigil stop`, replan, `watch-files`) are no
+failure.
+
+With a shutdown policy (`on-failure: shutdown`) vigild exits right after the
+failure; the alert is queued, but may not be delivered.
+
+### Checks of an unhealthy service
+
+When a service crashes, the checks testing it fail too. To send one alert
+instead of several, a check stays quiet while a service it belongs to is not
+healthy: starting, within `healthy-time`, in backoff or error, or stopped. Its
+status is still recorded. Once the service is healthy again, a check that is
+still down alerts then; one that recovered meanwhile does not alert at all.
+
+A check belongs to a service when the service names it in `ready-check` or
+`on-check-failure`, or the check names the service in
+[`service`](#service). A check without such a link always alerts. A check that
+belongs to a service that is never started (e.g. `startup: disabled`) never
+alerts.
+
+### vigild events
+
+| Name | Event | When |
+|---|---|---|
+| `layers` | `invalid` | `--watch-layers` found layers that do not load; the running plan stays active |
+| `layers` | `recovered` | The next reload succeeded |
 
 ### Full reference
 
@@ -935,7 +1030,9 @@ alerts:
     url: "env:ALERTMANAGER_URL"              # or a literal URL
     format: alertmanager   # webhook | alertmanager | cloud-events | otlp-logs
 
-    on-check: [website-alive]   # checks that trigger this alert
+    on-check: [website-alive]   # checks that trigger this alert ("*" = all)
+    on-service: [api, worker]   # services whose failures trigger it ("*" = all)
+    on-vigild: [layers]         # vigild events ("*" = all)
 
     # --- Payload ---
     # Extra HTTP headers (e.g. authentication).
@@ -979,7 +1076,8 @@ alerts:
     # --- Custom body template (webhook format only) ---
     # Jinja2-style template rendered instead of the default webhook payload.
     # The rendered string must be valid JSON.
-    # Variables: check, status, timestamp, labels (map), info (map)
+    # Variables: source, name, event, status, message, check, timestamp,
+    # labels (map), info (map)
     # Ignored for formats other than webhook.
     body-template: '{"text": "Check {{ check }} is {{ status }}"}'
 
@@ -1009,7 +1107,19 @@ Default: `webhook`
 #### `on-check`
 
 List of check names whose state changes trigger this alert. The alert is sent
-when any of the listed checks transitions between `Up` and `Down`.
+when any of the listed checks transitions between `Up` and `Down`. `"*"`
+means every check.
+
+#### `on-service`
+
+List of service names whose [failures and recovery](#service-events) trigger
+this alert. `"*"` means every service. Names of services that do not exist
+(yet) are allowed.
+
+#### `on-vigild`
+
+List of [vigild events](#vigild-events) that trigger this alert: `layers` or
+`"*"`. Other names make the layer invalid.
 
 #### `env:` value resolution
 
@@ -1037,7 +1147,7 @@ They differ in placement within the payload:
 | Format | `labels` | `send_info_fields` |
 |---|---|---|
 | `webhook` | `labels` object | `info` object |
-| `alertmanager` | Alertmanager `labels` map (+ `alertname`, `check` added automatically) | `annotations` map |
+| `alertmanager` | Alertmanager `labels` map (+ `alertname`, `source` and, for checks, `check` added automatically) | `annotations` map (+ `event`, `message`) |
 | `cloud-events` | `data.labels` object | `data.info` object |
 | `otlp-logs` | LogRecord `attributes` | LogRecord `attributes` |
 
@@ -1055,8 +1165,12 @@ default webhook payload — the alert is never silently dropped.
 
 | Variable | Type | Value |
 |---|---|---|
-| `check` | string | Name of the check that triggered the alert |
+| `source` | string | `"check"`, `"service"` or `"vigild"` |
+| `name` | string | Name of the check or service; `"layers"` for vigild |
+| `event` | string | Event name, e.g. `"failed"`, `"backoff"`, `"recovered"` |
 | `status` | string | `"down"` (firing) or `"up"` (recovery) |
+| `message` | string | Detail, e.g. `"exited with code 3, restarting in 2s"` |
+| `check` | string | Name of the check for check events; undefined (renders empty) otherwise |
 | `timestamp` | string | RFC 3339 timestamp of the event |
 | `labels` | object | Resolved `labels` map |
 | `info` | object | Resolved `send_info_fields` map |
@@ -1116,15 +1230,33 @@ Default payload (no `body-template`):
 
 ```json
 {
-  "check": "website-alive",
+  "source": "check",
+  "name": "website-alive",
+  "event": "failed",
   "status": "down",
+  "message": "check website-alive failed",
+  "check": "website-alive",
   "timestamp": "2026-03-21T12:00:00Z",
   "labels": { "env": "production" },
   "info":   { "k8s_namespace": "prod" }
 }
 ```
 
-`status` is `"down"` on firing, `"up"` on recovery.
+`status` is `"down"` on firing, `"up"` on recovery. `check` is only present
+for check events; a service event looks like this:
+
+```json
+{
+  "source": "service",
+  "name": "api",
+  "event": "backoff",
+  "status": "down",
+  "message": "exited with code 3, restarting in 2s",
+  "timestamp": "2026-03-21T12:00:00Z",
+  "labels": { "env": "production" },
+  "info":   { "k8s_namespace": "prod" }
+}
+```
 
 When `body-template` is set, vigild renders the template and sends the result
 instead. This lets you produce any JSON shape required by the target system
@@ -1135,15 +1267,17 @@ for the full variable reference.
 
 ```json
 [{
-  "labels":      { "alertname": "website-alive", "check": "website-alive", "env": "production" },
-  "annotations": { "runbook": "https://wiki.example.com/…" },
+  "labels":      { "alertname": "website-alive", "source": "check", "check": "website-alive", "env": "production" },
+  "annotations": { "event": "failed", "message": "check website-alive failed", "runbook": "https://wiki.example.com/…" },
   "startsAt":    "2026-03-21T12:00:00Z",
   "endsAt":      "0001-01-01T00:00:00Z"
 }]
 ```
 
 On recovery `endsAt` is set to the current time — this is the native
-Alertmanager mechanism for marking an alert as resolved.
+Alertmanager mechanism for marking an alert as resolved. Alertmanager tells
+alerts apart by their labels, so `event` and `message` are annotations: the
+resolved event (`recovered`) has the same labels as the problem it ends.
 
 #### `cloud-events` — CNCF CloudEvents 1.0
 
@@ -1156,21 +1290,30 @@ Alertmanager mechanism for marking an alert as resolved.
   "time": "2026-03-21T12:00:00Z",
   "datacontenttype": "application/json",
   "data": {
-    "check": "website-alive",
+    "source": "check",
+    "name": "website-alive",
+    "event": "failed",
     "status": "down",
+    "message": "check website-alive failed",
+    "check": "website-alive",
     "labels": { "env": "production" },
     "info":   { "k8s_namespace": "prod" }
   }
 }
 ```
 
-`type` is `io.vigil.check.failed` on firing, `io.vigil.check.recovered` on recovery.
+`type` is `io.vigil.<source>.<event>`: `io.vigil.check.failed` and
+`io.vigil.check.recovered` for checks, e.g. `io.vigil.service.backoff` or
+`io.vigil.vigild.invalid` for the other sources. `data.check` is only present
+for check events.
 
 #### `otlp-logs` — OpenTelemetry OTLP HTTP/JSON
 
 Compatible with `POST /v1/logs` on any OpenTelemetry Collector.
-`severityNumber` is `17` (ERROR) on Down and `9` (INFO) on Up.
-`labels` and `send_info_fields` are added as LogRecord `attributes`.
+`severityNumber` is `17` (ERROR) on Down and `9` (INFO) on Up. The body is
+the message. Attributes: `vigil.source`, `vigil.name`, `vigil.event`, for
+check events also `check.name` and `check.status`, plus `labels` and
+`send_info_fields`.
 
 ### Example
 

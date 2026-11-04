@@ -191,6 +191,8 @@ impl Overlord {
                     url: cfg.url.clone(),
                     format: cfg.format,
                     on_check: cfg.on_check.clone(),
+                    on_service: cfg.on_service.clone(),
+                    on_vigild: cfg.on_vigild.clone(),
                     check_status,
                 }
             })

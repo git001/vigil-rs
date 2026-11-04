@@ -1,0 +1,74 @@
+vtest "service alerts: backoff, recovered after healthy-time, checks of an unhealthy service stay quiet"
+
+shell { mkdir -p ${tmpdir}/layers }
+
+# Start a minimal HTTP server (tests/vtest/helpers/http_capture.py) that appends every
+# POST body to received.json; it picks a free port and writes it to
+# webhook_port.txt once it listens.
+shell {
+	${vtestdir}/helpers/http_capture.py ${tmpdir}/webhook_port.txt ${tmpdir}/received.json \
+		> /dev/null 2>&1 &
+	echo $! > ${tmpdir}/webhook_server.pid
+	for i in $(seq 1 50); do
+		test -s ${tmpdir}/webhook_port.txt && break
+		sleep 0.1
+	done
+	test -s ${tmpdir}/webhook_port.txt
+}
+
+# vigild learns the webhook URL and the marker path from its environment
+# (alert url "env:WEBHOOK_URL", pass-env-glob FLAKY_MARKER).
+process p1 "env FLAKY_MARKER=${tmpdir}/flaky_marker WEBHOOK_URL=http://127.0.0.1:$(cat ${tmpdir}/webhook_port.txt)/webhook ${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+
+shell {
+	for i in $(seq 1 50); do
+		test -S ${tmpdir}/vigild.sock && break
+		sleep 0.1
+	done
+	test -S ${tmpdir}/vigild.sock
+}
+
+# Layer fixtures/v0023/flaky-svc.yaml: a service that fails once, a check
+# that fails until the service runs, and an alert for both.
+shell {
+	cp ${vtestdir}/fixtures/v0023/flaky-svc.yaml ${tmpdir}/layers/
+	${vigil} --socket ${tmpdir}/vigild.sock replan
+}
+
+# Wait for the second alert (recovered, about 1s backoff + 2s healthy-time),
+# then a little longer: a late check alert would show up as a third line.
+shell {
+	for i in $(seq 1 50); do
+		test "$(wc -l < ${tmpdir}/received.json 2>/dev/null)" -ge 2 && break
+		sleep 0.2
+	done
+	sleep 2
+}
+
+# Exactly the service's two events, and nothing from flaky-check: it failed
+# while the service was not healthy and recovered before it was.
+# vigild parses and re-serialises the rendered JSON, so keys come sorted.
+shell {
+	expected1='{"event":"backoff","message":"exited with code 3, restarting in 1s","name":"flaky","source":"service"}'
+	expected2='{"event":"recovered","message":"service flaky is healthy again","name":"flaky","source":"service"}'
+	lines=$(wc -l < ${tmpdir}/received.json)
+	line1=$(sed -n 1p ${tmpdir}/received.json)
+	line2=$(sed -n 2p ${tmpdir}/received.json)
+	if [ "$lines" -ne 2 ] || [ "$line1" != "$expected1" ] || [ "$line2" != "$expected2" ]; then
+		echo "unexpected alerts:"
+		cat ${tmpdir}/received.json
+		exit 1
+	fi
+}
+
+# vigil alerts list shows what the alert is subscribed to.
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock alerts list > ${tmpdir}/alerts.txt 2>&1
+	grep -q 'flaky-check, service:\*' ${tmpdir}/alerts.txt
+}
+
+# Tear down
+shell { kill $(cat ${tmpdir}/webhook_server.pid) 2>/dev/null || true }
+
+process p1 -kill TERM
+process p1 -wait

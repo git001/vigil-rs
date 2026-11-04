@@ -7,7 +7,8 @@ use vigil_types;
 
 #[derive(Debug, Subcommand)]
 pub enum AlertsCmd {
-    /// List alert configurations and their current check status.
+    /// List alert configurations, their current check status and what they
+    /// are subscribed to.
     #[command(name = "list")]
     List {
         /// Filter by alert name(s).
@@ -22,7 +23,7 @@ pub async fn run(client: &VigilClient, sub: AlertsCmd) -> anyhow::Result<()> {
         println!("No alerts.");
         return Ok(());
     }
-    println!("{:<24} {:<14} {:<8} Checks", "Alert", "Format", "Status");
+    println!("{:<24} {:<14} {:<8} On", "Alert", "Format", "Status");
     println!("{}", "-".repeat(70));
     for alert in alerts {
         // Overall status: down if any watched check is down, unknown if none
@@ -43,8 +44,23 @@ pub async fn run(client: &VigilClient, sub: AlertsCmd) -> anyhow::Result<()> {
             alert.name,
             format!("{:?}", alert.format).to_lowercase(),
             overall,
-            alert.on_check.join(", "),
+            subscriptions(&alert),
         );
     }
     Ok(())
+}
+
+/// Checks as plain names (as before), services and vigild events prefixed:
+/// `web, service:*, vigild:layers`.
+fn subscriptions(alert: &vigil_types::api::AlertInfo) -> String {
+    let services = alert.on_service.iter().map(|s| format!("service:{s}"));
+    let vigild = alert.on_vigild.iter().map(|s| format!("vigild:{s}"));
+    alert
+        .on_check
+        .iter()
+        .cloned()
+        .chain(services)
+        .chain(vigild)
+        .collect::<Vec<_>>()
+        .join(", ")
 }

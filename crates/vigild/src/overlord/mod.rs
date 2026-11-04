@@ -114,6 +114,9 @@ pub(super) struct Overlord {
     pub(super) exit_code_mode: service::ExitCodeMode,
     /// `<path-prefix>/notify` for `ready: notify` sockets.
     pub(super) notify_dir: PathBuf,
+    /// Services that are healthy (`active` for `healthy-time`, or a
+    /// successful oneshot run). Checks of other services stay quiet.
+    pub(super) healthy: std::collections::HashSet<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -180,6 +183,7 @@ pub fn spawn(
         pending_autostart: Vec::new(),
         exit_code_mode,
         notify_dir,
+        healthy: Default::default(),
     };
 
     let join = tokio::spawn(run(ov));

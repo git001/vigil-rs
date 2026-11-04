@@ -8,6 +8,7 @@ use tracing::{error, info, warn};
 use vigil_types::api::CheckStatus;
 use vigil_types::plan::OnExit;
 
+use crate::alert::{AlertEvent, AlertSource};
 use crate::check::CheckEvent;
 use crate::service::{self, Cmd as SvcCmd};
 use crate::state::ServiceState;
@@ -19,6 +20,11 @@ impl Overlord {
     pub(super) async fn handle_svc_event(&mut self, event: service::Event) -> Option<i32> {
         match &event.kind {
             service::EventKind::StateChanged { new_state } => {
+                // Healthy again only via `Healthy`; a finished oneshot keeps
+                // the health its run gave it.
+                if *new_state != ServiceState::Done {
+                    self.healthy.remove(&event.service);
+                }
                 if let Some(e) = self.services.get_mut(&event.service) {
                     e.snapshot.state = *new_state;
                     e.snapshot.since = Utc::now();
@@ -105,6 +111,33 @@ impl Overlord {
                 }
                 None
             }
+            service::EventKind::Unhealthy {
+                event: name,
+                message,
+            } => {
+                self.healthy.remove(&event.service);
+                warn!(service = %event.service, event = name, %message, "service failed");
+                let ev = AlertEvent::firing(AlertSource::Service, &event.service, *name, message);
+                self.send_alert(ev);
+                None
+            }
+            service::EventKind::Healthy => {
+                self.healthy.insert(event.service.clone());
+                let ev = AlertEvent::resolved(
+                    AlertSource::Service,
+                    &event.service,
+                    format!("service {} is healthy again", event.service),
+                );
+                self.send_alert(ev);
+                // Report what its checks held back meanwhile.
+                for check in self.checks_of_service(&event.service) {
+                    if !self.check_quiet(&check) {
+                        let fired = self.alert_sender.recheck(&check);
+                        self.count_fired(&fired);
+                    }
+                }
+                None
+            }
             service::EventKind::DaemonShutdown { exit_code } => {
                 info!(service = %event.service, exit_code, "daemon shutdown requested by service policy");
                 Some(*exit_code)
@@ -116,11 +149,14 @@ impl Overlord {
         if let Some(started_at) = event.passed_at {
             self.forward_check_passed(&event.check, started_at).await;
         }
-        let fired = self
-            .alert_sender
-            .handle_check_event(&event.check, event.status);
-        for alert_name in &fired {
-            self.metrics.record_alert_fire(alert_name);
+        if self.check_quiet(&event.check) {
+            self.alert_sender
+                .hold_check_event(&event.check, event.status);
+        } else {
+            let fired = self
+                .alert_sender
+                .handle_check_event(&event.check, event.status);
+            self.count_fired(&fired);
         }
 
         if event.status != CheckStatus::Down {
@@ -159,6 +195,55 @@ impl Overlord {
                 }
             }
         }
+    }
+
+    /// Send an alert event of any component (check, service, vigild).
+    pub(super) fn send_alert(&mut self, ev: AlertEvent) {
+        let fired = self.alert_sender.send(ev);
+        self.count_fired(&fired);
+    }
+
+    fn count_fired(&self, fired: &[String]) {
+        for alert_name in fired {
+            self.metrics.record_alert_fire(alert_name);
+        }
+    }
+
+    /// Services `check` belongs to: they name it in `ready-check` or
+    /// `on-check-failure`, or the check names them in `service`.
+    fn services_of_check<'a>(&'a self, check: &'a str) -> impl Iterator<Item = &'a str> + 'a {
+        let named = self
+            .plan
+            .checks
+            .get(check)
+            .and_then(|c| c.service.as_deref())
+            .filter(|s| self.plan.services.contains_key(*s));
+        self.plan
+            .services
+            .iter()
+            .filter(move |(name, svc)| {
+                svc.ready_check.as_deref() == Some(check)
+                    || svc.on_check_failure.contains_key(check)
+                    || named == Some(name.as_str())
+            })
+            .map(|(name, _)| name.as_str())
+    }
+
+    /// Checks that belong to `service` (see [`Self::services_of_check`]).
+    fn checks_of_service(&self, service: &str) -> Vec<String> {
+        self.plan
+            .checks
+            .keys()
+            .filter(|c| self.services_of_check(c).any(|s| s == service))
+            .cloned()
+            .collect()
+    }
+
+    /// A check sends no alerts while a service it belongs to is not
+    /// healthy: the service alert already says what is wrong.
+    pub(super) fn check_quiet(&self, check: &str) -> bool {
+        self.services_of_check(check)
+            .any(|s| !self.healthy.contains(s))
     }
 
     /// Tell services that wait for `check` (`ready: check`) about a pass.

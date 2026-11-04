@@ -15,8 +15,9 @@ would:
 
 | Need | How | Example |
 |---|---|---|
-| A URL in an alert | `url: "env:WEBHOOK_URL"`, vigild started with `WEBHOOK_URL=…` | `v0016`, `v0020` |
+| A URL in an alert | `url: "env:WEBHOOK_URL"`, vigild started with `WEBHOOK_URL=…` | `v0016`, `v0020`, `v0023` |
 | A path in an exec check | `test -f "$CHECK_MARKER"` plus `pass-env-glob: [CHECK_MARKER]`, vigild started with `CHECK_MARKER=…` | `v0012`, `v0016` |
+| A path in a service command | `"$FLAKY_MARKER"` plus `pass-env-glob: [FLAKY_MARKER]`, vigild started with `FLAKY_MARKER=…` | `v0023` |
 | A field without `env:` support | placeholder `@SINK_PORT@`, filled in with `sed` | `v0015` (`logs-push-addr`) |
 
 ## identities/

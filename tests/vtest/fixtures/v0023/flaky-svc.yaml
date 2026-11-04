@@ -1,0 +1,41 @@
+# A service that fails on its first run and keeps running on the second,
+# a check that tests it, and an alert for both.
+#
+# Run 1: no marker yet → creates "$FLAKY_MARKER", exits 3 → backoff alert.
+# Run 2 (after 1s): marker exists → creates "$FLAKY_MARKER.ok" and keeps
+# running → healthy after healthy-time → recovered alert.
+#
+# flaky-check fails until "$FLAKY_MARKER.ok" exists, i.e. while the service
+# is not healthy. It belongs to the service (`service: flaky`), so it stays
+# quiet: the service alert already says what is wrong.
+#
+# vigild gets FLAKY_MARKER and WEBHOOK_URL from the test.
+services:
+  flaky:
+    override: replace
+    command: sh -c 'test -f "$FLAKY_MARKER" && { touch "$FLAKY_MARKER.ok"; exec sleep 300; }; touch "$FLAKY_MARKER"; exit 3'
+    startup: enabled
+    pass-env-glob: [FLAKY_MARKER]
+    backoff-delay: 1s
+    healthy-time: 2s
+
+checks:
+  flaky-check:
+    startup: enabled
+    service: flaky
+    delay: 0s
+    period: 1s
+    timeout: 2s
+    threshold: 1
+    exec:
+      command: 'test -f "$FLAKY_MARKER.ok"'
+      pass-env-glob: [FLAKY_MARKER]
+
+alerts:
+  ops:
+    url: "env:WEBHOOK_URL"
+    format: webhook
+    on-service: ["*"]
+    on-check: [flaky-check]
+    retry-attempts: 1
+    body-template: '{"source": "{{ source }}", "name": "{{ name }}", "event": "{{ event }}", "message": "{{ message }}"}'

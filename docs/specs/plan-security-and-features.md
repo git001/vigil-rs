@@ -470,9 +470,8 @@ whole chain.
   way: since phase 4 template rendering read files synchronously inside the
   async actor, so a dead NFS mount could block runtime workers and with them
   all of vigild (API, reaping).
-- **Alert event: not implemented.** Alerts are tied to checks (`on-check`);
-  a file-change event would need a new alert concept (open question to the
-  user).
+- **No alert event** for a file-change reload (decided by the user; the
+  generic alerts of phase 4b2 leave it out on purpose).
 
 **Status (2026-11-04):** implemented (`service/watch.rs`, actor
 `watch.rs`, `Renderer::take_reads`). Tests: debounce, revert within a round,
@@ -483,6 +482,76 @@ env file each caused one restart with the new value, `touch` none, nginx-style
 `merge_service` always copies `startup` from the overlay, so a layer that
 does not set `startup` resets it to `disabled`.
 
+### Phase 4b2: alerts from every component (before 4c)
+
+**Goal:** alerts were tied to checks (`on-check`, payload always
+`check`/`status`). Services and vigild itself could not report anything,
+which 4c needs for invalid layers. Now every component sends a generic
+alert event; delivery (queue, retry, proxy, TLS) stays as it is.
+
+- **Event:** `source` (`check` | `service` | `vigild`), `name`, `event`,
+  `firing` (problem or resolved), `message`. Components report through
+  the channels they already have to the overlord, which owns the
+  `AlertSender`.
+- **Deduplication per `(source, name)`:** a firing event is sent when the
+  event differs from the last one sent (a crash loop gives one `backoff`,
+  then one `error` when vigild gives up); a resolved event only after a
+  firing one was sent.
+- **Subscription (additive, existing configs stay valid):** `on-check`
+  as before, new `on-service` and `on-vigild`; `"*"` means all names.
+  ```yaml
+  alerts:
+    ops:
+      url: https://hooks.example.com/vigil
+      on-check: [db-alive]
+      on-service: ["*"]
+      on-vigild: [layers]
+  ```
+- **Service events, one per failure, named after the consequence:**
+  `backoff` (vigild restarts it), `error` (vigild gives up, or the start
+  failed), `failed` (anything else: oneshot or cron run failed,
+  `on-failure: ignore`, shutdown policy). The message carries the detail,
+  e.g. `exited with code 3, restarting in 2s` or `did not become ready
+  within 30s`. Stops requested by the user or by vigild are no failure.
+- **Resolved for services:** once the service has been `active` without
+  interruption for `healthy-time` (new service field, default `10s`,
+  allowed `1s` to `1h`), or right after a successful oneshot or cron run.
+  A crash within `healthy-time` is the same problem, no new event.
+- **Checks of an unhealthy service stay quiet:** a check belongs to a
+  service when the service names it in `ready-check` or
+  `on-check-failure`, or the check names the service in its new field
+  `service` (for checks without such a reference). `service-context` does
+  not count: it only lends the environment, the check may test something
+  else.
+  While such a service is not healthy (starting, within `healthy-time`,
+  backoff, error, stopped), the check's status is recorded but no alert is
+  sent: the service alert already says what is wrong. Once the service is
+  healthy again, a check that is still down is reported then; one that
+  recovered meanwhile is not reported at all.
+- **vigild events:** `layers` with `invalid` (4c); the next valid reload
+  resolves it. File-change reloads (4b) stay without an alert.
+- **Formats:** webhook gets `source`, `name`, `event`, `message` in
+  addition to `status` (`down`/`up`); check events keep `check`.
+  Check events are named `failed`/`recovered`, every resolved event is
+  `recovered`. Alertmanager: `alertname` is the name, new label `source`;
+  `event` and `message` are annotations, because Alertmanager identifies an
+  alert by its labels and a resolve must carry the labels of the problem it
+  ends. CloudEvents: type `io.vigil.<source>.<event>` (check events keep
+  `io.vigil.check.failed`/`recovered`). OTLP: new attributes, body is the
+  message. `body-template` gets the new fields as variables (`check` is
+  undefined for other sources).
+- The metric `vigil_alert_fire_count{alert}` counts events of all sources.
+- API `/v1/alerts` and `vigil alerts list` show `on-service`/`on-vigild`
+  (CLI column `On`: `web, service:*, vigild:layers`).
+
+**Status (2026-11-04):** implemented (`alert/event.rs`, actor `health.rs`,
+overlord `healthy` set). Tests: deduplication per event, independent
+sources, held checks and recheck, all four formats, actor health events
+(backoff with exit code, healthy after healthy-time, oneshot, failed start,
+ready timeout), overlord hold-back, validation. VTest `v0023`: a service
+failing once sends exactly `backoff` and `recovered`, its failing check
+stays quiet (without `service:` the check alerts, verified).
+
 ### Phase 4c: layers from a ConfigMap, automatic `replan`
 
 **Goal:** instead of a vigil operator (deliberately rejected: it would
@@ -492,15 +561,16 @@ changes itself. This removes the need for `kubectl exec … vigil replan` after
 updating the ConfigMap.
 
 - **New vigild option:** `--watch-layers <interval>` / `VIGIL_WATCH_LAYERS`
-  (e.g. `30s`, off by default).
+  (e.g. `30s`, off by default; allowed `1s` to `24h`).
 - **Detection by polling** as in phase 4b, sharing the code: a hash over names
   and contents of all `*.yaml` files in the layers directory. Same reason as
   there: the kubelet swaps the ConfigMap's `..data` symlink atomically. Files
   starting with `..` (`..data`, `..2026_…`) are ignored.
 - **Debounce:** only react once the hash has been stable for one polling round.
 - **Validate before replanning:** parse and check the new layers first. On
-  error the running plan stays active, an error is logged and an alert event
-  (`layers-invalid`) is emitted; no retry until the content changes again.
+  error the running plan stays active, an error is logged and the alert event
+  `vigild`/`layers`/`invalid` is sent (phase 4b2); no retry until the content
+  changes again.
 - **Replan** reuses the existing `vigil replan` logic, i.e. only changed
   services and checks are restarted.
 - Metrics: `vigil_layers_reload_total{result="ok|invalid"}` and the time of
@@ -517,12 +587,12 @@ S1, S2, S4, S5, prefix ──┐
 S3 rest, phase 1 (exit) ─┤
 phase 2 (readiness) ─────┼──► v4.0
 phase 3 (oneshot/cron) ──┤
-phase 4 + 4b + 4c ───────┘    (phase 4 after S2)
+phase 4 + 4b + 4b2 + 4c ┘    (phase 4 after S2)
 ```
 
 Order of work: the 3.2.2 backport first, then on `v4`:
 S1 error case → S4 + path-prefix → S5 → S2 → S3 rest → phase 1 → phase 2 →
-phase 3 → phase 4 → 4b → 4c.
+phase 3 → phase 4 → 4b → 4b2 → 4c.
 
 For every phase: unit tests, VTest2 integration tests following the existing
 patterns, a test under OpenShift conditions (random UID, GID 0, `/run` not

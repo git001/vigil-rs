@@ -45,8 +45,7 @@ impl Actor {
                 let _ = reply.send(Ok(()));
             }
             Err(e) => {
-                error!(service = %self.name, error = %e, "failed to start");
-                self.transition(ServiceState::Error).await;
+                self.start_failed("failed to start", &e).await;
                 let _ = reply.send(Err(e));
             }
         }
@@ -127,10 +126,19 @@ impl Actor {
         };
         // Stopped because it never became ready: always a failure, and the
         // stop signal's code (e.g. 143) says nothing about the service.
-        if std::mem::take(&mut self.ready_failed) {
+        let ready_failed = std::mem::take(&mut self.ready_failed);
+        if ready_failed {
             success = false;
             code = None;
         }
+        let reason = if ready_failed {
+            match self.ready_timeout() {
+                Some(t) => format!("did not become ready within {t:?}"),
+                None => "did not become ready".to_owned(),
+            }
+        } else {
+            super::health::describe_exit(exit_info)
+        };
         self.ready_deadline = None;
         self.notify = None;
         self.stop_watching();
@@ -167,10 +175,7 @@ impl Actor {
                 self.transition(ServiceState::Starting).await;
                 match self.do_start().await {
                     Ok(()) => self.reset_backoff(),
-                    Err(e) => {
-                        error!(service = %self.name, error = %e, "restart failed");
-                        self.transition(ServiceState::Error).await;
-                    }
+                    Err(e) => self.start_failed("restart failed", &e).await,
                 }
             }
             return;
@@ -189,12 +194,17 @@ impl Actor {
             // A finished oneshot: `done` (dependents may start now).
             None => {
                 self.transition(ServiceState::Done).await;
+                self.report_healthy().await;
             }
             Some(OnExit::Ignore) if success && self.is_oneshot() => {
                 self.transition(ServiceState::Done).await;
+                self.report_healthy().await;
             }
             Some(OnExit::Ignore) => {
                 self.transition(ServiceState::Inactive).await;
+                if !success {
+                    self.report_unhealthy("failed", reason).await;
+                }
             }
             Some(
                 policy @ (OnExit::Shutdown | OnExit::FailureShutdown | OnExit::SuccessShutdown),
@@ -203,6 +213,11 @@ impl Actor {
                     .expect("shutdown policies always yield a code");
                 info!(service = %self.name, ?policy, exit_code, "daemon shutdown requested");
                 self.transition(ServiceState::Inactive).await;
+                if !success {
+                    // Best effort: vigild exits right after this.
+                    self.report_unhealthy("failed", format!("{reason}, shutting down vigild"))
+                        .await;
+                }
                 let _ = self
                     .event_tx
                     .send(Event {
@@ -215,11 +230,23 @@ impl Actor {
                 if self.backoff_limit_exceeded() {
                     error!(service = %self.name, "backoff limit exceeded, giving up");
                     self.transition(ServiceState::Error).await;
+                    self.report_unhealthy(
+                        "error",
+                        format!("{reason}, giving up (backoff limit reached)"),
+                    )
+                    .await;
                 } else {
                     let delay = self.next_backoff();
                     info!(service = %self.name, ?delay, "scheduling restart (backoff)");
                     self.transition(ServiceState::Backoff).await;
                     *backoff_sleep = Some(Box::pin(tokio::time::sleep(delay)));
+                    if !success {
+                        self.report_unhealthy(
+                            "backoff",
+                            format!("{reason}, restarting in {delay:?}"),
+                        )
+                        .await;
+                    }
                 }
             }
         }
@@ -251,10 +278,7 @@ impl Actor {
         self.transition(ServiceState::Starting).await;
         match self.do_start().await {
             Ok(()) => {}
-            Err(e) => {
-                error!(service = %self.name, error = %e, "restart after backoff failed");
-                self.transition(ServiceState::Error).await;
-            }
+            Err(e) => self.start_failed("restart after backoff failed", &e).await,
         }
         *stop_deadline = None;
     }

@@ -7,8 +7,9 @@ use chrono::Utc;
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 use uuid::Uuid;
-use vigil_types::api::CheckStatus;
 use vigil_types::plan::{AlertConfig, AlertFormat};
+
+use super::event::{AlertEvent, AlertSource};
 
 // ---------------------------------------------------------------------------
 // Field resolution
@@ -39,57 +40,54 @@ fn resolved_json(map: &IndexMap<String, String>) -> Value {
 // Format serialisers
 // ---------------------------------------------------------------------------
 
-pub(super) fn status_str(status: CheckStatus) -> &'static str {
-    if status == CheckStatus::Down {
-        "down"
-    } else {
-        "up"
-    }
-}
-
-pub(super) fn format_payload(check: &str, status: CheckStatus, cfg: &AlertConfig) -> Value {
+pub(super) fn format_payload(ev: &AlertEvent, cfg: &AlertConfig) -> Value {
     match cfg.format {
         AlertFormat::Webhook => {
             if let Some(tmpl) = &cfg.body_template {
-                format_webhook_template(check, status, cfg, tmpl)
+                format_webhook_template(ev, cfg, tmpl)
             } else {
-                format_webhook(check, status, cfg)
+                format_webhook(ev, cfg)
             }
         }
-        AlertFormat::Alertmanager => format_alertmanager(check, status, cfg),
-        AlertFormat::CloudEvents => format_cloudevents(check, status, cfg),
-        AlertFormat::OtlpLogs => format_otlp_logs(check, status, cfg),
+        AlertFormat::Alertmanager => format_alertmanager(ev, cfg),
+        AlertFormat::CloudEvents => format_cloudevents(ev, cfg),
+        AlertFormat::OtlpLogs => format_otlp_logs(ev, cfg),
     }
+}
+
+/// `check` field of check events (kept from the check-only payloads).
+fn check_name(ev: &AlertEvent) -> Option<&str> {
+    (ev.source == AlertSource::Check).then_some(ev.name.as_str())
 }
 
 /// Render a Jinja2-style `body_template` for the webhook format.
 ///
 /// On template parse/render errors or invalid JSON output, a warning is logged
 /// and the function falls back to the default webhook payload.
-fn format_webhook_template(
-    check: &str,
-    status: CheckStatus,
-    cfg: &AlertConfig,
-    template: &str,
-) -> Value {
+fn format_webhook_template(ev: &AlertEvent, cfg: &AlertConfig, template: &str) -> Value {
     use minijinja::{Environment, context};
 
     let mut env = Environment::new();
     if let Err(e) = env.add_template("body", template) {
         tracing::warn!(alert_template_error = %e, "body_template parse error — falling back to default webhook payload");
-        return format_webhook(check, status, cfg);
+        return format_webhook(ev, cfg);
     }
     let tmpl = match env.get_template("body") {
         Ok(t) => t,
         Err(e) => {
             tracing::warn!(alert_template_error = %e, "body_template load error — falling back");
-            return format_webhook(check, status, cfg);
+            return format_webhook(ev, cfg);
         }
     };
 
     let rendered = match tmpl.render(context!(
-        check     => check,
-        status    => status_str(status),
+        // Undefined (renders empty) for events that are not about a check.
+        check     => check_name(ev).map_or(minijinja::Value::UNDEFINED, minijinja::Value::from),
+        source    => ev.source.as_str(),
+        name      => &ev.name,
+        event     => &ev.event,
+        status    => ev.status_str(),
+        message   => &ev.message,
         timestamp => Utc::now().to_rfc3339(),
         labels    => resolved_map(&cfg.labels),
         info      => resolved_map(&cfg.send_info_fields),
@@ -97,7 +95,7 @@ fn format_webhook_template(
         Ok(s) => s,
         Err(e) => {
             tracing::warn!(alert_template_error = %e, "body_template render error — falling back to default webhook payload");
-            return format_webhook(check, status, cfg);
+            return format_webhook(ev, cfg);
         }
     };
 
@@ -109,91 +107,114 @@ fn format_webhook_template(
                 rendered_output = %rendered,
                 "body_template rendered output is not valid JSON — falling back to default webhook payload"
             );
-            format_webhook(check, status, cfg)
+            format_webhook(ev, cfg)
         }
     }
 }
 
-fn format_webhook(check: &str, status: CheckStatus, cfg: &AlertConfig) -> Value {
-    json!({
-        "check": check,
-        "status": status_str(status),
+fn format_webhook(ev: &AlertEvent, cfg: &AlertConfig) -> Value {
+    let mut v = json!({
+        "source": ev.source.as_str(),
+        "name": ev.name,
+        "event": ev.event,
+        "status": ev.status_str(),
+        "message": ev.message,
         "timestamp": Utc::now().to_rfc3339(),
         "labels": resolved_json(&cfg.labels),
         "info": resolved_json(&cfg.send_info_fields),
-    })
+    });
+    if let Some(check) = check_name(ev) {
+        v["check"] = json!(check);
+    }
+    v
 }
 
-fn format_alertmanager(check: &str, status: CheckStatus, cfg: &AlertConfig) -> Value {
+/// Alertmanager identifies an alert by its labels, so `event` (which
+/// differs between the firing and the resolved event) and `message` are
+/// annotations; otherwise a resolve would not end the alert it belongs to.
+fn format_alertmanager(ev: &AlertEvent, cfg: &AlertConfig) -> Value {
     let now = Utc::now().to_rfc3339();
-    let (starts_at, ends_at) = if status == CheckStatus::Down {
+    let (starts_at, ends_at) = if ev.firing {
         (now, "0001-01-01T00:00:00Z".to_owned())
     } else {
-        ("0001-01-01T00:00:00Z".to_owned(), Utc::now().to_rfc3339())
+        ("0001-01-01T00:00:00Z".to_owned(), now)
     };
 
     let mut labels = resolved_map(&cfg.labels);
-    labels.insert("alertname".into(), check.to_owned());
-    labels.insert("check".into(), check.to_owned());
-    let labels_json: Value = Value::Object(
-        labels
-            .into_iter()
-            .map(|(k, v)| (k, Value::String(v)))
-            .collect(),
-    );
+    labels.insert("alertname".into(), ev.name.clone());
+    labels.insert("source".into(), ev.source.as_str().to_owned());
+    if let Some(check) = check_name(ev) {
+        labels.insert("check".into(), check.to_owned());
+    }
+    let mut annotations = IndexMap::new();
+    annotations.insert("event".to_owned(), ev.event.clone());
+    annotations.insert("message".to_owned(), ev.message.clone());
+    annotations.extend(resolved_map(&cfg.send_info_fields));
 
     json!([{
-        "labels":      labels_json,
-        "annotations": resolved_json(&cfg.send_info_fields),
+        "labels":      to_json(labels),
+        "annotations": to_json(annotations),
         "startsAt":    starts_at,
         "endsAt":      ends_at,
     }])
 }
 
-fn format_cloudevents(check: &str, status: CheckStatus, cfg: &AlertConfig) -> Value {
-    let event_type = if status == CheckStatus::Down {
-        "io.vigil.check.failed"
-    } else {
-        "io.vigil.check.recovered"
-    };
+fn to_json(map: IndexMap<String, String>) -> Value {
+    Value::Object(
+        map.into_iter()
+            .map(|(k, v)| (k, Value::String(v)))
+            .collect(),
+    )
+}
+
+/// Type `io.vigil.<source>.<event>`; check events keep
+/// `io.vigil.check.failed` / `io.vigil.check.recovered`.
+fn format_cloudevents(ev: &AlertEvent, cfg: &AlertConfig) -> Value {
+    let mut data = json!({
+        "source":  ev.source.as_str(),
+        "name":    ev.name,
+        "event":   ev.event,
+        "status":  ev.status_str(),
+        "message": ev.message,
+        "labels":  resolved_json(&cfg.labels),
+        "info":    resolved_json(&cfg.send_info_fields),
+    });
+    if let Some(check) = check_name(ev) {
+        data["check"] = json!(check);
+    }
     json!({
         "specversion":      "1.0",
         "id":               Uuid::new_v4().to_string(),
         "source":           "vigild",
-        "type":             event_type,
+        "type":             format!("io.vigil.{}.{}", ev.source.as_str(), ev.event),
         "time":             Utc::now().to_rfc3339(),
         "datacontenttype":  "application/json",
-        "data": {
-            "check":  check,
-            "status": status_str(status),
-            "labels": resolved_json(&cfg.labels),
-            "info":   resolved_json(&cfg.send_info_fields),
-        }
+        "data":             data,
     })
 }
 
-fn format_otlp_logs(check: &str, status: CheckStatus, cfg: &AlertConfig) -> Value {
+fn format_otlp_logs(ev: &AlertEvent, cfg: &AlertConfig) -> Value {
     let time_ns = Utc::now().timestamp_nanos_opt().unwrap_or(0).to_string();
-    let (severity_number, severity_text) = if status == CheckStatus::Down {
+    let (severity_number, severity_text) = if ev.firing {
         (17u32, "ERROR")
     } else {
         (9u32, "INFO")
     };
-    let body = if status == CheckStatus::Down {
-        format!("check {} failed", check)
-    } else {
-        format!("check {} recovered", check)
-    };
 
-    let mut attributes: Vec<Value> = vec![
-        json!({"key": "check.name",   "value": {"stringValue": check}}),
-        json!({"key": "check.status", "value": {"stringValue": status_str(status)}}),
-    ];
+    let attr = |k: &str, v: &str| json!({"key": k, "value": {"stringValue": v}});
+    let mut attributes: Vec<Value> = Vec::new();
+    if let Some(check) = check_name(ev) {
+        attributes.push(attr("check.name", check));
+        attributes.push(attr("check.status", ev.status_str()));
+    }
+    attributes.push(attr("vigil.source", ev.source.as_str()));
+    attributes.push(attr("vigil.name", &ev.name));
+    attributes.push(attr("vigil.event", &ev.event));
     for (k, v) in resolved_map(&cfg.labels) {
-        attributes.push(json!({"key": k, "value": {"stringValue": v}}));
+        attributes.push(attr(&k, &v));
     }
     for (k, v) in resolved_map(&cfg.send_info_fields) {
-        attributes.push(json!({"key": k, "value": {"stringValue": v}}));
+        attributes.push(attr(&k, &v));
     }
 
     json!({
@@ -208,7 +229,7 @@ fn format_otlp_logs(check: &str, status: CheckStatus, cfg: &AlertConfig) -> Valu
                     "timeUnixNano":   time_ns,
                     "severityNumber": severity_number,
                     "severityText":   severity_text,
-                    "body":           {"stringValue": body},
+                    "body":           {"stringValue": ev.message},
                     "attributes":     attributes,
                 }]
             }]

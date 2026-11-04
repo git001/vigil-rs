@@ -84,6 +84,15 @@ pub enum EventKind {
     StatusMessage { message: Option<String> },
     /// The next scheduled run changed (`None`: no schedule armed).
     NextRun { at: Option<DateTime<Utc>> },
+    /// The service failed: `event` is `backoff`, `error` or `failed`
+    /// (alert event names), `message` the detail.
+    Unhealthy {
+        event: &'static str,
+        message: String,
+    },
+    /// The service is healthy again: `active` for `healthy-time`, or a
+    /// oneshot run succeeded.
+    Healthy,
 }
 
 /// How vigild's own exit code is chosen when a policy shuts it down
@@ -179,6 +188,11 @@ pub(super) const DEFAULT_BACKOFF_DELAY: Duration = Duration::from_millis(500);
 pub(super) const DEFAULT_BACKOFF_FACTOR: f64 = 2.0;
 pub(super) const DEFAULT_BACKOFF_LIMIT: Duration = Duration::from_secs(30);
 pub(super) const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(30);
+/// Default `healthy-time`.
+pub const DEFAULT_HEALTHY_TIME: Duration = Duration::from_secs(10);
+/// Bounds of `healthy-time`.
+pub const MIN_HEALTHY_TIME: Duration = Duration::from_secs(1);
+pub const MAX_HEALTHY_TIME: Duration = Duration::from_secs(3600);
 
 #[cfg(test)]
 mod shutdown_code_tests {

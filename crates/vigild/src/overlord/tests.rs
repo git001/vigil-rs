@@ -97,6 +97,7 @@ pub(super) fn make_overlord(
         pending_autostart: Vec::new(),
         exit_code_mode: service::ExitCodeMode::default(),
         notify_dir: std::env::temp_dir(),
+        healthy: Default::default(),
     }
 }
 
@@ -932,4 +933,97 @@ async fn autostart_does_not_rerun_done_oneshot() {
         rx.try_recv().is_err(),
         "done oneshot must not run again on replan"
     );
+}
+
+// ------------------------------------------------------------------
+// Alerts: checks of an unhealthy service stay quiet
+// ------------------------------------------------------------------
+
+fn alerts_fired(ov: &Overlord) -> u64 {
+    ov.metrics
+        .render()
+        .lines()
+        .find(|l| l.starts_with("vigil_alert_fire_count_total{alert=\"ops\"}"))
+        .and_then(|l| l.rsplit(' ').next())
+        .map_or(0, |n| n.parse().unwrap())
+}
+
+async fn svc_event(ov: &mut Overlord, kind: service::EventKind) {
+    ov.handle_svc_event(service::Event {
+        service: "app".into(),
+        kind,
+    })
+    .await;
+}
+
+async fn check_event(ov: &mut Overlord, status: vigil_types::api::CheckStatus) {
+    ov.handle_check_event(crate::check::CheckEvent {
+        check: "web".into(),
+        status,
+        passed_at: None,
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn checks_of_an_unhealthy_service_are_held_back() {
+    use vigil_types::api::CheckStatus;
+    let mut ov = make_overlord(&[("app", &[], &[], &[])], &[("app", ServiceState::Active)]);
+    ov.plan
+        .services
+        .get_mut("app")
+        .unwrap()
+        .on_check_failure
+        .insert("web".into(), vigil_types::plan::OnExit::Ignore);
+    ov.plan.checks.insert("web".into(), Default::default());
+    let alert = vigil_types::plan::AlertConfig {
+        url: "http://127.0.0.1:1/".into(),
+        on_check: vec!["web".into()],
+        on_service: vec!["*".into()],
+        ..Default::default()
+    };
+    ov.alert_sender
+        .update_alerts([("ops".to_string(), alert)].into_iter().collect());
+
+    // Not healthy yet (just started): the failing check is held back.
+    assert!(ov.check_quiet("web"));
+    check_event(&mut ov, CheckStatus::Down).await;
+    assert_eq!(alerts_fired(&ov), 0);
+
+    // Healthy: nothing to resolve for the service, the held check fires.
+    svc_event(&mut ov, service::EventKind::Healthy).await;
+    assert!(!ov.check_quiet("web"));
+    assert_eq!(alerts_fired(&ov), 1);
+
+    // The service crashes (fires), the check recovers meanwhile (held).
+    svc_event(
+        &mut ov,
+        service::EventKind::Unhealthy {
+            event: "backoff",
+            message: "exited with code 3, restarting in 1s".into(),
+        },
+    )
+    .await;
+    assert_eq!(alerts_fired(&ov), 2);
+    check_event(&mut ov, CheckStatus::Up).await;
+    assert_eq!(alerts_fired(&ov), 2);
+
+    // Healthy again: the service alert and the check alert both resolve.
+    svc_event(&mut ov, service::EventKind::Healthy).await;
+    assert_eq!(alerts_fired(&ov), 4);
+}
+
+#[test]
+fn a_check_belongs_to_the_service_it_names() {
+    let mut ov = make_overlord(&[("app", &[], &[], &[])], &[("app", ServiceState::Active)]);
+    let named = vigil_types::plan::CheckConfig {
+        service: Some("app".into()),
+        ..Default::default()
+    };
+    ov.plan.checks.insert("metrics".into(), named);
+    ov.plan.checks.insert("other".into(), Default::default());
+    assert!(ov.check_quiet("metrics"));
+    assert!(!ov.check_quiet("other"), "unrelated checks always alert");
+    ov.healthy.insert("app".into());
+    assert!(!ov.check_quiet("metrics"));
 }

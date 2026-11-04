@@ -44,9 +44,18 @@ pub struct AlertConfig {
     /// Example: `k8s_service: "env:KUBERNETES_SERVICE_NAME"`.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub send_info_fields: IndexMap<String, String>,
-    /// Names of checks whose state changes trigger this alert.
+    /// Names of checks whose state changes trigger this alert. `"*"` means
+    /// every check.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub on_check: Vec<String>,
+    /// Names of services whose failures (and recovery) trigger this alert.
+    /// `"*"` means every service.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub on_service: Vec<String>,
+    /// vigild events that trigger this alert: `layers` (invalid layers
+    /// with `--watch-layers`) or `"*"`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub on_vigild: Vec<String>,
     /// Skip TLS certificate verification (useful for self-signed certs).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub tls_insecure: bool,
@@ -80,13 +89,17 @@ pub struct AlertConfig {
     /// Jinja2-style body template for the `webhook` format.
     ///
     /// When set, the template is rendered and sent as the HTTP body instead of
-    /// the default `{"check": …, "status": …, …}` payload.  The rendered
+    /// the default `{"source": …, "name": …, "status": …, …}` payload.  The rendered
     /// string **must** be valid JSON.  On render or parse errors vigild logs a
     /// warning and falls back to the default webhook payload.
     ///
     /// Available template variables:
-    /// * `check`     — name of the check (string)
+    /// * `source`    — `"check"`, `"service"` or `"vigild"` (string)
+    /// * `name`      — name of the check or service, `"layers"` for vigild
+    /// * `event`     — e.g. `"failed"`, `"backoff"`, `"recovered"` (string)
     /// * `status`    — `"up"` or `"down"` (string)
+    /// * `message`   — detail, e.g. `"exited with code 3, restarting in 2s"`
+    /// * `check`     — name of the check; undefined for other sources
     /// * `timestamp` — RFC 3339 timestamp (string)
     /// * `labels`    — resolved `labels` map (object)
     /// * `info`      — resolved `send_info_fields` map (object)
@@ -167,9 +180,15 @@ pub(super) fn merge_alert(base: &mut AlertConfig, overlay: &AlertConfig) {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone())),
     );
-    for c in &overlay.on_check {
-        if !base.on_check.contains(c) {
-            base.on_check.push(c.clone());
+    for (base, overlay) in [
+        (&mut base.on_check, &overlay.on_check),
+        (&mut base.on_service, &overlay.on_service),
+        (&mut base.on_vigild, &overlay.on_vigild),
+    ] {
+        for c in overlay {
+            if !base.contains(c) {
+                base.push(c.clone());
+            }
         }
     }
 }

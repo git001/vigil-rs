@@ -88,10 +88,7 @@ impl Actor {
             self.transition(ServiceState::Starting).await;
             match self.do_start().await {
                 Ok(()) => *stop_deadline = None,
-                Err(e) => {
-                    error!(service = %self.name, error = %e, "scheduled run failed to start");
-                    self.transition(ServiceState::Error).await;
-                }
+                Err(e) => self.start_failed("scheduled run failed to start", &e).await,
             }
         }
         self.compute_next_run().await;

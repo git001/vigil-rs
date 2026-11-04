@@ -1051,6 +1051,14 @@ async fn ready_timeout_stops_service_and_counts_as_failure() {
         "{seen:?}"
     );
     assert!(
+        seen.iter().any(|k| matches!(
+            k,
+            EventKind::Unhealthy { event: "failed", message }
+                if message == "did not become ready within 200ms, shutting down vigild"
+        )),
+        "{seen:?}"
+    );
+    assert!(
         !seen.iter().any(|k| matches!(
             k,
             EventKind::StateChanged {
@@ -1527,4 +1535,113 @@ async fn template_words_that_render_empty_are_dropped() {
     let (mut actor, _rx) = make_actor_with_config(cfg(true));
     actor.do_start().await.unwrap();
     assert_eq!(wait_for_file(&out).await.trim(), "2:--verbose end");
+}
+
+// ---------------------------------------------------------------------------
+// Health events for alerts
+// ---------------------------------------------------------------------------
+
+/// The next health event (`Unhealthy` or `Healthy`) and the events before it.
+async fn next_health(rx: &mut mpsc::Receiver<Event>) -> (EventKind, Vec<EventKind>) {
+    let mut seen = Vec::new();
+    loop {
+        let ev = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+            .await
+            .expect("timed out waiting for a health event")
+            .expect("actor gone");
+        if matches!(ev.kind, EventKind::Unhealthy { .. } | EventKind::Healthy) {
+            return (ev.kind, seen);
+        }
+        seen.push(ev.kind);
+    }
+}
+
+fn assert_unhealthy(kind: &EventKind, want_event: &str, want_message: &str) {
+    match kind {
+        EventKind::Unhealthy { event, message } => {
+            assert_eq!(*event, want_event);
+            assert!(message.starts_with(want_message), "{message}");
+        }
+        other => panic!("expected Unhealthy, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn crash_loop_reports_backoff_with_the_exit_code() {
+    let (tx, mut rx) = spawn_run(
+        ServiceConfig {
+            command: Some("sh -c 'exit 3'".into()),
+            backoff_delay: Some("1s".into()),
+            ..Default::default()
+        },
+        std::env::temp_dir(),
+    );
+    start(&tx).await;
+    let (ev, _) = next_health(&mut rx).await;
+    assert_unhealthy(&ev, "backoff", "exited with code 3, restarting in 1s");
+    tx.send(Cmd::Shutdown).await.unwrap();
+}
+
+#[tokio::test]
+async fn service_becomes_healthy_after_healthy_time() {
+    let (tx, mut rx) = spawn_run(
+        ServiceConfig {
+            command: Some("sleep 30".into()),
+            healthy_time: Some("1s".into()),
+            ..Default::default()
+        },
+        std::env::temp_dir(),
+    );
+    let started = std::time::Instant::now();
+    start(&tx).await;
+    let (ev, _) = next_health(&mut rx).await;
+    assert!(matches!(ev, EventKind::Healthy), "{ev:?}");
+    assert!(started.elapsed() >= Duration::from_millis(900), "too early");
+    tx.send(Cmd::Shutdown).await.unwrap();
+}
+
+#[tokio::test]
+async fn oneshot_runs_report_healthy_or_failed() {
+    use vigil_types::plan::ServiceType;
+    let oneshot = |command: &str| ServiceConfig {
+        command: Some(command.into()),
+        service_type: Some(ServiceType::Oneshot),
+        ..Default::default()
+    };
+
+    let (tx, mut rx) = spawn_run(oneshot("true"), std::env::temp_dir());
+    start(&tx).await;
+    let (ev, seen) = next_health(&mut rx).await;
+    assert!(matches!(ev, EventKind::Healthy), "{ev:?}");
+    assert!(seen.iter().any(is_state(ServiceState::Done)), "{seen:?}");
+    tx.send(Cmd::Shutdown).await.unwrap();
+
+    // Without a schedule a oneshot restarts on failure (`backoff`); with
+    // `on-failure: ignore` (the default of cron jobs) the run just failed.
+    let failing = ServiceConfig {
+        on_failure: Some(vigil_types::plan::OnExit::Ignore),
+        ..oneshot("sh -c 'exit 2'")
+    };
+    let (tx, mut rx) = spawn_run(failing, std::env::temp_dir());
+    start(&tx).await;
+    let (ev, _) = next_health(&mut rx).await;
+    assert_unhealthy(&ev, "failed", "exited with code 2");
+    tx.send(Cmd::Shutdown).await.unwrap();
+}
+
+#[tokio::test]
+async fn failed_start_reports_error() {
+    let (tx, mut rx) = spawn_run(
+        ServiceConfig {
+            command: Some("/nonexistent/vigil-test-binary".into()),
+            ..Default::default()
+        },
+        std::env::temp_dir(),
+    );
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    tx.send(Cmd::Start(reply_tx)).await.unwrap();
+    assert!(reply_rx.await.unwrap().is_err());
+    let (ev, _) = next_health(&mut rx).await;
+    assert_unhealthy(&ev, "error", "failed to start: ");
+    tx.send(Cmd::Shutdown).await.unwrap();
 }

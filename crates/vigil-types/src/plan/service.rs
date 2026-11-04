@@ -232,6 +232,11 @@ pub struct ServiceConfig {
     /// the service is stopped. Default `30s`; `0s` waits forever.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ready_timeout: Option<String>,
+    /// How long the service must stay `active` before it counts as healthy
+    /// again: a service alert resolves and the checks of the service may
+    /// alert again. Default `10s`, allowed `1s` to `1h`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub healthy_time: Option<String>,
     /// Exit codes that count as success (after `exit-code-map`).
     /// Default (empty): `[0]`. A signal counts as code `128 + signal`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -338,6 +343,7 @@ pub(super) fn merge_service(base: &mut ServiceConfig, overlay: &ServiceConfig) {
     opt!(ready);
     opt!(ready_check);
     opt!(ready_timeout);
+    opt!(healthy_time);
     if let Some(o) = &overlay.watch_files {
         let w = base.watch_files.get_or_insert_with(WatchFiles::default);
         if o.on_change.is_some() {

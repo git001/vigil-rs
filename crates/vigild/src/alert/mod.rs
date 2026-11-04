@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 vigil-rs contributors
 
-//! Alert routing — fires HTTP(S) notifications on check state transitions.
+//! Alert routing — fires HTTP(S) notifications for events of checks,
+//! services and vigild itself (see [`AlertEvent`]).
 //!
 //! Supported formats: webhook (generic JSON), Alertmanager, CloudEvents 1.0,
 //! OTLP HTTP/JSON logs.
@@ -15,7 +16,8 @@
 //!   prod:
 //!     url: http://alertmanager:9093/api/v2/alerts
 //!     format: alertmanager
-//!     on_check: [website]
+//!     on-check: [website]
+//!     on-service: ["*"]
 //!     labels:
 //!       cluster: "env:CLUSTER_NAME"
 //!     send_info_fields:
@@ -23,11 +25,13 @@
 //! ```
 
 mod delivery;
+mod event;
 mod format;
 #[cfg(test)]
 mod tests;
 
 pub use self::delivery::{DEFAULT_DELIVERY_AGE, DEFAULT_DELIVERY_QUEUE};
+pub use self::event::{AlertEvent, AlertSource};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -42,7 +46,7 @@ use vigil_types::api::CheckStatus;
 use vigil_types::plan::AlertConfig;
 
 use self::delivery::{DeliveryJob, build_client, delivery_worker, warn_unset_env_vars};
-use self::format::{format_payload, status_str};
+use self::format::format_payload;
 
 // ---------------------------------------------------------------------------
 // Per-alert entry (config + dedicated reqwest client for TLS options)
@@ -58,17 +62,19 @@ struct AlertEntry {
 // AlertSender
 // ---------------------------------------------------------------------------
 
-/// Routes check state-change events to configured alert endpoints.
+/// Routes alert events to the configured alert endpoints.
 ///
-/// Deduplicates: only fires when the check status actually changes
-/// (Up → Down = firing, Down → Up = resolved).
+/// Deduplicates per `(source, name)`: a firing event is sent when it differs
+/// from the last one sent, a resolved event only after a firing one.
 ///
 /// HTTP delivery is handled by a background worker task so that the caller
 /// (the Overlord event loop) is never blocked by retries or slow endpoints.
 pub struct AlertSender {
     alerts: Vec<AlertEntry>,
-    /// Last known status per check name.
-    state: HashMap<String, CheckStatus>,
+    /// Last known status per check name (sent or not).
+    observed: HashMap<String, CheckStatus>,
+    /// Last firing event sent per `(source, name)`; absent = nothing open.
+    open: HashMap<(AlertSource, String), String>,
     /// Sends delivery jobs to the background worker.
     delivery_tx: mpsc::Sender<DeliveryJob>,
     /// Held until `spawn_worker()` is called; `None` afterwards.
@@ -99,7 +105,8 @@ impl AlertSender {
         let (delivery_tx, delivery_rx) = mpsc::channel(queue_depth);
         Self {
             alerts: Vec::new(),
-            state: HashMap::new(),
+            observed: HashMap::new(),
+            open: HashMap::new(),
             delivery_tx,
             delivery_rx: Some(delivery_rx),
             max_age_secs: Arc::new(AtomicU64::new(max_age.as_secs())),
@@ -152,39 +159,59 @@ impl AlertSender {
 
     /// Return the last observed status for `check`, if any.
     pub fn check_status(&self, check: &str) -> Option<CheckStatus> {
-        self.state.get(check).copied()
+        self.observed.get(check).copied()
     }
 
-    /// Process a check status event. Sends only on status transitions.
+    /// Record a check status and report it (on a change).
     ///
-    /// "Recovered" alerts (Up) are only sent if a prior Down was observed —
-    /// this prevents a spurious recovery notification on the very first check.
-    ///
-    /// HTTP delivery is enqueued to a background worker and returns immediately.
-    ///
-    /// Returns the names of alerts that actually fired (for metrics accounting).
+    /// Returns the names of alerts that fired (for metrics accounting).
     pub fn handle_check_event(&mut self, check: &str, status: CheckStatus) -> Vec<String> {
-        let prev = self.state.get(check).copied();
-        if prev == Some(status) {
-            return vec![]; // no change — suppress
+        self.observed.insert(check.to_owned(), status);
+        self.send(AlertEvent::check(check, status))
+    }
+
+    /// Only record a check status: the check belongs to a service that is
+    /// not healthy. [`Self::recheck`] reports it once the service is.
+    pub fn hold_check_event(&mut self, check: &str, status: CheckStatus) {
+        self.observed.insert(check.to_owned(), status);
+    }
+
+    /// Report the current status of `check` (after its service became
+    /// healthy): a down check that was held back fires now, one that
+    /// recovered meanwhile ends an alert sent before, if any.
+    pub fn recheck(&mut self, check: &str) -> Vec<String> {
+        match self.observed.get(check).copied() {
+            Some(status) => self.send(AlertEvent::check(check, status)),
+            None => vec![],
         }
-        // Suppress Up alerts that have no prior Down (first check result is Up).
-        if status == CheckStatus::Up && prev.is_none() {
-            self.state.insert(check.to_owned(), status);
-            return vec![];
+    }
+
+    /// Deduplicate `ev` and enqueue it for every alert subscribed to its
+    /// source and name. HTTP delivery runs in a background worker.
+    ///
+    /// Returns the names of alerts that fired (for metrics accounting).
+    pub fn send(&mut self, ev: AlertEvent) -> Vec<String> {
+        let key = (ev.source, ev.name.clone());
+        if ev.firing {
+            if self.open.get(&key) == Some(&ev.event) {
+                return vec![]; // the same problem again
+            }
+            self.open.insert(key, ev.event.clone());
+        } else if self.open.remove(&key).is_none() {
+            return vec![]; // nothing was reported, nothing to resolve
         }
-        self.state.insert(check.to_owned(), status);
 
         let mut fired = Vec::new();
         for entry in &self.alerts {
-            if !entry.config.on_check.iter().any(|c| c == check) {
+            if !subscribed(&entry.config, &ev) {
                 continue;
             }
-            let body = format_payload(check, status, &entry.config);
+            let body = format_payload(&ev, &entry.config);
             debug!(
                 alert_url = %entry.config.url,
-                check = %check,
-                status = %status_str(status),
+                source = ev.source.as_str(),
+                name = %ev.name,
+                event = %ev.event,
                 "sending alert"
             );
             if self
@@ -198,7 +225,8 @@ impl AlertSender {
                 .is_err()
             {
                 warn!(
-                    check = %check,
+                    source = ev.source.as_str(),
+                    name = %ev.name,
                     queue_depth = self.queue_depth,
                     "alert delivery queue full — dropping job"
                 );
@@ -208,4 +236,14 @@ impl AlertSender {
         }
         fired
     }
+}
+
+/// Whether `cfg` subscribes to events of `ev`'s source and name.
+fn subscribed(cfg: &AlertConfig, ev: &AlertEvent) -> bool {
+    let names = match ev.source {
+        AlertSource::Check => &cfg.on_check,
+        AlertSource::Service => &cfg.on_service,
+        AlertSource::Vigild => &cfg.on_vigild,
+    };
+    names.iter().any(|n| n == "*" || *n == ev.name)
 }

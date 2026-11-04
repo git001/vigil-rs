@@ -118,6 +118,12 @@ pub struct CheckConfig {
     pub timeout: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub threshold: Option<u32>,
+    /// Service this check tests. While the service is not healthy the
+    /// check sends no alerts (the service alert already says what is
+    /// wrong). Only needed when the service does not name the check in
+    /// `ready-check` or `on-check-failure`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub http: Option<HttpCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -156,6 +162,7 @@ pub(super) fn merge_check(base: &mut CheckConfig, overlay: &CheckConfig) {
     opt!(period);
     opt!(timeout);
     opt!(threshold);
+    opt!(service);
     opt!(http);
     opt!(tcp);
     opt!(exec);

@@ -264,6 +264,7 @@ impl Overlord {
             .cloned()
             .collect();
         for name in removed_svcs {
+            self.healthy.remove(&name);
             if let Some(e) = self.services.shift_remove(&name) {
                 let _ = e.handle.tx.send(SvcCmd::Shutdown).await;
             }

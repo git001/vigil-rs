@@ -21,6 +21,7 @@ use super::{Cmd, Context, DEFAULT_BACKOFF_DELAY, Event, EventKind, ExitCodeMode,
 
 mod backoff;
 mod handlers;
+mod health;
 mod oneshot;
 mod ready;
 mod signals;
@@ -79,6 +80,8 @@ pub(super) struct Actor {
     watch: Option<crate::service::watch::FileWatch>,
     /// Next poll of `watch`.
     watch_deadline: Option<tokio::time::Instant>,
+    /// When the current `active` period counts as healthy (`healthy-time`).
+    healthy_deadline: Option<tokio::time::Instant>,
 }
 
 impl Actor {
@@ -114,6 +117,7 @@ impl Actor {
             ready_deadline: None,
             watch: None,
             watch_deadline: None,
+            healthy_deadline: None,
             ready_failed: false,
             status_message: None,
             schedule: None,
@@ -140,6 +144,7 @@ impl Actor {
         debug!(service = %self.name, ?new_state, "state transition");
         self.state = new_state;
         self.since = Utc::now();
+        self.arm_healthy_deadline();
         self.metrics
             .set_service_active(&self.name, new_state == ServiceState::Active);
         self.metrics.set_service_running(
@@ -200,6 +205,7 @@ pub(super) async fn run(
     loop {
         let ready_deadline = actor.ready_deadline;
         let watch_deadline = actor.watch_deadline;
+        let healthy_deadline = actor.healthy_deadline;
         let next_run = actor.next_run_deadline();
         tokio::select! {
             biased;
@@ -280,6 +286,15 @@ pub(super) async fn run(
                 }
             }, if watch_deadline.is_some() => {
                 actor.handle_watch_tick(&mut backoff_sleep, &mut stop_deadline, &mut pending_restart).await;
+            }
+
+            _ = async {
+                match healthy_deadline {
+                    Some(d) => tokio::time::sleep_until(d).await,
+                    None => std::future::pending().await,
+                }
+            }, if healthy_deadline.is_some() => {
+                actor.report_healthy().await;
             }
 
             _ = async {

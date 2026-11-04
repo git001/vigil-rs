@@ -9,13 +9,15 @@ use vigil_types::api::CheckStatus;
 use vigil_types::plan::{AlertConfig, AlertFormat};
 
 use super::delivery::DEFAULT_DELIVERY_AGE;
-use super::{AlertEntry, AlertSender};
+use super::{AlertEntry, AlertEvent, AlertSender, AlertSource};
 
 fn empty_cfg() -> AlertConfig {
     AlertConfig {
         url: "http://example.com".into(),
         format: AlertFormat::Webhook,
         on_check: vec![],
+        on_service: vec![],
+        on_vigild: vec![],
         headers: IndexMap::new(),
         labels: IndexMap::new(),
         send_info_fields: IndexMap::new(),
@@ -128,4 +130,74 @@ fn update_queue_limits_same_depth_no_channel_replace() {
 #[test]
 fn default_delivery_age_is_60s() {
     assert_eq!(DEFAULT_DELIVERY_AGE.as_secs(), 60);
+}
+
+// -----------------------------------------------------------------------
+// Events of every source
+// -----------------------------------------------------------------------
+
+fn sender_with(cfg: AlertConfig) -> AlertSender {
+    let mut sender = AlertSender::new();
+    sender.alerts = vec![AlertEntry {
+        name: "ops".to_owned(),
+        config: cfg,
+        client: reqwest::Client::new(),
+    }];
+    sender
+}
+
+fn service_event(event: &str) -> AlertEvent {
+    AlertEvent::firing(AlertSource::Service, "app", event, "exited with code 3")
+}
+
+#[tokio::test]
+async fn service_events_are_deduplicated_per_event() {
+    let mut cfg = empty_cfg();
+    cfg.on_service = vec!["*".into()];
+    let mut s = sender_with(cfg);
+    let resolved = || AlertEvent::resolved(AlertSource::Service, "app", "healthy again");
+
+    assert!(s.send(resolved()).is_empty(), "nothing to resolve yet");
+    assert_eq!(s.send(service_event("backoff")), ["ops"]);
+    assert!(
+        s.send(service_event("backoff")).is_empty(),
+        "crash loop: once"
+    );
+    assert_eq!(s.send(service_event("error")), ["ops"], "giving up is new");
+    assert_eq!(s.send(resolved()), ["ops"]);
+    assert!(s.send(resolved()).is_empty());
+}
+
+#[tokio::test]
+async fn sources_are_independent_and_need_a_subscription() {
+    let mut cfg = empty_cfg();
+    cfg.on_check = vec!["app".into()];
+    cfg.on_vigild = vec!["layers".into()];
+    let mut s = sender_with(cfg);
+
+    // Subscribed to the check "app", not to the service "app".
+    assert!(s.send(service_event("backoff")).is_empty());
+    assert_eq!(s.handle_check_event("app", CheckStatus::Down), ["ops"]);
+    let layers = AlertEvent::firing(AlertSource::Vigild, "layers", "invalid", "bad yaml");
+    assert_eq!(s.send(layers), ["ops"]);
+}
+
+#[tokio::test]
+async fn held_check_events_are_reported_by_recheck() {
+    let mut s = make_sender("web");
+
+    // Held down, then reported: fires.
+    s.hold_check_event("web", CheckStatus::Down);
+    assert_eq!(s.check_status("web"), Some(CheckStatus::Down));
+    assert_eq!(s.recheck("web"), ["web"]);
+
+    // Held up after a reported down: the recheck resolves it.
+    s.hold_check_event("web", CheckStatus::Up);
+    assert_eq!(s.recheck("web"), ["web"]);
+
+    // Down and up again while held: nothing to report.
+    s.hold_check_event("web", CheckStatus::Down);
+    s.hold_check_event("web", CheckStatus::Up);
+    assert!(s.recheck("web").is_empty());
+    assert!(s.recheck("never-seen").is_empty());
 }

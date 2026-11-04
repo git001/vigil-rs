@@ -56,9 +56,16 @@ fn validate(plan: &Plan) -> anyhow::Result<()> {
         validate_oneshot(svc).with_context(|| format!("service {name:?}"))?;
         crate::template::check_service(svc).with_context(|| format!("service {name:?}"))?;
         validate_watch_files(svc).with_context(|| format!("service {name:?}"))?;
+        validate_healthy_time(svc).with_context(|| format!("service {name:?}"))?;
     }
     for (name, check) in &plan.checks {
         crate::check::validate_period(check).with_context(|| format!("check {name:?}"))?;
+        if let Some(s) = &check.service {
+            anyhow::ensure!(
+                plan.services.contains_key(s),
+                "check {name:?}: service {s:?} is not defined"
+            );
+        }
         if let Some(exec) = &check.exec {
             let ctx = exec
                 .service_context
@@ -68,6 +75,31 @@ fn validate(plan: &Plan) -> anyhow::Result<()> {
             crate::template::check_exec_environment(&exec.environment)
                 .with_context(|| format!("check {name:?}"))?;
         }
+    }
+    for (name, alert) in &plan.alerts {
+        for v in &alert.on_vigild {
+            anyhow::ensure!(
+                VIGILD_ALERT_EVENTS.contains(&v.as_str()) || v == "*",
+                "alert {name:?}: unknown on-vigild entry {v:?} (expected {})",
+                VIGILD_ALERT_EVENTS.join(", ")
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Names `on-vigild` accepts (besides `"*"`).
+const VIGILD_ALERT_EVENTS: &[&str] = &["layers"];
+
+fn validate_healthy_time(svc: &vigil_types::plan::ServiceConfig) -> anyhow::Result<()> {
+    use crate::service::{MAX_HEALTHY_TIME, MIN_HEALTHY_TIME};
+    if let Some(s) = &svc.healthy_time {
+        let d = crate::duration::parse_duration(s)
+            .map_err(|e| anyhow::anyhow!("invalid healthy-time {s:?}: {e}"))?;
+        anyhow::ensure!(
+            (MIN_HEALTHY_TIME..=MAX_HEALTHY_TIME).contains(&d),
+            "healthy-time {s:?} must be between 1s and 1h"
+        );
     }
     Ok(())
 }
@@ -510,6 +542,52 @@ mod tests {
             "services:\n  web:\n    command: app --port {{ env.PORT }}\n    environment:\n      PW: \"{{ file('/run/secrets/pw') }}\"\n",
         );
         load_plan(dir.path()).unwrap();
+    }
+
+    #[test]
+    fn alert_sources_are_validated() {
+        let cases = [
+            (
+                "services:\n  s:\n    command: 'true'\n    healthy-time: 500ms\n",
+                Some("must be between 1s and 1h"),
+            ),
+            (
+                "services:\n  s:\n    command: 'true'\n    healthy-time: 2h\n",
+                Some("must be between 1s and 1h"),
+            ),
+            (
+                "services:\n  s:\n    command: 'true'\n    healthy-time: 1m\n",
+                None,
+            ),
+            (
+                "checks:\n  c:\n    service: nope\n    exec:\n      command: 'true'\n",
+                Some("service \"nope\" is not defined"),
+            ),
+            (
+                "services:\n  s:\n    command: 'true'\nchecks:\n  c:\n    service: s\n    exec:\n      command: 'true'\n",
+                None,
+            ),
+            (
+                "alerts:\n  a:\n    url: http://127.0.0.1/\n    on-vigild: [layer]\n",
+                Some("unknown on-vigild entry \"layer\""),
+            ),
+            (
+                "alerts:\n  a:\n    url: http://127.0.0.1/\n    on-vigild: [layers]\n    on-service: ['*']\n",
+                None,
+            ),
+        ];
+        for (yaml, want) in cases {
+            let dir = TempDir::new().unwrap();
+            write(&dir, "001.yaml", yaml);
+            match (load_plan(dir.path()), want) {
+                (Ok(_), None) => {}
+                (Err(e), Some(w)) => {
+                    let e = format!("{e:#}");
+                    assert!(e.contains(w), "{yaml}: {e}");
+                }
+                (r, w) => panic!("{yaml}: got {:?}, want {w:?}", r.map(|_| ())),
+            }
+        }
     }
 
     #[test]
