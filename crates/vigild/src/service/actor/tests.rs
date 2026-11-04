@@ -1149,7 +1149,7 @@ async fn scheduled_oneshot_failure_is_ignored_by_default() {
 async fn schedule_runs_job_and_skips_overlapping_runs() {
     let mut cfg = oneshot("sleep 2.5");
     cfg.schedule = Some("* * * * * *".into()); // every second
-    cfg.startup = vigil_types::plan::Startup::Enabled;
+    cfg.startup = Some(vigil_types::plan::Startup::Enabled);
     let (tx, mut rx) = spawn_run(cfg, std::env::temp_dir());
 
     // Armed at actor start without any Start command.
@@ -1192,7 +1192,7 @@ async fn update_config_applies_and_rearms_schedule() {
 
     let mut cfg = oneshot("false");
     cfg.schedule = Some("0 3 * * *".into());
-    cfg.startup = vigil_types::plan::Startup::Enabled;
+    cfg.startup = Some(vigil_types::plan::Startup::Enabled);
     actor.handle_update_config(cfg).await;
     assert_eq!(actor.config.command.as_deref(), Some("false"));
     assert!(actor.next_run.is_some());

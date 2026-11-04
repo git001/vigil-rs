@@ -654,7 +654,7 @@ layers.
 
 | Value | Behaviour |
 |---|---|
-| `merge` | Fields from this layer override individual fields in earlier layers. Lists (`after`, `before`, `requires`, `environment`) are merged. **Default.** |
+| `merge` | Fields set in this layer override the same fields of earlier layers; fields this layer does not set keep their earlier value (also `startup`, and `level`/`startup` of checks). Lists (`after`, `before`, `requires`, `environment`) are merged. **Default.** |
 | `replace` | This definition completely replaces the earlier one. |
 
 ---

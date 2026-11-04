@@ -73,7 +73,7 @@ pub(super) async fn run(
                     Some(Cmd::GetStatus(reply)) => {
                         let _ = reply.send(CheckInfo {
                             name: name.clone(),
-                            level: config.level,
+                            level: config.level(),
                             status: CheckStatus::Up,
                             failures: 0,
                             threshold: config.threshold.unwrap_or(DEFAULT_THRESHOLD),
@@ -109,7 +109,7 @@ pub(super) async fn run(
                         .map(|d| d.as_secs());
                     let _ = reply.send(CheckInfo {
                         name: name.clone(),
-                        level: config.level,
+                        level: config.level(),
                         status,
                         failures,
                         threshold,

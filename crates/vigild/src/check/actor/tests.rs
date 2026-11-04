@@ -88,7 +88,7 @@ async fn get_status_during_delay_returns_up_zero_failures() {
 async fn shutdown_during_delay_exits_cleanly() {
     let config = CheckConfig {
         delay: Some("5s".to_string()),
-        startup: Startup::Enabled,
+        startup: Some(Startup::Enabled),
         exec: Some(ExecCheck {
             command: "true".to_string(),
             ..Default::default()

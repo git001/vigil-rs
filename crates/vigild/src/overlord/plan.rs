@@ -113,7 +113,7 @@ fn validate_ready(plan: &Plan, svc: &vigil_types::plan::ServiceConfig) -> anyhow
                 .get(c)
                 .with_context(|| format!("ready-check {c:?} is not a defined check"))?;
             anyhow::ensure!(
-                check.startup != Startup::Disabled,
+                check.startup() != Startup::Disabled,
                 "ready-check {c:?} has startup: disabled and would never run"
             );
         }

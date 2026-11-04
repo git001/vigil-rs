@@ -272,19 +272,32 @@ fn alertformat_all_variants_deserialize() {
 #[test]
 fn startup_enabled_propagates() {
     let mut s = svc("/bin/app");
-    s.startup = Startup::Enabled;
+    s.startup = Some(Startup::Enabled);
     let plan = Plan::from_layers(vec![layer([("app", s)])]);
-    assert_eq!(plan.services["app"].startup, Startup::Enabled);
+    assert_eq!(plan.services["app"].startup(), Startup::Enabled);
 }
 
 #[test]
 fn startup_can_be_overridden_to_disabled() {
     let mut s1 = svc("/bin/app");
-    s1.startup = Startup::Enabled;
+    s1.startup = Some(Startup::Enabled);
     let mut s2 = svc("/bin/app");
-    s2.startup = Startup::Disabled;
+    s2.startup = Some(Startup::Disabled);
     let plan = Plan::from_layers(vec![layer([("app", s1)]), layer([("app", s2)])]);
-    assert_eq!(plan.services["app"].startup, Startup::Disabled);
+    assert_eq!(plan.services["app"].startup(), Startup::Disabled);
+}
+
+/// A layer that does not mention `startup` must not reset it (pebble
+/// semantics); before v4 it silently became `disabled`.
+#[test]
+fn startup_is_kept_when_a_later_layer_does_not_set_it() {
+    let mut s1 = svc("/bin/app");
+    s1.startup = Some(Startup::Enabled);
+    let mut s2 = svc("/bin/app");
+    s2.environment.insert("X".into(), "1".into());
+    let plan = Plan::from_layers(vec![layer([("app", s1)]), layer([("app", s2)])]);
+    assert_eq!(plan.services["app"].startup(), Startup::Enabled);
+    assert_eq!(plan.services["app"].environment["X"], "1");
 }
 
 // --- check layer merging ---

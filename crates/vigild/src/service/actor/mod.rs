@@ -119,7 +119,7 @@ impl Actor {
             name: self.name.clone(),
             state: self.state,
             since: self.since,
-            startup: self.config.startup,
+            startup: self.config.startup(),
             pid: self.child.as_ref().and_then(|c| c.id()),
             last_exit: self.last_exit,
             status_message: self.status_message.clone(),

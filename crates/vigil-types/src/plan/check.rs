@@ -100,10 +100,13 @@ pub struct ExecCheck {
 pub struct CheckConfig {
     #[serde(default)]
     pub override_mode: Override,
-    #[serde(default)]
-    pub level: CheckLevel,
-    #[serde(default)]
-    pub startup: Startup,
+    /// `None`: not set in this layer (a merge keeps the earlier value);
+    /// read it with [`CheckConfig::level`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<CheckLevel>,
+    /// `None`: not set in this layer; read it with [`CheckConfig::startup`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub startup: Option<Startup>,
     /// Initial delay before the first check is performed (vigil extension).
     /// Useful to avoid false failures while a service is still starting up.
     /// Example: "5s", "500ms". Default: no delay (first check runs immediately).
@@ -125,10 +128,19 @@ pub struct CheckConfig {
 
 use super::service::Startup;
 
-pub(super) fn merge_check(base: &mut CheckConfig, overlay: &CheckConfig) {
-    base.level = overlay.level;
-    base.startup = overlay.startup;
+impl CheckConfig {
+    /// Effective `level` (default `alive`).
+    pub fn level(&self) -> CheckLevel {
+        self.level.unwrap_or_default()
+    }
 
+    /// Effective `startup` (default `disabled`).
+    pub fn startup(&self) -> Startup {
+        self.startup.unwrap_or_default()
+    }
+}
+
+pub(super) fn merge_check(base: &mut CheckConfig, overlay: &CheckConfig) {
     macro_rules! opt {
         ($f:ident) => {
             if overlay.$f.is_some() {
@@ -136,6 +148,9 @@ pub(super) fn merge_check(base: &mut CheckConfig, overlay: &CheckConfig) {
             }
         };
     }
+
+    opt!(level);
+    opt!(startup);
 
     opt!(delay);
     opt!(period);
@@ -168,17 +183,28 @@ mod tests {
     }
 
     #[test]
-    fn merge_check_level_and_startup_always_overwritten() {
+    fn merge_check_level_and_startup_overwritten_when_set() {
         let mut b = base();
-        b.level = CheckLevel::Alive;
+        b.level = Some(CheckLevel::Alive);
+        b.startup = Some(Startup::Enabled);
         let overlay = CheckConfig {
-            level: CheckLevel::Ready,
-            startup: Startup::Disabled,
+            level: Some(CheckLevel::Ready),
+            startup: Some(Startup::Disabled),
             ..Default::default()
         };
         merge_check(&mut b, &overlay);
-        assert_eq!(b.level, CheckLevel::Ready);
-        assert_eq!(b.startup, Startup::Disabled);
+        assert_eq!(b.level(), CheckLevel::Ready);
+        assert_eq!(b.startup(), Startup::Disabled);
+    }
+
+    #[test]
+    fn merge_check_keeps_level_and_startup_when_not_set() {
+        let mut b = base();
+        b.level = Some(CheckLevel::Ready);
+        b.startup = Some(Startup::Enabled);
+        merge_check(&mut b, &CheckConfig::default());
+        assert_eq!(b.level(), CheckLevel::Ready);
+        assert_eq!(b.startup(), Startup::Enabled);
     }
 
     #[test]

@@ -22,7 +22,7 @@ impl Overlord {
         for (name, config) in &self.plan.services {
             if let Some(entry) = self.services.get_mut(name) {
                 // Existing actor: hand over the (possibly changed) config.
-                entry.snapshot.startup = config.startup;
+                entry.snapshot.startup = config.startup();
                 if entry
                     .handle
                     .tx
@@ -48,7 +48,7 @@ impl Overlord {
                 name: name.clone(),
                 state: ServiceState::Inactive,
                 since: Utc::now(),
-                startup: config.startup,
+                startup: config.startup(),
                 pid: None,
                 last_exit: None,
                 status_message: None,
@@ -70,7 +70,7 @@ impl Overlord {
         // Checks with startup: disabled are not auto-started.
         let svc_configs = Arc::new(self.plan.services.clone());
         for (name, config) in &self.plan.checks {
-            if config.startup == Startup::Disabled {
+            if config.startup() == Startup::Disabled {
                 continue;
             }
             // Restart check actor if config changed since last (re)plan.
@@ -112,7 +112,7 @@ impl Overlord {
             .services
             .iter()
             // Scheduled jobs are started by their schedule, not at startup.
-            .filter(|(_, c)| c.startup == Startup::Enabled && c.schedule.is_none())
+            .filter(|(_, c)| c.startup() == Startup::Enabled && c.schedule.is_none())
             // A finished oneshot is not run again by a replan.
             .filter(|(n, _)| {
                 self.services

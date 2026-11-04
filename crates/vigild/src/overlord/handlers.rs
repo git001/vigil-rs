@@ -86,7 +86,7 @@ impl Overlord {
                 ServiceAction::Restart => self.svc_cmd(name, SvcCmd::Restart).await,
                 ServiceAction::Autostart => {
                     if let Some(svc) = self.plan.services.get_mut(name) {
-                        svc.startup = Startup::Enabled;
+                        svc.startup = Some(Startup::Enabled);
                     }
                     self.svc_cmd(name, SvcCmd::Start).await
                 }

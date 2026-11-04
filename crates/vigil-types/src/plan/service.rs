@@ -107,8 +107,10 @@ pub struct ServiceConfig {
     /// Needs the system time zone database (`tzdata`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schedule_tz: Option<String>,
-    #[serde(default)]
-    pub startup: Startup,
+    /// `None`: not set in this layer (a merge keeps the earlier value);
+    /// read it with [`ServiceConfig::startup`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub startup: Option<Startup>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub after: Vec<String>,
     /// Syntactic sugar for `after` from the reverse direction.
@@ -201,6 +203,13 @@ pub struct ServiceConfig {
     pub logs_push_format: Option<LogsPushFormat>,
 }
 
+impl ServiceConfig {
+    /// Effective `startup` (default `disabled`).
+    pub fn startup(&self) -> Startup {
+        self.startup.unwrap_or_default()
+    }
+}
+
 pub(super) fn merge_service(base: &mut ServiceConfig, overlay: &ServiceConfig) {
     macro_rules! opt {
         ($f:ident) => {
@@ -216,7 +225,7 @@ pub(super) fn merge_service(base: &mut ServiceConfig, overlay: &ServiceConfig) {
     opt!(service_type);
     opt!(schedule);
     opt!(schedule_tz);
-    base.startup = overlay.startup;
+    opt!(startup);
     for v in &overlay.after {
         if !base.after.contains(v) {
             base.after.push(v.clone());

@@ -24,7 +24,7 @@ impl Actor {
     /// (Re)compute the schedule from the config. Armed only for
     /// `startup: enabled`; reports the next run to the Overlord.
     pub(super) async fn arm_schedule(&mut self) {
-        let armed = match (&self.config.schedule, self.config.startup) {
+        let armed = match (&self.config.schedule, self.config.startup()) {
             (Some(pattern), Startup::Enabled) => {
                 match Schedule::parse(pattern, self.config.schedule_tz.as_deref()) {
                     Ok(s) => Some(s),

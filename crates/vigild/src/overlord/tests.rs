@@ -894,7 +894,7 @@ fn done_oneshot_unblocks_dependents() {
 #[tokio::test]
 async fn autostart_skips_scheduled_jobs() {
     let mut ov = make_overlord(&[("job", &[], &[], &[])], &[]);
-    ov.plan.services.get_mut("job").unwrap().startup = Startup::Enabled;
+    ov.plan.services.get_mut("job").unwrap().startup = Some(Startup::Enabled);
     ov.plan.services.get_mut("job").unwrap().schedule = Some("0 3 * * *".into());
     let (tx, mut rx) = mpsc::channel(4);
     ov.services.get_mut("job").unwrap().handle = service::Handle { tx };
@@ -924,7 +924,7 @@ async fn autostart_does_not_rerun_done_oneshot() {
         &[("migrate", &[], &[], &[])],
         &[("migrate", ServiceState::Done)],
     );
-    ov.plan.services.get_mut("migrate").unwrap().startup = Startup::Enabled;
+    ov.plan.services.get_mut("migrate").unwrap().startup = Some(Startup::Enabled);
     let (tx, mut rx) = mpsc::channel(4);
     ov.services.get_mut("migrate").unwrap().handle = service::Handle { tx };
     ov.autostart().await;
