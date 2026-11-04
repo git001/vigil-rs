@@ -220,11 +220,14 @@ async fn tcp_check_success() {
 
 #[tokio::test]
 async fn tcp_check_connection_refused() {
-    let port = {
-        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        l.local_addr().unwrap().port()
-    };
+    // Bound but never listening: the port stays reserved for this test (no
+    // other test can grab it, unlike a listener that is dropped again), and
+    // a connect to it is refused.
+    let sock = tokio::net::TcpSocket::new_v4().unwrap();
+    sock.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let port = sock.local_addr().unwrap().port();
     assert!(!probe_tcp("127.0.0.1", port, Duration::from_millis(500)).await);
+    drop(sock);
 }
 
 // ------------------------------------------------------------------
