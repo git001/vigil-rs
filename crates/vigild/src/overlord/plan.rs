@@ -55,6 +55,7 @@ fn validate(plan: &Plan) -> anyhow::Result<()> {
         validate_ready(plan, svc).with_context(|| format!("service {name:?}"))?;
         validate_oneshot(svc).with_context(|| format!("service {name:?}"))?;
         crate::template::check_service(svc).with_context(|| format!("service {name:?}"))?;
+        validate_watch_files(svc).with_context(|| format!("service {name:?}"))?;
     }
     for (name, check) in &plan.checks {
         if let Some(exec) = &check.exec {
@@ -66,6 +67,32 @@ fn validate(plan: &Plan) -> anyhow::Result<()> {
             crate::template::check_exec_environment(&exec.environment)
                 .with_context(|| format!("check {name:?}"))?;
         }
+    }
+    Ok(())
+}
+
+fn validate_watch_files(svc: &vigil_types::plan::ServiceConfig) -> anyhow::Result<()> {
+    let Some(w) = &svc.watch_files else {
+        return Ok(());
+    };
+    anyhow::ensure!(
+        svc.service_type != Some(vigil_types::plan::ServiceType::Oneshot),
+        "watch-files does not apply to type: oneshot (every run reads its files anew)"
+    );
+    if let Some(i) = &w.interval {
+        use crate::service::watch::{MAX_WATCH_INTERVAL, MIN_WATCH_INTERVAL};
+        let d = crate::duration::parse_duration(i)
+            .map_err(|e| anyhow::anyhow!("invalid watch-files interval {i:?}: {e}"))?;
+        anyhow::ensure!(
+            (MIN_WATCH_INTERVAL..=MAX_WATCH_INTERVAL).contains(&d),
+            "watch-files interval {i:?} must be between 1s and 24h"
+        );
+    }
+    for p in w.paths.iter().flatten() {
+        anyhow::ensure!(
+            p.starts_with('/'),
+            "watch-files path {p:?} must be absolute"
+        );
     }
     Ok(())
 }
@@ -482,6 +509,50 @@ mod tests {
             "services:\n  web:\n    command: app --port {{ env.PORT }}\n    environment:\n      PW: \"{{ file('/run/secrets/pw') }}\"\n",
         );
         load_plan(dir.path()).unwrap();
+    }
+
+    #[test]
+    fn watch_files_is_validated() {
+        let cases = [
+            ("    watch-files: {on-change: reload}\n", "expected restart"),
+            (
+                "    watch-files: {on-change: 'signal:SIGNOPE'}\n",
+                "unknown signal",
+            ),
+            (
+                "    watch-files: {interval: soon}\n",
+                "invalid watch-files interval",
+            ),
+            ("    watch-files: {interval: 0s}\n", "between 1s and 24h"),
+            ("    watch-files: {interval: 500ms}\n", "between 1s and 24h"),
+            ("    watch-files: {interval: 25h}\n", "between 1s and 24h"),
+            ("    watch-files: {paths: [rel.conf]}\n", "must be absolute"),
+            ("    watch-files: {pahts: [/x]}\n", "unknown field"),
+            (
+                "    type: oneshot\n    watch-files: {on-change: restart}\n",
+                "does not apply to type: oneshot",
+            ),
+        ];
+        for (fields, want) in cases {
+            let dir = TempDir::new().unwrap();
+            write(
+                &dir,
+                "001.yaml",
+                &format!("services:\n  web:\n    command: /bin/true\n{fields}"),
+            );
+            let err = format!("{:#}", load_plan(dir.path()).unwrap_err());
+            assert!(err.contains(want), "{fields}: {err}");
+        }
+
+        let dir = TempDir::new().unwrap();
+        write(
+            &dir,
+            "001.yaml",
+            "services:\n  web:\n    command: /bin/true\n    watch-files:\n      on-change: signal:SIGUSR1\n      interval: 10s\n      paths: [/etc/app.conf]\n",
+        );
+        let plan = load_plan(dir.path()).unwrap();
+        let w = plan.services["web"].watch_files.clone().unwrap();
+        assert_eq!(String::from(w.on_change.unwrap()), "signal:SIGUSR1");
     }
 
     #[test]

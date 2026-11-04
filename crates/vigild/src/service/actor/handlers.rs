@@ -133,6 +133,7 @@ impl Actor {
         }
         self.ready_deadline = None;
         self.notify = None;
+        self.stop_watching();
         self.last_exit = exit_info;
         self.metrics
             .set_service_last_exit_code(&self.name, raw_code);
@@ -260,6 +261,7 @@ impl Actor {
 
     pub(super) async fn cleanup(&mut self) {
         self.notify = None;
+        self.stop_watching();
         if self.child.is_some() {
             self.send_stop_signal();
             tokio::time::sleep(Duration::from_millis(500)).await;

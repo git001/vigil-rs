@@ -15,7 +15,7 @@ use crate::process_util::{
     EnvPolicy, apply_credentials, apply_env, parse_command_templated, resolve_credentials,
 };
 use crate::service::notify::NotifySocket;
-use crate::template::{EnvLayer, Renderer, child_env, vars_of};
+use crate::template::{EnvLayer, Renderer, child_env, off_runtime, vars_of};
 
 use super::Actor;
 
@@ -44,26 +44,40 @@ impl Actor {
         )?;
         // Templates never see vigild's whole environment, only what the
         // pass-env policy lets through plus env-file (see `child_env`);
-        // `command` sees the child's final environment.
-        let mut env = child_env(
-            &policy,
-            creds.as_ref(),
-            &[EnvLayer {
-                env_file: &self.config.env_file,
-                environment: &self.config.environment,
-            }],
-        )?;
-
-        let renderer = Renderer::new();
-        let vars = vars_of(&env);
-        let argv = parse_command_templated(cmd_str)?
-            .iter()
-            .map(|w| {
-                renderer
-                    .render(w, &vars)
-                    .map_err(|e| anyhow::anyhow!("command word {w:?}: {e}"))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
+        // `command` sees the child's final environment. Rendering reads
+        // files, so it runs off the async runtime with a timeout.
+        let cmd_str = cmd_str.to_owned();
+        let env_file = self.config.env_file.clone();
+        let environment = self.config.environment.clone();
+        let creds_for_env = creds.clone();
+        let (mut env, argv, reads) = off_runtime("templates", move || {
+            let renderer = Renderer::new();
+            let env = child_env(
+                &renderer,
+                &policy,
+                creds_for_env.as_ref(),
+                &[EnvLayer {
+                    env_file: &env_file,
+                    environment: &environment,
+                }],
+            )?;
+            let vars = vars_of(&env);
+            // A word that renders to nothing is dropped, like an empty
+            // unquoted expansion in a shell, so `{% if … %}--flag{% endif %}`
+            // adds an optional flag instead of an empty argument. (The
+            // command parser never produces empty words itself.)
+            let mut argv = Vec::new();
+            for w in parse_command_templated(&cmd_str)? {
+                let arg = renderer
+                    .render(&w, &vars)
+                    .map_err(|e| anyhow::anyhow!("command word {w:?}: {e}"))?;
+                if !arg.is_empty() {
+                    argv.push(arg);
+                }
+            }
+            Ok((env, argv, renderer.take_reads()))
+        })
+        .await?;
         if argv.is_empty() {
             return Err(anyhow::anyhow!("empty command for service '{}'", self.name));
         }
@@ -142,6 +156,7 @@ impl Actor {
         info!(service = %self.name, pid = ?child.id(), "process started");
         self.child = Some(child);
         self.notify = notify;
+        self.start_watching(reads).await;
         self.metrics.record_service_start(&self.name);
         self.after_spawn().await;
         Ok(())

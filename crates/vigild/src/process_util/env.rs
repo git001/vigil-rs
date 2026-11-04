@@ -24,7 +24,7 @@ use super::Credentials;
 pub const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 /// Which of vigild's environment variables a child receives.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EnvPolicy {
     inherit_all: bool,
     globs: Vec<String>,

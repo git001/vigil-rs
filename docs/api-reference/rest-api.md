@@ -467,6 +467,7 @@ Metrics exposed:
 | `vigil_service_last_run_timestamp_seconds{service}` | gauge | Unix time when the last run of a `type: oneshot` service ended |
 | `vigil_service_last_run_success{service}` | gauge | `1` if the last run of a `type: oneshot` service succeeded, else `0` |
 | `vigil_service_runs_total{service,result}` | counter | Finished runs of a `type: oneshot` service; `result` is `success` or `failure` |
+| `vigil_service_file_reloads_total{service}` | counter | Reactions (restart or signal) to a change of a watched file (`watch-files`) |
 | `vigil_service_start_count_total{service}` | counter | Number of times the service has started |
 | `vigil_check_up{check}` | gauge | `1` if check is up, `0` if down |
 | `vigil_check_success_count_total{check}` | counter | Number of successful check runs |

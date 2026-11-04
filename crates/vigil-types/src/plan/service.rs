@@ -71,6 +71,68 @@ pub enum ReadyMode {
     Check,
 }
 
+/// What to do when a watched file changes (`watch-files.on-change`).
+///
+/// Written as `restart`, `ignore`, `signal` (= `SIGHUP`) or
+/// `signal:<NAME>` (e.g. `signal:SIGUSR1`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub enum FileChangeAction {
+    #[default]
+    Restart,
+    Ignore,
+    Signal(StopSignal),
+}
+
+impl TryFrom<String> for FileChangeAction {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        match s.as_str() {
+            "restart" => Ok(Self::Restart),
+            "ignore" => Ok(Self::Ignore),
+            "signal" => Ok(Self::Signal(StopSignal(nix::sys::signal::Signal::SIGHUP))),
+            other => match other.strip_prefix("signal:") {
+                Some(name) => StopSignal::try_from(name.to_string())
+                    .map(Self::Signal)
+                    .map_err(|e| format!("on-change {s:?}: {e}")),
+                None => Err(format!(
+                    "on-change {s:?}: expected restart, ignore, signal or signal:<NAME>"
+                )),
+            },
+        }
+    }
+}
+
+impl From<FileChangeAction> for String {
+    fn from(a: FileChangeAction) -> String {
+        match a {
+            FileChangeAction::Restart => "restart".into(),
+            FileChangeAction::Ignore => "ignore".into(),
+            FileChangeAction::Signal(sig) => format!("signal:{sig}"),
+        }
+    }
+}
+
+/// `watch-files`: react when files the service depends on change.
+///
+/// Without this block the defaults apply: the files read by `{{ file() }}`
+/// and `env-file` at the last start are watched every 30s, a change
+/// restarts the service.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct WatchFiles {
+    /// Default `restart`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on_change: Option<FileChangeAction>,
+    /// Polling interval. Default `30s`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interval: Option<String>,
+    /// Watch only these paths instead of the files read at start.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paths: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum OnExit {
@@ -128,6 +190,9 @@ pub struct ServiceConfig {
     /// `environment`. A leading `-` makes a file optional.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env_file: Vec<String>,
+    /// React to changes of files the service depends on; see [`WatchFiles`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watch_files: Option<WatchFiles>,
     /// Pass vigild's whole environment to the service. Default (unset):
     /// `false`, i.e. only PATH, HOME, USER, LOGNAME, TZ plus variables
     /// matched by `pass-env-glob` / `pass-env-regex`, plus `environment`.
@@ -273,6 +338,18 @@ pub(super) fn merge_service(base: &mut ServiceConfig, overlay: &ServiceConfig) {
     opt!(ready);
     opt!(ready_check);
     opt!(ready_timeout);
+    if let Some(o) = &overlay.watch_files {
+        let w = base.watch_files.get_or_insert_with(WatchFiles::default);
+        if o.on_change.is_some() {
+            w.on_change = o.on_change;
+        }
+        if o.interval.is_some() {
+            w.interval = o.interval.clone();
+        }
+        if o.paths.is_some() {
+            w.paths = o.paths.clone();
+        }
+    }
     if !overlay.success_exit_codes.is_empty() {
         base.success_exit_codes = overlay.success_exit_codes.clone();
     }
@@ -293,4 +370,55 @@ pub(super) fn merge_service(base: &mut ServiceConfig, overlay: &ServiceConfig) {
     opt!(logs_push_socket);
     opt!(logs_push_addr);
     opt!(logs_push_format);
+}
+
+#[cfg(test)]
+mod watch_files_tests {
+    use super::*;
+    use nix::sys::signal::Signal;
+
+    #[test]
+    fn on_change_forms() {
+        let p = |s: &str| FileChangeAction::try_from(s.to_string());
+        assert_eq!(p("restart"), Ok(FileChangeAction::Restart));
+        assert_eq!(p("ignore"), Ok(FileChangeAction::Ignore));
+        assert_eq!(
+            p("signal"),
+            Ok(FileChangeAction::Signal(StopSignal(Signal::SIGHUP)))
+        );
+        assert_eq!(
+            p("signal:SIGUSR1"),
+            Ok(FileChangeAction::Signal(StopSignal(Signal::SIGUSR1)))
+        );
+        assert!(p("signal:NOPE").unwrap_err().contains("unknown signal"));
+        assert!(p("reload").unwrap_err().contains("expected restart"));
+        assert_eq!(
+            String::from(FileChangeAction::Signal(StopSignal(Signal::SIGHUP))),
+            "signal:SIGHUP"
+        );
+    }
+
+    #[test]
+    fn watch_files_merge_per_field() {
+        let mut base = ServiceConfig {
+            watch_files: Some(WatchFiles {
+                on_change: Some(FileChangeAction::Ignore),
+                interval: Some("10s".into()),
+                paths: None,
+            }),
+            ..Default::default()
+        };
+        let overlay = ServiceConfig {
+            watch_files: Some(WatchFiles {
+                paths: Some(vec!["/etc/app.conf".into()]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        merge_service(&mut base, &overlay);
+        let w = base.watch_files.unwrap();
+        assert_eq!(w.on_change, Some(FileChangeAction::Ignore));
+        assert_eq!(w.interval.as_deref(), Some("10s"));
+        assert_eq!(w.paths, Some(vec!["/etc/app.conf".to_string()]));
+    }
 }

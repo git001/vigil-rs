@@ -12,7 +12,8 @@ pub use self::alert::{AlertConfig, AlertFormat, AlertsBlock};
 pub use self::check::{CheckConfig, CheckLevel, ExecCheck, HttpCheck, TcpCheck};
 pub use self::layer::{Layer, Plan};
 pub use self::service::{
-    LogsForward, LogsPushFormat, OnExit, ReadyMode, ServiceConfig, ServiceType, Startup,
+    FileChangeAction, LogsForward, LogsPushFormat, OnExit, ReadyMode, ServiceConfig, ServiceType,
+    Startup, WatchFiles,
 };
 
 use serde::{Deserialize, Serialize};

@@ -25,6 +25,7 @@ mod oneshot;
 mod ready;
 mod signals;
 mod spawn;
+mod watch;
 
 #[cfg(test)]
 mod tests;
@@ -74,6 +75,10 @@ pub(super) struct Actor {
     schedule: Option<crate::service::schedule::Schedule>,
     /// Next scheduled run.
     next_run: Option<jiff::Timestamp>,
+    /// Files watched for the running process (`watch-files`).
+    watch: Option<crate::service::watch::FileWatch>,
+    /// Next poll of `watch`.
+    watch_deadline: Option<tokio::time::Instant>,
 }
 
 impl Actor {
@@ -107,6 +112,8 @@ impl Actor {
             notify_rx: Some(notify_rx),
             service_uid: nix::unistd::Uid::effective().as_raw(),
             ready_deadline: None,
+            watch: None,
+            watch_deadline: None,
             ready_failed: false,
             status_message: None,
             schedule: None,
@@ -192,6 +199,7 @@ pub(super) async fn run(
 
     loop {
         let ready_deadline = actor.ready_deadline;
+        let watch_deadline = actor.watch_deadline;
         let next_run = actor.next_run_deadline();
         tokio::select! {
             biased;
@@ -263,6 +271,15 @@ pub(super) async fn run(
                 }
             }, if ready_deadline.is_some() => {
                 actor.handle_ready_timeout(&mut stop_deadline).await;
+            }
+
+            _ = async {
+                match watch_deadline {
+                    Some(d) => tokio::time::sleep_until(d).await,
+                    None => std::future::pending().await,
+                }
+            }, if watch_deadline.is_some() => {
+                actor.handle_watch_tick(&mut backoff_sleep, &mut stop_deadline, &mut pending_restart).await;
             }
 
             _ = async {

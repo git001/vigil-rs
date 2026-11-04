@@ -194,3 +194,126 @@ fn check_service_reports_syntax_errors_only() {
     let err = check_service(&svc("app", &[("B", "{{ x }} ${#ARR}")])).unwrap_err();
     assert!(format!("{err:#}").contains("environment \"B\""), "{err:#}");
 }
+
+#[tokio::test]
+async fn off_runtime_gives_up_on_a_hanging_read() {
+    let (_keep, rx) = std::sync::mpsc::channel::<()>();
+    let started = std::time::Instant::now();
+    let err = off_runtime_within(
+        std::time::Duration::from_millis(100),
+        "templates",
+        move || {
+            let _ = rx.recv_timeout(std::time::Duration::from_secs(5)); // "dead NFS"
+            Ok(())
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    assert!(err.to_string().contains("hanging file system"), "{err}");
+    // the runtime is still usable
+    assert_eq!(off_runtime("x", || Ok(42)).await.unwrap(), 42);
+}
+
+#[test]
+fn empty_file_is_an_error_unless_a_default_is_given() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, content) in [("empty", ""), ("newline", "\n")] {
+        let p = dir.path().join(name);
+        std::fs::write(&p, content).unwrap();
+        let err = render(&format!("{{{{ file('{}') }}}}", p.display()), &[]).unwrap_err();
+        assert!(format!("{err:#}").contains("is empty"), "{name}: {err:#}");
+        assert_eq!(
+            render(&format!("{{{{ file('{}', 'fb') }}}}", p.display()), &[]).unwrap(),
+            "fb",
+            "{name}"
+        );
+    }
+    // two newlines: one is removed, "\n" remains, which is not empty
+    let p = dir.path().join("two");
+    std::fs::write(&p, "\n\n").unwrap();
+    assert_eq!(
+        render(&format!("{{{{ file('{}') }}}}", p.display()), &[]).unwrap(),
+        "\n"
+    );
+}
+
+#[test]
+fn empty_file_is_recorded_for_watching() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("empty");
+    std::fs::write(&p, "").unwrap();
+    let r = Renderer::new();
+    assert!(
+        r.render(
+            &format!("{{{{ file('{}', 'x') }}}}", p.display()),
+            &BTreeMap::new()
+        )
+        .is_ok()
+    );
+    let reads = r.take_reads();
+    assert_eq!(reads.len(), 1);
+    assert_eq!(reads[0].hash, Some(content_hash(b"")), "exists, empty");
+}
+
+/// A fallback *file*: `file(a, '') or file(b)`. `or` short-circuits, so `b`
+/// is only read (and only required) when `a` is missing or empty.
+#[test]
+fn fallback_file_via_or() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a");
+    let b = dir.path().join("b");
+    let tmpl = format!(
+        "{{{{ file('{}', '') or file('{}') }}}}",
+        a.display(),
+        b.display()
+    );
+
+    // a exists: b is neither needed nor read
+    std::fs::write(&a, "from-a\n").unwrap();
+    let r = Renderer::new();
+    assert_eq!(r.render(&tmpl, &BTreeMap::new()).unwrap(), "from-a");
+    assert_eq!(r.take_reads().len(), 1, "b not read");
+
+    // a empty: b is used
+    std::fs::write(&a, "").unwrap();
+    std::fs::write(&b, "from-b").unwrap();
+    assert_eq!(render(&tmpl, &[]).unwrap(), "from-b");
+
+    // both missing/empty: error from b (no default there)
+    std::fs::remove_file(&b).unwrap();
+    assert!(render(&tmpl, &[]).is_err());
+
+    // chain with a final literal
+    let chain = format!(
+        "{{{{ file('{}', '') or file('{}', '') or 'last-resort' }}}}",
+        a.display(),
+        b.display()
+    );
+    assert_eq!(render(&chain, &[]).unwrap(), "last-resort");
+}
+
+/// Fallbacks are returned exactly as written, `=`, spaces and quotes included.
+#[test]
+fn fallback_values_are_returned_verbatim() {
+    let missing = "/nonexistent/vigil-test/log-flag";
+    for fb in ["--loglevel=info", "DB_PASSWORD=MY-pw1!", "--opt='a b' x=1"] {
+        assert_eq!(
+            render(&format!("{{{{ file('{missing}', {fb:?}) }}}}"), &[]).unwrap(),
+            fb
+        );
+        assert_eq!(
+            render(&format!("{{{{ env.LOG_FLAG | default({fb:?}) }}}}"), &[]).unwrap(),
+            fb
+        );
+        assert_eq!(
+            render(&format!("{{{{ file('{missing}', '') or {fb:?} }}}}"), &[]).unwrap(),
+            fb
+        );
+    }
+    let v = [("LOG_FLAG", "--loglevel=debug")];
+    assert_eq!(
+        render("{{ env.LOG_FLAG | default('--loglevel=info') }}", &v).unwrap(),
+        "--loglevel=debug"
+    );
+}

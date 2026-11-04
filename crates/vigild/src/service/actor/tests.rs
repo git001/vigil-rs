@@ -1388,3 +1388,143 @@ async fn missing_env_file_fails_the_start() {
         "{err}"
     );
 }
+
+// -----------------------------------------------------------------------
+// watch-files
+// -----------------------------------------------------------------------
+
+/// A service that prints its secret (read via `file()`) on every start, and
+/// "hup" on SIGHUP.
+fn watched_service(
+    secret: &std::path::Path,
+    out: &std::path::Path,
+    on_change: &str,
+) -> ServiceConfig {
+    let mut cfg = ServiceConfig {
+        command: Some(format!(
+            r#"sh -c 'echo "start $PW" >> {out}; trap "echo hup >> {out}" HUP; while :; do sleep 0.05; done'"#,
+            out = out.display()
+        )),
+        environment: [(
+            "PW".to_string(),
+            format!("{{{{ file('{}') }}}}", secret.display()),
+        )]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    };
+    cfg.watch_files = Some(vigil_types::plan::WatchFiles {
+        on_change: Some(on_change.to_string().try_into().unwrap()),
+        interval: Some("1s".into()), // the minimum
+        paths: None,
+    });
+    cfg
+}
+
+async fn wait_for_lines(path: &std::path::Path, n: usize) -> Vec<String> {
+    for _ in 0..200 {
+        let lines: Vec<String> = std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        if lines.len() >= n {
+            return lines;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("{path:?}: fewer than {n} lines");
+}
+
+#[tokio::test]
+async fn watched_file_change_restarts_the_service_with_the_new_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let secret = dir.path().join("pw");
+    let out = dir.path().join("out");
+    std::fs::write(&secret, "one\n").unwrap();
+    let (tx, mut rx) = spawn_run(
+        watched_service(&secret, &out, "restart"),
+        std::env::temp_dir(),
+    );
+    start(&tx).await;
+    assert_eq!(wait_for_lines(&out, 1).await, ["start one"]);
+
+    std::fs::write(&secret, "two\n").unwrap();
+    wait_event(&mut rx, is_state(ServiceState::Stopping)).await;
+    assert_eq!(wait_for_lines(&out, 2).await, ["start one", "start two"]);
+
+    // no further restart without a change
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(wait_for_lines(&out, 2).await.len(), 2);
+    let _ = tx.send(Cmd::Shutdown).await;
+}
+
+#[tokio::test]
+async fn watched_file_change_can_send_a_signal_instead() {
+    let dir = tempfile::tempdir().unwrap();
+    let secret = dir.path().join("pw");
+    let out = dir.path().join("out");
+    std::fs::write(&secret, "one").unwrap();
+    let (tx, _rx) = spawn_run(
+        watched_service(&secret, &out, "signal"),
+        std::env::temp_dir(),
+    );
+    start(&tx).await;
+    wait_for_lines(&out, 1).await;
+    // give the shell time to install its trap
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    std::fs::write(&secret, "two").unwrap();
+    // SIGHUP, no restart: the process keeps the old value
+    assert_eq!(wait_for_lines(&out, 2).await, ["start one", "hup"]);
+    let _ = tx.send(Cmd::Shutdown).await;
+}
+
+#[tokio::test]
+async fn files_are_not_watched_without_a_watch_files_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let secret = dir.path().join("pw");
+    let out = dir.path().join("out");
+    std::fs::write(&secret, "one").unwrap();
+    let mut cfg = watched_service(&secret, &out, "restart");
+    cfg.watch_files = None;
+    let (tx, _rx) = spawn_run(cfg, std::env::temp_dir());
+    start(&tx).await;
+    wait_for_lines(&out, 1).await;
+    std::fs::write(&secret, "two").unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(wait_for_lines(&out, 1).await, ["start one"], "no restart");
+    let _ = tx.send(Cmd::Shutdown).await;
+}
+
+#[tokio::test]
+async fn template_words_that_render_empty_are_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out");
+    let cfg = |debug: bool| ServiceConfig {
+        command: Some(format!(
+            r#"sh -c 'echo "$#:$*" > {}' x {{% if env.DEBUG is defined %}}--verbose{{% endif %}} end"#,
+            out.display()
+        )),
+        environment: if debug {
+            [("DEBUG".to_string(), "1".to_string())]
+                .into_iter()
+                .collect()
+        } else {
+            Default::default()
+        },
+        ..Default::default()
+    };
+    let (mut actor, _rx) = make_actor_with_config(cfg(false));
+    actor.do_start().await.unwrap();
+    assert_eq!(
+        wait_for_file(&out).await.trim(),
+        "1:end",
+        "no empty argument"
+    );
+    std::fs::remove_file(&out).unwrap();
+
+    let (mut actor, _rx) = make_actor_with_config(cfg(true));
+    actor.do_start().await.unwrap();
+    assert_eq!(wait_for_file(&out).await.trim(), "2:--verbose end");
+}

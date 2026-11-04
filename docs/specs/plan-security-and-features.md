@@ -391,13 +391,16 @@ from 2026-11-03 marked *decided*):
   evaluated again (gopherd's template bug cannot happen).
 - **`command`:** split into arguments first (template tags are kept intact),
   then each argument is rendered on its own, so a value is always exactly one
-  argument. Only values containing `{{` or `{%` are rendered, so shell
+  argument; an argument that renders empty is dropped (decided 2026-11-04,
+  optional flags via `{% if %}`). Only values containing `{{` or `{%` are rendered, so shell
   `${#VAR}` (Jinja comment syntax) keeps working.
 - **`env` sources:** in `environment` values the variables vigild passes
   (base set + pass-env); in `command` the child's final environment.
 - **`file`:** absolute paths, regular files only, at most 64 KiB, UTF-8
   without NUL, one trailing newline is stripped, optional default for a
-  missing file. Resolved values never appear in logs or the API.
+  missing file. An empty file (or only a newline) is an error too, or gives
+  the default (decided 2026-11-04: an empty secret is almost always a
+  mistake); an empty `env-file` stays valid (optional override files). Resolved values never appear in logs or the API.
   - Symlinks must be allowed: Kubernetes secret volumes consist of symlinks
     (`key -> ..data/key`, `..data -> ..2026_11_02_...`). No `O_NOFOLLOW` on
     the path, but `fstat` after opening to make sure it is a regular file.
@@ -433,33 +436,52 @@ whole chain.
 **Situation with ESO:** ESO updates the Kubernetes Secret. Then:
 
 - **Secret as a volume (without `subPath`):** the kubelet updates the file in
-  the pod after about 1-2 minutes (sync period plus cache). A `{{file}}` reads
-  the new value on the service's next start.
+  the pod after about 1-2 minutes (sync period plus cache).
 - **Secret as an env variable (`env`/`envFrom`):** never updated except by a
   pod restart. Reloader is still needed for that.
 - **Volume with `subPath`:** never updated.
 
-Phase 4 alone only picks up the new value when the service restarts for some
-other reason. Replacing Reloader needs a trigger:
+**Decided (2026-11-03/04):**
 
-- **New field per service:**
-  ```yaml
+- **Opt-in** (user, 2026-11-04: "vigild must be able to run without file
+  access once it runs"): only with a `watch-files` block. Then by default the
+  files read at the last start (`{{ file() }}` and `env-file`, recorded with
+  a hash of the content actually used) are watched; a change restarts the
+  service.
+- ```yaml
   watch-files:
-    paths: [/etc/secrets/db-password]   # in addition to all {{file}} paths
-    on-change: restart                  # restart | signal:SIGHUP | ignore
+    on-change: restart   # restart | signal (= SIGHUP) | signal:SIGUSR1 | ignore
     interval: 30s
+    paths: [/etc/app.conf]   # if set: ONLY these paths, the read files are not watched
   ```
-- **Detection by polling** (hash or inode and mtime every `interval`), not
-  inotify. Reason: the kubelet swaps the `..data` symlink atomically, and
-  inotify on the file does not reliably notice. Polling is simple and also
-  works on NFS and overlayfs.
-- **Debounce:** ESO and the kubelet update several keys one after another.
-  Only react once the content has been stable for one polling round.
-- **Advantage over Reloader:** only the affected service is restarted, not the
-  whole pod; with `signal:SIGHUP` nothing is restarted if the application can
-  reload.
-- Each change emits an alert event and increments the metric
-  `vigil_service_file_reloads_total`.
+- **Detection by content hash** (polling, not inotify): the kubelet swaps
+  the `..data` symlink atomically, inotify on the file does not reliably
+  notice; polling also works on NFS and overlayfs. Missing/created files
+  count as changes, a transient read error does not.
+- **Debounce:** react only once the content has been stable for one more
+  polling round.
+- Only `starting`/`active` services react; oneshot jobs are not watched (a
+  `watch-files` block there is rejected); exec checks re-render anyway.
+- Metric `vigil_service_file_reloads_total{service}`, log line with paths.
+- **Hanging file systems:** all file reads (templates/env files at start,
+  watched files, exec check environments) run on the blocking pool with a
+  10 s timeout (`template::off_runtime`). A watch with a read still hanging
+  starts no new one (at most one stuck thread per service). Found on the
+  way: since phase 4 template rendering read files synchronously inside the
+  async actor, so a dead NFS mount could block runtime workers and with them
+  all of vigild (API, reaping).
+- **Alert event: not implemented.** Alerts are tied to checks (`on-check`);
+  a file-change event would need a new alert concept (open question to the
+  user).
+
+**Status (2026-11-04):** implemented (`service/watch.rs`, actor
+`watch.rs`, `Renderer::take_reads`). Tests: debounce, revert within a round,
+kubelet symlink swap, explicit paths, real process restart and SIGHUP via the
+actor loop, validation. Smoke test with vigild: `..data` swap and a rewritten
+env file each caused one restart with the new value, `touch` none, nginx-style
+`signal:SIGUSR1` reload without restart. Found on the way (not fixed yet):
+`merge_service` always copies `startup` from the overlay, so a layer that
+does not set `startup` resets it to `disabled`.
 
 ### Phase 4c: layers from a ConfigMap, automatic `replan`
 

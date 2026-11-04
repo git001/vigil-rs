@@ -15,6 +15,7 @@ use crate::metrics::MetricsStore;
 mod actor;
 pub mod notify;
 pub mod schedule;
+pub mod watch;
 
 // ---------------------------------------------------------------------------
 // Public interface

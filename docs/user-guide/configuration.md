@@ -71,6 +71,10 @@ services:
     pass-env-glob: [APP_*, LOG_LEVEL]  # pass these vigild variables (wildcards * and ?)
     pass-env-regex: ['^K8S_[A-Z]+_URL$']  # pass vigild variables matching (anchored)
     env-file: [/vault/secrets/db, -/etc/app/optional.env]  # KEY=value files, read on every start (- = optional)
+    watch-files:                       # react to changed files (off without this block)
+      on-change: restart               # restart (default) | signal (= SIGHUP) | signal:SIGUSR1 | ignore
+      interval: 30s                    # polling interval (default: 30s)
+      paths: [/etc/myapp.yaml]         # watch ONLY these (default: the files read at start)
 
     # --- Startup ---
     startup: enabled                   # enabled | disabled (default: disabled)
@@ -134,7 +138,8 @@ command: sh -c "echo starting && exec /usr/local/bin/myapp"
 [minijinja](https://docs.rs/minijinja) (Jinja2) syntax, the same as
 [`body-template`](#body-template) of alerts. They are resolved on **every
 start** of the service, so a rotated secret file or a changed limit is picked
-up on the next (re)start.
+up on the next (re)start. With [`watch-files`](#watch-files) vigild also
+restarts the service when a file it read changes.
 
 ```yaml
 services:
@@ -148,16 +153,23 @@ services:
 
 | Template | Result |
 |---|---|
-| `{{ env.NAME }}` | Value of an environment variable (see below which ones). An undefined variable is an **error**: the service does not start. |
-| `{{ env.NAME \| default("x") }}` | `x` if `NAME` is not defined. An empty value counts as defined; `default("x", true)` also replaces empty values. |
-| `{% if env.NAME is defined %}…{% endif %}` | Conditions, as in Jinja. |
-| `{{ file("/path") }}` | Content of a file, without one trailing newline. |
-| `{{ file("/path", "x") }}` | `x` if the file does not exist. Any other problem (not readable, not a regular file, …) is still an error. |
+| `{{ env.DB_HOST }}` | Value of the environment variable `DB_HOST` (see below which variables are visible). An undefined variable is an **error**: the service does not start. |
+| `{{ env.LOG_FLAG \| default("--loglevel=info") }}` | The value of `LOG_FLAG` (e.g. `--loglevel=debug`), or, if `LOG_FLAG` is not defined, exactly the string `--loglevel=info`. An empty value counts as defined; `default("--loglevel=info", true)` also replaces an empty value. |
+| `{% if env.DEBUG is defined %}--verbose{% endif %}` | Conditions, as in Jinja: adds `--verbose` only if `DEBUG` is set. In `command`, an argument that renders to nothing is dropped, so no empty argument is passed. |
+| `{{ file("/etc/secrets/db-password") }}` | Content of the file, without one trailing newline (e.g. `MY-pw1!`). A missing or **empty** file is an error: the service does not start (an empty secret is almost always a mistake). |
+| `{{ file("/etc/config/log-flag", "--loglevel=info") }}` | The content of the file (e.g. `--loglevel=debug`), or, if the file is missing or empty, exactly the string `--loglevel=info`. Any other problem (not readable, not a regular file, …) is still an error. |
+| `{{ file("/etc/secrets/db-password", "") or file("/etc/secrets-legacy/db-password") }}` | A fallback **file**: the legacy file is read only if the first one is missing or empty. Chains work too: `file("/etc/config/log-flag", "") or file("/etc/defaults/log-flag", "") or "--loglevel=info"`. Do not write `file("/etc/secrets/db-password", file("/etc/secrets-legacy/db-password"))`: arguments are always evaluated, so the legacy file would be required even when the first one exists. |
 | `{{ mem("75%") }}` | 75 % of the memory limit, as a whole number of **MiB**. |
 | `{{ mem("90% - 64MiB") }}` | 90 % minus 64 MiB. Units: `B`, `KiB`, `MiB`, `GiB`, `KB`, `MB`, `GB`. |
 | `{{ mem("512MiB") }}` | A fixed amount, in MiB. |
 | `{{ cpu() }}` | Number of CPUs available to the container. |
 | `{{ cpu("50%") }}` / `{{ cpu("100% - 1") }}` | A share of them (rounded), or minus a number of CPUs. Never less than 1. |
+
+**Fallback values** (`default(…)`, the second argument of `file(…)`, the last
+part of an `or` chain) are returned **exactly as written**, `=`, spaces and
+quotes included; in `command` such a value is always one argument. So
+`--port={{ env.PORT | default("8080") }}` and
+`{{ env.PORT_FLAG | default("--port=8080") }}` both give `--port=8080`.
 
 **Variables (`env`):**
 
@@ -183,18 +195,21 @@ for containers without limits. A `mem` result below 1 MiB is an error.
 **Rules:**
 
 - Only values containing `{{` or `{%` are templates; everything else is used
-  as is. Shell constructs such as `${#VAR}` are therefore unaffected, unless
+  as is. Shell constructs such as `${#WORKERS}` are therefore unaffected, unless
   the same value also contains a template. Then write them inside
-  `{% raw %}…{% endraw %}`: `sh -c 'echo {{ env.X }} {% raw %}${#Y}{% endraw %}'`.
+  `{% raw %}…{% endraw %}`: `sh -c 'echo "user {{ env.DB_USER }}, {% raw %}${#DB_PASSWORD}{% endraw %} chars"'`.
 - In `command`, each argument is rendered on its own after the command has
   been split into arguments. A substituted value is always exactly one
   argument, even if it contains spaces or quotes. A template tag
   (`{{ … }}`, `{% … %}`) may contain spaces and quotes, but a block such as
-  `{% if %}…{% endif %}` must stay within one argument (quote it).
+  `{% if %}…{% endif %}` must stay within one argument (quote it). An
+  argument that renders to an empty string is dropped (like an empty unquoted
+  expansion in a shell), so `{% if env.DEBUG is defined %}--verbose{% endif %}`
+  is an optional flag.
 - Rendering is a single pass: a value that itself contains `{{` is inserted
   literally and never evaluated.
 - In YAML, quote a value that **starts** with `{{` or `{%`
-  (`PORT: "{{ env.X }}"`); unquoted, YAML reads `{` as the start of a map.
+  (`DB_PORT: "{{ env.DB_PORT | default('5432') }}"`); unquoted, YAML reads `{` as the start of a map.
 - The syntax is checked when layers are loaded and on `replan`; a syntax
   error makes the layer invalid. Undefined variables, missing files and
   similar problems are only detected at start: the service goes to `error`
@@ -342,7 +357,7 @@ services:
 
 Files with one `KEY=value` per line, read on **every start** of the service
 (so a secret rotated by the Vault Agent or ESO is picked up on the next
-restart). Typical sources: a [Vault Agent](https://developer.hashicorp.com/vault/docs/agent-and-proxy/agent/template)
+restart, which [`watch-files`](#watch-files) can trigger). Typical sources: a [Vault Agent](https://developer.hashicorp.com/vault/docs/agent-and-proxy/agent/template)
 template, an External Secrets `target.template`, docker-style `.env` files.
 
 ```yaml
@@ -378,6 +393,72 @@ PLAIN=value with spaces     # unquoted: up to the end of the line, # included
   value.
 - Exec checks with `service-context` read the service's `env-file` too.
 - In layer merges the lists are appended.
+
+#### `watch-files`
+
+With `watch-files`, vigild notices when files a service depends on change
+and reacts, e.g. after the kubelet updated a Secret volume or the Vault Agent
+renewed credentials. This replaces tools like stakater Reloader, without
+restarting the whole pod.
+
+**Off unless configured:** without a `watch-files` block vigild reads a
+service's files only when it starts it, and never touches them while it
+runs. With the block (even an empty `watch-files: {}`), every file the
+service read at its last start through [`{{ file() }}`](#templates-in-command-and-environment)
+or [`env-file`](#env-file) is checked every 30 seconds by default, and a
+change **restarts** the service, which then reads the new content.
+
+```yaml
+services:
+  api:
+    command: /usr/local/bin/api
+    environment:
+      DB_PASSWORD: "{{ file('/etc/secrets/db-password') }}"
+    watch-files: {}              # defaults: watch /etc/secrets/db-password, restart on change
+
+  nginx:
+    command: nginx -g 'daemon off;'
+    watch-files:
+      on-change: signal          # = SIGHUP: nginx reloads its config, no restart
+      paths: [/etc/nginx/nginx.conf, /etc/nginx/tls/tls.crt]
+```
+
+| Field | Meaning |
+|---|---|
+| `on-change` | `restart` (default): stop the service and start it again. `signal`: send **`SIGHUP`** to the service's process group, no restart. `signal:<NAME>`: send that signal instead, e.g. `signal:SIGUSR1` or `signal:SIGUSR2`. `ignore`: do not watch (same as no block). |
+| `interval` | How often the files are checked ([duration](#duration-format)). Default `30s`, allowed **`1s` to `24h`**: every check reads and hashes all watched files, so a shorter interval would only put load on the node or the file server. |
+| `paths` | Absolute paths to watch. **If set, only these files are watched** and the files read by `file()` / `env-file` are not. Use it for files the application reads itself (its config, TLS certificates). Without `paths`, the files read at the last start are watched. `paths: []` watches nothing. |
+
+- **Plain `signal` means `SIGHUP`.** Write `signal:SIGUSR1` (any signal name
+  as for [`stop-signal`](#stop-signal)) for applications that reload on
+  another signal.
+- A change is detected by **content**: vigild compares a hash of each file
+  with the content the service got at its start (for `paths`: with the
+  content when the process started), so a `touch` or an mtime change alone
+  does nothing, while a replaced symlink (the kubelet's `..data` swap) is
+  noticed. A file that is deleted or created also counts as a change; a file
+  that cannot be read for a moment (e.g. permission denied) does not.
+- vigild reacts only once the new content has been the same for one more
+  check (debounce): Secret updates often change several keys one after
+  another, and should cause one restart, not several. With the default
+  interval the reaction comes 30–60 s after the change.
+- With `on-change: signal` the process keeps running, so the next change is
+  compared with the content at the time of the signal.
+- Only a running service (`starting` or `active`) reacts. A stopped service
+  reads the current files on its next start anyway.
+- Not for `type: oneshot`: every run reads its files anew (a `watch-files`
+  block there makes the layer invalid).
+- Each reaction is logged with the paths (never the content) and counted in
+  the metric `vigil_service_file_reloads_total{service}`.
+- Exec checks need no watching: they resolve their templates on every run.
+
+**Hanging file systems:** all file reads (templates and env files at start,
+watched files) run outside vigild's event loop and are given up after
+**10 seconds**. A read on a dead NFS hard mount cannot be cancelled by any
+process; vigild therefore stops waiting for it, logs a warning, and starts no
+further read of the same files until the hanging one returns. A start whose
+files cannot be read in time fails (`error`, reason in the log); the rest of
+vigild (other services, the API, reaping) keeps working.
 
 #### `startup`
 

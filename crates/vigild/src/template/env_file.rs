@@ -45,10 +45,16 @@ pub fn check_entry(entry: &str) -> anyhow::Result<()> {
 }
 
 /// Read all `entries` in order into `out` (later files override earlier).
-pub fn load(entries: &[String], out: &mut IndexMap<String, String>) -> anyhow::Result<()> {
+pub(crate) fn load(
+    entries: &[String],
+    out: &mut IndexMap<String, String>,
+    reads: &super::Reads,
+) -> anyhow::Result<()> {
     for entry in entries {
         let (path, optional) = split_optional(entry);
-        match read_text(path, MAX_ENV_FILE).map_err(|e| anyhow::anyhow!("env-file {e}"))? {
+        let content = read_text(path, MAX_ENV_FILE).map_err(|e| anyhow::anyhow!("env-file {e}"))?;
+        reads.record(path, content.as_deref());
+        match content {
             Some(text) => {
                 parse_into(&text, out).map_err(|e| anyhow::anyhow!("env-file {path:?}: {e}"))?
             }
@@ -205,6 +211,7 @@ DB_USER=override
         let missing = dir.path().join("missing.env");
 
         let mut m = IndexMap::new();
+        let reads = crate::template::Reads::default();
         load(
             &[
                 a.display().to_string(),
@@ -212,14 +219,18 @@ DB_USER=override
                 format!("-{}", missing.display()),
             ],
             &mut m,
+            &reads,
         )
         .unwrap();
+        let read = reads.take();
+        assert_eq!(read.len(), 3, "optional missing file is recorded too");
+        assert!(read[2].hash.is_none());
         assert_eq!(m["X"], "1");
         assert_eq!(m["Y"], "2");
 
-        let err = load(&[missing.display().to_string()], &mut m).unwrap_err();
+        let err = load(&[missing.display().to_string()], &mut m, &reads).unwrap_err();
         assert!(err.to_string().contains("No such file"), "{err}");
-        let err = load(&[dir.path().display().to_string()], &mut m).unwrap_err();
+        let err = load(&[dir.path().display().to_string()], &mut m, &reads).unwrap_err();
         assert!(err.to_string().contains("not a regular file"), "{err}");
 
         assert!(check_entry("/x").is_ok());

@@ -9,7 +9,7 @@ use tracing::{debug, warn};
 use vigil_types::plan::{ExecCheck, ServiceConfig};
 
 use crate::process_util::{EnvPolicy, apply_credentials, apply_env, resolve_credentials};
-use crate::template::{EnvLayer, child_env};
+use crate::template::{EnvLayer, Renderer, child_env, off_runtime};
 
 pub(super) async fn probe_exec(
     exec: &ExecCheck,
@@ -57,19 +57,27 @@ pub(super) async fn probe_exec(
         }
     };
     // Service context first (env-file, environment), the check's
-    // environment on top; templates rendered as for the service.
-    let mut layers = Vec::with_capacity(2);
-    if let Some(s) = ctx_svc {
+    // environment on top; templates rendered as for the service, off the
+    // async runtime (they may read files).
+    let ctx_layer = ctx_svc.map(|s| (s.env_file.clone(), s.environment.clone()));
+    let check_env = exec.environment.clone();
+    let creds_for_env = creds.clone();
+    let built = off_runtime("exec check environment", move || {
+        let mut layers = Vec::with_capacity(2);
+        if let Some((env_file, environment)) = &ctx_layer {
+            layers.push(EnvLayer {
+                env_file,
+                environment,
+            });
+        }
         layers.push(EnvLayer {
-            env_file: &s.env_file,
-            environment: &s.environment,
+            env_file: &[],
+            environment: &check_env,
         });
-    }
-    layers.push(EnvLayer {
-        env_file: &[],
-        environment: &exec.environment,
-    });
-    let env = match child_env(&policy, creds.as_ref(), &layers) {
+        child_env(&Renderer::new(), &policy, creds_for_env.as_ref(), &layers)
+    })
+    .await;
+    let env = match built {
         Ok(env) => env,
         Err(e) => {
             warn!(error = %e, "exec check: cannot build environment");

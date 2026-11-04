@@ -49,6 +49,7 @@ struct AlertLabel {
 /// - `vigil_service_last_run_timestamp_seconds{service}` gauge (oneshot end)
 /// - `vigil_service_last_run_success{service}` gauge (oneshot result, 0/1)
 /// - `vigil_service_runs{service,result}` counter (oneshot runs, result success|failure)
+/// - `vigil_service_file_reloads{service}` counter (reactions to watched file changes)
 /// - `vigil_check_up{check}`              gauge (0/1)
 /// - `vigil_check_success_count{check}`   counter
 /// - `vigil_check_failure_count{check}`   counter
@@ -70,6 +71,7 @@ pub struct MetricsStore {
     service_last_run_success: Family<ServiceLabel, Gauge>,
     service_running: Family<ServiceLabel, Gauge>,
     service_runs: Family<RunLabel, Counter>,
+    service_file_reloads: Family<ServiceLabel, Counter>,
 }
 
 impl MetricsStore {
@@ -89,6 +91,7 @@ impl MetricsStore {
         let service_last_run_success = Family::<ServiceLabel, Gauge>::default();
         let service_running = Family::<ServiceLabel, Gauge>::default();
         let service_runs = Family::<RunLabel, Counter>::default();
+        let service_file_reloads = Family::<ServiceLabel, Counter>::default();
 
         registry.register(
             "vigil_service_start_count",
@@ -156,6 +159,11 @@ impl MetricsStore {
             "Finished runs of a oneshot service, by result (success or failure)",
             service_runs.clone(),
         );
+        registry.register(
+            "vigil_service_file_reloads",
+            "Reactions (restart or signal) to changes of watched files",
+            service_file_reloads.clone(),
+        );
 
         Arc::new(Self {
             registry,
@@ -172,6 +180,7 @@ impl MetricsStore {
             service_last_run_success,
             service_running,
             service_runs,
+            service_file_reloads,
         })
     }
 
@@ -201,6 +210,14 @@ impl MetricsStore {
                 service: service.to_owned(),
             })
             .set(if active { 1 } else { 0 });
+    }
+
+    pub fn record_file_reload(&self, service: &str) {
+        self.service_file_reloads
+            .get_or_create(&ServiceLabel {
+                service: service.to_owned(),
+            })
+            .inc();
     }
 
     pub fn set_service_running(&self, service: &str, running: bool) {

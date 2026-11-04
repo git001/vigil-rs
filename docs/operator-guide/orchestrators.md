@@ -64,7 +64,19 @@ Use `pass-env: true` to restore the pre-v4 behaviour for a service.
 A Secret mounted as a volume (without `subPath`) can be read with a
 [`file` template](../user-guide/configuration.md#templates-in-command-and-environment).
 Unlike `env:`, the kubelet updates the file when the Secret changes (after
-about a minute); the service gets the new value on its next start.
+about a minute). With [`watch-files`](../user-guide/configuration.md#watch-files)
+vigild notices the change and restarts the service with the new value, so
+stakater Reloader is not needed and only the affected service restarts, not
+the pod:
+
+```yaml
+services:
+  api:
+    command: /usr/local/bin/api
+    environment:
+      DB_PASSWORD: "{{ file('/etc/secrets/db-password') }}"
+    watch-files: {}     # restart api when the Secret changes
+```
 
 ```yaml
 services:
@@ -99,8 +111,9 @@ services:
     env-file: [/vault/secrets/db]
 ```
 
-The file is read on every start of the service. When the agent renews the
-credentials, restart the service (`vigil services restart api`) to use them.
+The file is read on every start of the service. Add `watch-files: {}` to
+restart the service when the agent renews the credentials and rewrites the
+file ([`watch-files`](../user-guide/configuration.md#watch-files)).
 
 #### Memory and CPU templates
 
