@@ -58,6 +58,7 @@ fn validate(plan: &Plan) -> anyhow::Result<()> {
         validate_watch_files(svc).with_context(|| format!("service {name:?}"))?;
     }
     for (name, check) in &plan.checks {
+        crate::check::validate_period(check).with_context(|| format!("check {name:?}"))?;
         if let Some(exec) = &check.exec {
             let ctx = exec
                 .service_context
@@ -509,6 +510,34 @@ mod tests {
             "services:\n  web:\n    command: app --port {{ env.PORT }}\n    environment:\n      PW: \"{{ file('/run/secrets/pw') }}\"\n",
         );
         load_plan(dir.path()).unwrap();
+    }
+
+    #[test]
+    fn check_period_is_bounded() {
+        for (period, ok) in [
+            ("0s", false),
+            ("1ms", false),
+            ("999ms", false),
+            ("1s", true),
+            ("24h", true),
+            ("25h", false),
+            ("soon", false),
+        ] {
+            let dir = TempDir::new().unwrap();
+            write(
+                &dir,
+                "001.yaml",
+                &format!("checks:\n  c:\n    period: {period}\n    exec:\n      command: 'true'\n"),
+            );
+            match load_plan(dir.path()) {
+                Ok(_) => assert!(ok, "{period} should be rejected"),
+                Err(e) => {
+                    let e = format!("{e:#}");
+                    assert!(!ok, "{period}: {e}");
+                    assert!(e.contains("check \"c\""), "{e}");
+                }
+            }
+        }
     }
 
     #[test]

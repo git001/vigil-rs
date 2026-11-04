@@ -803,7 +803,10 @@ false failures during slow startup. Default: **3s**.
 
 #### `period`
 
-How often the check runs. Default: **10s**.
+How often the check runs. Default: **10s**; allowed **`1s` to `24h`**. Every
+period runs a probe (an exec check starts a process), so a shorter period
+would only flood the pod or the checked endpoint. A value outside the range
+makes the layer invalid.
 
 #### `timeout`
 
