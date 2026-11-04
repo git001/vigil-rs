@@ -1,0 +1,35 @@
+# ghost-check: startup disabled → never spawned → status always null → "unknown"
+# flap-check:  passes once the marker file exists; vigild gets its path as
+#              CHECK_MARKER and passes it to the check (pass-env-glob)
+# retry-attempts: 1 so the HTTP call to nowhere fails fast
+checks:
+  ghost-check:
+    level: alive
+    startup: disabled
+    period: 5s
+    exec:
+      command: "true"
+
+  flap-check:
+    level: alive
+    startup: enabled
+    delay: 0s
+    period: 1s
+    timeout: 2s
+    threshold: 1
+    exec:
+      command: 'test -f "$CHECK_MARKER"'
+      pass-env-glob: [CHECK_MARKER]
+
+alerts:
+  alert-ghost:
+    url: http://127.0.0.1:19999/noop
+    format: webhook
+    on-check: [ghost-check]
+    retry-attempts: 1
+
+  alert-flap:
+    url: http://127.0.0.1:19999/noop
+    format: webhook
+    on-check: [flap-check]
+    retry-attempts: 1

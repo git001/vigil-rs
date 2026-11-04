@@ -26,12 +26,7 @@ shell {
 # ---------------------------------------------------------------------------
 
 shell {
-	cat > ${tmpdir}/layers/logger.yaml <<'EOF'
-services:
-  logger:
-    command: "/bin/sh -c 'i=0; while true; do echo vigil-follow-line-$i; i=$((i+1)); sleep 0.05; done'"
-    startup: enabled
-EOF
+	cp ${vtestdir}/fixtures/v0021/logger.yaml ${tmpdir}/layers/
 	${vigil} --socket ${tmpdir}/vigild.sock replan
 }
 

@@ -70,15 +70,30 @@ VTest2 provides three key primitives used here:
 - **`client -connect <path>`** — opens an HTTP/1.1 connection to a Unix socket
 - **`shell`** — runs a POSIX sh snippet for setup, teardown, polling loops, or output assertions
 
-The macros passed via `-D` hold paths to the binaries:
+The macros passed via `-D` hold paths:
 
-| Macro | Binary |
-|-------|--------|
+| Macro | Path |
+|-------|------|
 | `${vigild}` | vigild daemon |
 | `${vigil}` | vigil CLI |
 | `${vigil_log_relay}` | vigil-log-relay |
+| `${vtestdir}` | this directory (`tests/vtest`), for fixtures and helpers |
 
 `${tmpdir}` is a per-test temporary directory provided automatically by VTest2.
+
+### Fixtures and helpers
+
+Tests are also examples of how to use vigil, so keep what they use readable
+on its own:
+
+- `fixtures/`: static input files, e.g. request bodies
+  (`${vtestdir}/fixtures/identities/admin-user.json`); see
+  [fixtures/README.md](fixtures/README.md) for the test users.
+- `helpers/`: small standalone scripts, e.g. `helpers/http_capture.py` (an
+  HTTP server that records POST bodies and reports its port in a file).
+
+Prefer a static file over building configs, bodies or scripts inside a
+`.vtc` (heredocs, inline JSON, `python3 -c`).
 
 ## Patterns and gotchas
 

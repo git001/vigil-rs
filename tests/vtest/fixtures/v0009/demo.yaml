@@ -1,0 +1,4 @@
+services:
+  demo-svc:
+    command: "/bin/sleep 3600"
+    startup: disabled

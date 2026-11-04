@@ -1,0 +1,7 @@
+# A service that emits log lines and pushes them to the test's TCP sink.
+# logs-push-addr has no env: support, so the test fills in the port placeholder.
+services:
+  log-svc:
+    command: "/bin/sh -c 'i=0; while true; do echo push-line-$i; i=$((i+1)); sleep 0.1; done'"
+    startup: enabled
+    logs-push-addr: "127.0.0.1:@SINK_PORT@"

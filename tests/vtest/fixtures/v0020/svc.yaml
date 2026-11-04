@@ -1,0 +1,4 @@
+services:
+  long-runner:
+    command: "/bin/sh -c 'while true; do sleep 1; done'"
+    startup: enabled

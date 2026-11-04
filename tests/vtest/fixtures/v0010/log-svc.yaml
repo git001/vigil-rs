@@ -1,0 +1,4 @@
+services:
+  log-svc:
+    command: "/bin/sh -c 'i=0; while true; do echo relay-test-line-$i; i=$((i+1)); sleep 0.2; done'"
+    startup: enabled

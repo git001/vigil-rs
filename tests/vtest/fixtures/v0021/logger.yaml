@@ -1,0 +1,4 @@
+services:
+  logger:
+    command: "/bin/sh -c 'i=0; while true; do echo vigil-follow-line-$i; i=$((i+1)); sleep 0.05; done'"
+    startup: enabled

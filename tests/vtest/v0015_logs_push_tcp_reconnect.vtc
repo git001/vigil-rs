@@ -18,16 +18,11 @@ shell {
 	echo "$PORT" > ${tmpdir}/sink_port.txt
 }
 
-# Write a service that emits log lines, with logs-push-addr pointing to the sink
+# Layer fixtures/v0015/log-svc.yaml: a service pushing its logs to the sink;
+# logs-push-addr has no env: support, so the port placeholder is replaced.
 shell {
-	PORT=$(cat ${tmpdir}/sink_port.txt)
-	cat > ${tmpdir}/layers/log-svc.yaml <<EOF
-services:
-  log-svc:
-    command: "/bin/sh -c 'i=0; while true; do echo push-line-\$i; i=\$((i+1)); sleep 0.1; done'"
-    startup: enabled
-    logs-push-addr: "127.0.0.1:$PORT"
-EOF
+	sed "s/@SINK_PORT@/$(cat ${tmpdir}/sink_port.txt)/" \
+		${vtestdir}/fixtures/v0015/log-svc.yaml > ${tmpdir}/layers/log-svc.yaml
 	${vigil} --socket ${tmpdir}/vigild.sock replan
 }
 

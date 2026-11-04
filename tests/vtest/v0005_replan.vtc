@@ -22,12 +22,7 @@ client c1 -connect ${tmpdir}/vigild.sock {
 
 # After replan, write a layer and replan again to verify hot-reload
 shell {
-	cat > ${tmpdir}/layers/demo.yaml <<'EOF'
-services:
-  echo-svc:
-    command: "/bin/echo hello"
-    startup: disabled
-EOF
+	cp ${vtestdir}/fixtures/v0005/demo.yaml ${tmpdir}/layers/
 }
 
 client c2 -connect ${tmpdir}/vigild.sock {

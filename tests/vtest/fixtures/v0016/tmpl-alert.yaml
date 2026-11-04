@@ -1,0 +1,22 @@
+# A check that fails until the marker file exists, and an alert whose body
+# comes from a template (Slack-like {"text": "…"}).
+# vigild gets CHECK_MARKER and WEBHOOK_URL from the test.
+checks:
+  tmpl-check:
+    level: alive
+    startup: enabled
+    delay: 0s
+    period: 1s
+    timeout: 2s
+    threshold: 1
+    exec:
+      command: 'test -f "$CHECK_MARKER"'
+      pass-env-glob: [CHECK_MARKER]
+
+alerts:
+  tmpl-webhook:
+    url: "env:WEBHOOK_URL"
+    format: webhook
+    on-check: [tmpl-check]
+    retry-attempts: 1
+    body-template: '{"text": "{{ check }} is {{ status }}", "check": "{{ check }}", "status": "{{ status }}"}'

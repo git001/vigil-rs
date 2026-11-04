@@ -30,51 +30,7 @@ shell {
 # logger: echoes a line, restarts → produces log entries for `vigil logs`.
 
 shell {
-	cat > ${tmpdir}/layers/checks.yaml <<'EOF'
-services:
-  logger:
-    command: "/bin/sh -c 'echo vigil-log-entry'"
-    startup: enabled
-    on-success: restart
-    backoff-delay: 100ms
-
-checks:
-  pending-check:
-    level: alive
-    startup: enabled
-    delay: 1h
-    period: 30s
-    timeout: 5s
-    exec:
-      command: "true"
-
-  fast-check:
-    level: alive
-    startup: enabled
-    delay: 0s
-    period: 30s
-    timeout: 5s
-    exec:
-      command: "true"
-
-  medium-check:
-    level: alive
-    startup: enabled
-    delay: 0s
-    period: 2m
-    timeout: 5s
-    exec:
-      command: "true"
-
-  slow-check:
-    level: alive
-    startup: enabled
-    delay: 0s
-    period: 2h
-    timeout: 5s
-    exec:
-      command: "true"
-EOF
+	cp ${vtestdir}/fixtures/v0014/checks.yaml ${tmpdir}/layers/
 	${vigil} --socket ${tmpdir}/vigild.sock replan
 }
 

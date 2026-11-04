@@ -45,12 +45,7 @@ shell {
 # the vtc heredoc).
 
 shell {
-	cat > ${tmpdir}/layers/signal-sink.yaml <<'YAML'
-services:
-  signal-sink:
-    command: "/bin/sh -c 'while true; do sleep 1; done'"
-    startup: enabled
-YAML
+	cp ${vtestdir}/fixtures/v0019/signal-sink.yaml ${tmpdir}/layers/
 	${vigil} --socket ${tmpdir}/vigild.sock replan
 }
 

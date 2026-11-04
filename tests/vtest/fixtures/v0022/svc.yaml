@@ -1,0 +1,4 @@
+services:
+  https-svc:
+    command: "/bin/sh -c 'while true; do echo https-svc-log; sleep 0.05; done'"
+    startup: enabled

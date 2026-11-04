@@ -1,0 +1,10 @@
+{
+  "identities": {
+    "admin-user": {
+      "access": "admin",
+      "basic": {
+        "password-hash": "$6$testhttps$ipMqmezplZCkSLyGuC/EYDFijQGdL8m6XSCMauSeFn2g8RmH.opuYHKxjb64bD3UIIVVv3uxsoQJa01UG7j3L1"
+      }
+    }
+  }
+}

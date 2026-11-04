@@ -14,12 +14,7 @@ shell {
 
 # Write a service that continuously emits log lines to stdout
 shell {
-	cat > ${tmpdir}/layers/log-svc.yaml <<'EOF'
-services:
-  log-svc:
-    command: "/bin/sh -c 'i=0; while true; do echo relay-test-line-$i; i=$((i+1)); sleep 0.2; done'"
-    startup: enabled
-EOF
+	cp ${vtestdir}/fixtures/v0010/log-svc.yaml ${tmpdir}/layers/
 	${vigil} --socket ${tmpdir}/vigild.sock replan
 }
 

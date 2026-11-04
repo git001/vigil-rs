@@ -46,12 +46,7 @@ shell {
 
 # Write a layer and replan — service should appear in list output
 shell {
-	cat > ${tmpdir}/layers/demo.yaml <<'EOF'
-services:
-  demo-svc:
-    command: "/bin/sleep 3600"
-    startup: disabled
-EOF
+	cp ${vtestdir}/fixtures/v0009/demo.yaml ${tmpdir}/layers/
 	${vigil} --socket ${tmpdir}/vigild.sock replan
 	${vigil} --socket ${tmpdir}/vigild.sock services list > ${tmpdir}/svcs.txt
 	grep -q demo-svc ${tmpdir}/svcs.txt

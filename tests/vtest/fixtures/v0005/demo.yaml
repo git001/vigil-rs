@@ -1,0 +1,4 @@
+services:
+  echo-svc:
+    command: "/bin/echo hello"
+    startup: disabled

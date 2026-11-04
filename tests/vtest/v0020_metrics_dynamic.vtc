@@ -2,7 +2,21 @@ vtest "vigild metrics: service_active, alert_fire_count reflect runtime state"
 
 shell { mkdir -p ${tmpdir}/layers }
 
-process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+# Webhook server for the alert part (tests/vtest/helpers/http_capture.py);
+# started first so vigild can get its URL via WEBHOOK_URL ("env:" in the
+# alert url).
+shell {
+	${vtestdir}/helpers/http_capture.py ${tmpdir}/alert_port.txt ${tmpdir}/alerts.json \
+		> /dev/null 2>&1 &
+	echo $! > ${tmpdir}/alert_srv.pid
+	for i in $(seq 1 50); do
+		test -s ${tmpdir}/alert_port.txt && break
+		sleep 0.1
+	done
+	test -s ${tmpdir}/alert_port.txt
+}
+
+process p1 "env WEBHOOK_URL=http://127.0.0.1:$(cat ${tmpdir}/alert_port.txt)/ ${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
 
 shell {
 	for i in $(seq 1 50); do
@@ -17,12 +31,7 @@ shell {
 # ---------------------------------------------------------------------------
 
 shell {
-	cat > ${tmpdir}/layers/svc.yaml <<'EOF'
-services:
-  long-runner:
-    command: "/bin/sh -c 'while true; do sleep 1; done'"
-    startup: enabled
-EOF
+	cp ${vtestdir}/fixtures/v0020/svc.yaml ${tmpdir}/layers/
 	${vigil} --socket ${tmpdir}/vigild.sock replan
 }
 
@@ -50,47 +59,11 @@ shell {
 # ---------------------------------------------------------------------------
 
 # Pick a free port for the mock alert receiver.
-shell {
-	PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); p=s.getsockname()[1]; s.close(); print(p)")
-	echo "$PORT" > ${tmpdir}/alert_port.txt
-}
 
-# Start minimal Python HTTP server to absorb alert POSTs.
-shell {
-	PORT=$(cat ${tmpdir}/alert_port.txt)
-	python3 -c "
-import http.server
-class H(http.server.BaseHTTPRequestHandler):
-    def do_POST(self):
-        self.send_response(200)
-        self.end_headers()
-    def log_message(self, *a): pass
-srv = http.server.HTTPServer(('127.0.0.1', $PORT), H)
-srv.serve_forever()
-" > /dev/null 2>&1 &
-	echo $! > ${tmpdir}/alert_srv.pid
-	sleep 0.2
-}
 
+# Layer fixtures/v0020/alert_check.yaml: an always failing check with an alert.
 shell {
-	PORT=$(cat ${tmpdir}/alert_port.txt)
-	cat > ${tmpdir}/layers/alert_check.yaml <<EOF
-checks:
-  dummy-check:
-    override: merge
-    startup: enabled
-    http:
-      url: "http://127.0.0.1:1/probe"
-      timeout: 100ms
-    period: 200ms
-    delay: 0s
-
-alerts:
-  test-alert:
-    override: merge
-    url: "http://127.0.0.1:$PORT/"
-    on-check: [dummy-check]
-EOF
+	cp ${vtestdir}/fixtures/v0020/alert_check.yaml ${tmpdir}/layers/
 	${vigil} --socket ${tmpdir}/vigild.sock replan
 }
 

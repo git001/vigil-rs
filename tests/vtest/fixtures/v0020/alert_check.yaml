@@ -1,0 +1,17 @@
+# A check that always fails (nothing listens on port 1) and an alert to the
+# test's webhook server; vigild gets WEBHOOK_URL from the test.
+checks:
+  dummy-check:
+    override: merge
+    startup: enabled
+    http:
+      url: "http://127.0.0.1:1/probe"
+      timeout: 100ms
+    period: 1s
+    delay: 0s
+
+alerts:
+  test-alert:
+    override: merge
+    url: "env:WEBHOOK_URL"
+    on-check: [dummy-check]

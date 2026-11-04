@@ -1,0 +1,10 @@
+{
+  "identities": {
+    "extra-user": {
+      "access": "read",
+      "basic": {
+        "password-hash": "$6$testextra$Cq1GhPxDNtKxM7J.P1EovJ64dyEsjMy59Cr2zHgWhpmUsETC.YtW8GFsrGO810Kh5f/9.SYG53plbhT3VaA7z/"
+      }
+    }
+  }
+}

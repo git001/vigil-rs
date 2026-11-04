@@ -31,11 +31,31 @@ shell {
 	test -S ${tmpdir}/vigild.sock
 }
 
+# ---------------------------------------------------------------------------
+# Identities (since v4 the TLS API has no anonymous admin, S5): create them
+# over the Unix socket first; TLS calls below authenticate as admin-user.
+# The local identity keeps Unix-socket access working after bootstrap ends.
+# ---------------------------------------------------------------------------
+
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock \
+		identities add-local local-admin --access admin
+}
+
+# admin-user / admpass, see tests/vtest/fixtures/README.md
+shell {
+	curl -sf \
+		--unix-socket ${tmpdir}/vigild.sock \
+		-X POST http://localhost/v1/identities \
+		-H "Content-Type: application/json" \
+		-d @${vtestdir}/fixtures/identities/admin-user.json > /dev/null
+}
+
 # Also wait briefly for the TLS port to open.
 shell {
 	PORT=$(cat ${tmpdir}/tls_port.txt)
 	for i in $(seq 1 30); do
-		${vigil} --url https://127.0.0.1:$PORT --insecure system-info \
+		${vigil} --url https://127.0.0.1:$PORT --insecure --user admin-user:admpass system-info \
 			> /dev/null 2>&1 && break
 		sleep 0.2
 	done
@@ -46,7 +66,7 @@ shell {
 # system-info via HTTPS (self-signed → --insecure)
 shell {
 	PORT=$(cat ${tmpdir}/tls_port.txt)
-	${vigil} --url https://127.0.0.1:$PORT --insecure system-info \
+	${vigil} --url https://127.0.0.1:$PORT --insecure --user admin-user:admpass system-info \
 		> ${tmpdir}/sysinfo_tls.txt
 	grep -q version ${tmpdir}/sysinfo_tls.txt
 }
@@ -54,19 +74,19 @@ shell {
 # services list via HTTPS
 shell {
 	PORT=$(cat ${tmpdir}/tls_port.txt)
-	${vigil} --url https://127.0.0.1:$PORT --insecure services list
+	${vigil} --url https://127.0.0.1:$PORT --insecure --user admin-user:admpass services list
 }
 
 # checks list via HTTPS
 shell {
 	PORT=$(cat ${tmpdir}/tls_port.txt)
-	${vigil} --url https://127.0.0.1:$PORT --insecure checks list
+	${vigil} --url https://127.0.0.1:$PORT --insecure --user admin-user:admpass checks list
 }
 
 # logs via HTTPS
 shell {
 	PORT=$(cat ${tmpdir}/tls_port.txt)
-	${vigil} --url https://127.0.0.1:$PORT --insecure logs
+	${vigil} --url https://127.0.0.1:$PORT --insecure --user admin-user:admpass logs
 }
 
 # --- reaper.rs: subreaper + SIGCHLD coverage ---
@@ -74,14 +94,7 @@ shell {
 # Add a service that exits immediately (on-success: restart) so that
 # SIGCHLD fires repeatedly → reap_children() is called.
 shell {
-	cat > ${tmpdir}/layers/quick.yaml <<'EOF'
-services:
-  quick-exit:
-    command: "/bin/true"
-    startup: enabled
-    on-success: restart
-    backoff-delay: 100ms
-EOF
+	cp ${vtestdir}/fixtures/v0013/quick.yaml ${tmpdir}/layers/
 	${vigil} --socket ${tmpdir}/vigild.sock replan
 }
 

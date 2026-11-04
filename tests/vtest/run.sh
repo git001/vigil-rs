@@ -79,6 +79,7 @@ if [[ "${COVERAGE}" == false ]]; then
         -Dvigild="${VIGILD_BIN}" \
         -Dvigil="${VIGIL_BIN}" \
         -Dvigil_log_relay="${VIGIL_LOG_RELAY_BIN}" \
+        -Dvtestdir="${REPO_ROOT}/tests/vtest" \
         "${VTEST_OPTS[@]}" \
         "${VTC_FILES[@]}"
 fi
@@ -127,6 +128,7 @@ export LLVM_PROFILE_FILE="${LLVM_PROFILE_FILE}"
     -Dvigild="${VIGILD_BIN}" \
     -Dvigil="${VIGIL_BIN}" \
     -Dvigil_log_relay="${VIGIL_LOG_RELAY_BIN}" \
+    -Dvtestdir="${REPO_ROOT}/tests/vtest" \
     "${VTEST_OPTS[@]}" \
     "${VTC_FILES[@]}"
 
