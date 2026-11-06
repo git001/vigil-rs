@@ -75,11 +75,54 @@ fn validate_service(plan: &Plan, name: &str, svc: &ServiceConfig) -> anyhow::Res
     validate_oneshot(svc)?;
     crate::template::check_service(svc)?;
     validate_watch_files(svc)?;
-    validate_healthy_time(svc)
+    validate_healthy_time(svc)?;
+    duration("kill-delay", &svc.kill_delay)?;
+    let delay = duration("backoff-delay", &svc.backoff_delay)?;
+    let limit = duration("backoff-limit", &svc.backoff_limit)?;
+    if let Some(d) = delay {
+        // 0 would never grow, so the backoff limit is never reached and a
+        // failing service restarts in a tight loop.
+        anyhow::ensure!(!d.is_zero(), "backoff-delay must be greater than 0");
+    }
+    let (delay, limit) = (
+        delay.unwrap_or(crate::service::DEFAULT_BACKOFF_DELAY),
+        limit.unwrap_or(crate::service::DEFAULT_BACKOFF_LIMIT),
+    );
+    anyhow::ensure!(
+        limit >= delay,
+        "backoff-limit ({limit:?}) must not be shorter than backoff-delay ({delay:?})"
+    );
+    if let Some(f) = svc.backoff_factor {
+        anyhow::ensure!(
+            f.is_finite() && f >= 1.0,
+            "backoff-factor {f} must be a number of at least 1.0"
+        );
+    }
+    Ok(())
+}
+
+/// Parse an optional duration field; an invalid value is an error naming
+/// the field (never a silent fallback to the default).
+fn duration(field: &str, value: &Option<String>) -> anyhow::Result<Option<std::time::Duration>> {
+    value
+        .as_deref()
+        .map(|s| {
+            crate::duration::parse_duration(s)
+                .map_err(|e| anyhow::anyhow!("{field} {s:?} is not a duration: {e}"))
+        })
+        .transpose()
 }
 
 fn validate_check(plan: &Plan, name: &str, check: &CheckConfig) -> anyhow::Result<()> {
     crate::check::validate_period(check)?;
+    duration("delay", &check.delay)?;
+    if let Some(t) = duration("timeout", &check.timeout)? {
+        anyhow::ensure!(!t.is_zero(), "timeout must be greater than 0");
+    }
+    anyhow::ensure!(check.threshold != Some(0), "threshold must be at least 1");
+    if let Some(http) = &check.http {
+        anyhow::ensure!(!http.url.is_empty(), "http: url must not be empty");
+    }
     if let Some(s) = &check.service {
         anyhow::ensure!(
             plan.services.contains_key(s),
@@ -104,6 +147,15 @@ fn validate_check(plan: &Plan, name: &str, check: &CheckConfig) -> anyhow::Resul
 }
 
 fn validate_alert(alert: &AlertConfig) -> anyhow::Result<()> {
+    anyhow::ensure!(!alert.url.is_empty(), "url must be set");
+    anyhow::ensure!(
+        alert.retry_attempts != Some(0),
+        "retry-attempts must be at least 1"
+    );
+    for b in &alert.retry_backoff {
+        crate::duration::parse_duration(b)
+            .map_err(|e| anyhow::anyhow!("retry-backoff entry {b:?} is not a duration: {e}"))?;
+    }
     for v in &alert.on_vigild {
         anyhow::ensure!(
             VIGILD_ALERT_EVENTS.contains(&v.as_str()) || v == "*",
@@ -617,6 +669,60 @@ mod tests {
         for (yaml, want) in cases {
             let dir = TempDir::new().unwrap();
             write(&dir, "001.yaml", yaml);
+            match (load_plan(dir.path()), want) {
+                (Ok(_), None) => {}
+                (Err(e), Some(w)) => {
+                    let e = format!("{e:#}");
+                    assert!(e.contains(w), "{yaml}: {e}");
+                }
+                (r, w) => panic!("{yaml}: got {:?}, want {w:?}", r.map(|_| ())),
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_values_are_rejected_with_the_field_name() {
+        let svc = |f: &str| format!("services:\n  app:\n    command: /bin/true\n    {f}\n");
+        let chk = |f: &str| format!("checks:\n  c:\n    {f}\n    exec:\n      command: 'true'\n");
+        let alert = |f: &str| format!("alerts:\n  a:\n    url: http://127.0.0.1/\n    {f}\n");
+        let cases = [
+            (
+                svc("kill-delay: 10 sec"),
+                Some("kill-delay \"10 sec\" is not a duration"),
+            ),
+            (
+                svc("backoff-delay: 0s"),
+                Some("backoff-delay must be greater than 0"),
+            ),
+            (
+                svc("backoff-delay: 1m"),
+                Some("must not be shorter than backoff-delay"),
+            ),
+            (
+                svc("backoff-factor: 0.5"),
+                Some("backoff-factor 0.5 must be a number of at least 1.0"),
+            ),
+            (
+                svc("backoff-limit: soon"),
+                Some("backoff-limit \"soon\" is not a duration"),
+            ),
+            (svc("backoff-delay: 2s"), None),
+            (chk("delay: 3x"), Some("delay \"3x\" is not a duration")),
+            (chk("timeout: 0s"), Some("timeout must be greater than 0")),
+            (chk("threshold: 0"), Some("threshold must be at least 1")),
+            (
+                alert("retry-attempts: 0"),
+                Some("retry-attempts must be at least 1"),
+            ),
+            (
+                alert("retry-backoff: [1s, later]"),
+                Some("retry-backoff entry \"later\""),
+            ),
+            (alert("retry-attempts: 2"), None),
+        ];
+        for (yaml, want) in cases {
+            let dir = TempDir::new().unwrap();
+            write(&dir, "001.yaml", &yaml);
             match (load_plan(dir.path()), want) {
                 (Ok(_), None) => {}
                 (Err(e), Some(w)) => {

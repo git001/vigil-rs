@@ -704,8 +704,10 @@ restart, longer every time:
 delay_n = min(backoff-delay * backoff-factor^n, backoff-limit)
 ```
 
-Once the delay has grown to `backoff-limit`, vigild gives up at the next
-failure: the service goes to `error` (alert event `error`, see [service
+`backoff-delay` must be greater than 0, `backoff-limit` at least
+`backoff-delay` and `backoff-factor` at least `1.0`; other values make the
+layer invalid. Once the delay has grown to `backoff-limit`, vigild gives up at
+the next failure: the service goes to `error` (alert event `error`, see [service
 events](#service-events)) and stays there until you start it again.
 
 Example with the defaults (`500ms`, `2.0`, `30s`): restarts after
@@ -861,12 +863,12 @@ makes the layer invalid.
 #### `timeout`
 
 How long to wait for the check to complete before counting it as a failure.
-Default: **3s**.
+Default: **3s**; must be greater than 0.
 
 #### `threshold`
 
 Number of consecutive failures required before the check is declared `Down` and
-`on-check-failure` actions are triggered. Default: **3**.
+`on-check-failure` actions are triggered. Default: **3**; at least 1.
 
 #### `service`
 

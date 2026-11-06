@@ -184,9 +184,9 @@ pub fn spawn(name: String, config: ServiceConfig, ctx: Context) -> Handle {
 // ---------------------------------------------------------------------------
 
 pub(super) const DEFAULT_KILL_DELAY: Duration = Duration::from_secs(5);
-pub(super) const DEFAULT_BACKOFF_DELAY: Duration = Duration::from_millis(500);
+pub(crate) const DEFAULT_BACKOFF_DELAY: Duration = Duration::from_millis(500);
 pub(super) const DEFAULT_BACKOFF_FACTOR: f64 = 2.0;
-pub(super) const DEFAULT_BACKOFF_LIMIT: Duration = Duration::from_secs(30);
+pub(crate) const DEFAULT_BACKOFF_LIMIT: Duration = Duration::from_secs(30);
 pub(super) const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(30);
 /// Default `healthy-time`.
 pub const DEFAULT_HEALTHY_TIME: Duration = Duration::from_secs(10);
