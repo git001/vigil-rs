@@ -90,7 +90,9 @@ on its own:
   (`${vtestdir}/fixtures/identities/admin-user.json`); see
   [fixtures/README.md](fixtures/README.md) for the test users.
 - `helpers/`: small standalone scripts, e.g. `helpers/http_capture.py` (an
-  HTTP server that records POST bodies and reports its port in a file) or
+  HTTP server that records POST bodies and reports its port in a file),
+  `helpers/tcp_capture.py` (a TCP sink, the same for raw TCP; `--port` binds
+  a given port again, e.g. to test a reconnect) or
   `helpers/tls_identity.py` (request body for a TLS identity whose CA the
   test creates at runtime).
 

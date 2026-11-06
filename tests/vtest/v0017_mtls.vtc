@@ -43,20 +43,14 @@ shell {
 }
 
 # ---------------------------------------------------------------------------
-# Pick a free TCP port and start vigild with mTLS
+# Start vigild with mTLS on a free port
 # ---------------------------------------------------------------------------
 
 shell {
-	PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); p=s.getsockname()[1]; s.close(); print(p)")
-	echo "$PORT" > ${tmpdir}/tls_port.txt
-}
-
-shell {
-	PORT=$(cat ${tmpdir}/tls_port.txt)
 	${vigild} \
 		--layers-dir    ${tmpdir}/layers \
 		--socket        ${tmpdir}/vigild.sock \
-		--tls-addr      127.0.0.1:$PORT \
+		--tls-addr      127.0.0.1:0 \
 		--tls-client-ca ${tmpdir}/certs/ca.crt \
 		>> ${tmpdir}/vigild.log 2>&1 < /dev/null &
 	echo $! > ${tmpdir}/vigild.pid
@@ -69,6 +63,14 @@ shell {
 		sleep 0.1
 	done
 	test -S ${tmpdir}/vigild.sock
+}
+
+# vigild binds a free TLS port (--tls-addr 127.0.0.1:0); vigil system-info
+# shows the one it got.
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock system-info \
+		| sed -n 's/^https-address: .*:\([0-9]*\)$/\1/p' > ${tmpdir}/tls_port.txt
+	test -s ${tmpdir}/tls_port.txt
 }
 
 # Wait for TLS port

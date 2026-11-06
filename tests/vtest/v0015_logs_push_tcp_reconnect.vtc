@@ -12,10 +12,19 @@ shell {
 	test -S ${tmpdir}/vigild.sock
 }
 
-# Pick a free TCP port for the sink
+# --- Round 1: start the sink on a free port, verify logs arrive ---
+# tests/vtest/helpers/tcp_capture.py binds a free port and writes it to
+# sink_port.txt once it listens.
+
 shell {
-	PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); p=s.getsockname()[1]; s.close(); print(p)")
-	echo "$PORT" > ${tmpdir}/sink_port.txt
+	${vtestdir}/helpers/tcp_capture.py ${tmpdir}/sink_port.txt ${tmpdir}/sink1.txt \
+		> /dev/null 2>&1 < /dev/null &
+	echo $! > ${tmpdir}/sink1.pid
+	for i in $(seq 1 50); do
+		test -s ${tmpdir}/sink_port.txt && break
+		sleep 0.1
+	done
+	test -s ${tmpdir}/sink_port.txt
 }
 
 # Layer fixtures/v0015/log-svc.yaml: a service pushing its logs to the sink;
@@ -24,17 +33,6 @@ shell {
 	sed "s/@SINK_PORT@/$(cat ${tmpdir}/sink_port.txt)/" \
 		${vtestdir}/fixtures/v0015/log-svc.yaml > ${tmpdir}/layers/log-svc.yaml
 	${vigil} --socket ${tmpdir}/vigild.sock replan
-}
-
-shell { sleep 0.3 }
-
-# --- Round 1: start sink, verify logs arrive ---
-
-shell {
-	PORT=$(cat ${tmpdir}/sink_port.txt)
-	socat TCP-LISTEN:$PORT,reuseaddr - \
-		>> ${tmpdir}/sink1.txt 2>/dev/null < /dev/null &
-	echo $! > ${tmpdir}/socat1.pid
 }
 
 shell {
@@ -48,18 +46,24 @@ shell {
 
 # --- Kill the sink (simulates crash / network outage) ---
 
-shell { kill $(cat ${tmpdir}/socat1.pid) 2>/dev/null || true }
+shell { kill $(cat ${tmpdir}/sink1.pid) 2>/dev/null || true }
 
 # Give vigild time to notice the broken connection and enter backoff (500ms)
 shell { sleep 1 }
 
-# --- Round 2: restart sink, verify vigild reconnects and logs resume ---
+# --- Round 2: restart the sink on the same port (vigild is configured for
+# it), verify vigild reconnects and logs resume ---
 
 shell {
-	PORT=$(cat ${tmpdir}/sink_port.txt)
-	socat TCP-LISTEN:$PORT,reuseaddr - \
-		>> ${tmpdir}/sink2.txt 2>/dev/null < /dev/null &
-	echo $! > ${tmpdir}/socat2.pid
+	${vtestdir}/helpers/tcp_capture.py --port $(cat ${tmpdir}/sink_port.txt) \
+		${tmpdir}/sink2_port.txt ${tmpdir}/sink2.txt \
+		> /dev/null 2>&1 < /dev/null &
+	echo $! > ${tmpdir}/sink2.pid
+	for i in $(seq 1 50); do
+		test -s ${tmpdir}/sink2_port.txt && break
+		sleep 0.1
+	done
+	test -s ${tmpdir}/sink2_port.txt
 }
 
 shell {
@@ -73,7 +77,7 @@ shell {
 
 # Tear down
 shell {
-	kill $(cat ${tmpdir}/socat2.pid) 2>/dev/null || true
+	kill $(cat ${tmpdir}/sink2.pid) 2>/dev/null || true
 }
 
 process p1 -kill TERM

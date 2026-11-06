@@ -21,15 +21,19 @@ shell {
 # Let vigild start the service
 shell { sleep 0.5 }
 
-# Pick a free TCP port and start a socat TCP sink listener.
-# Redirect stdout→file, stderr→/dev/null, stdin←/dev/null so that socat
+# Start a TCP sink (tests/vtest/helpers/tcp_capture.py) that appends what it
+# receives to relay-output.txt; it binds a free port and writes it to
+# sink_port.txt once it listens. All three fds are redirected so the sink
 # does not hold the VTest2 output pipe open.
 shell {
-	PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); p=s.getsockname()[1]; s.close(); print(p)")
-	echo "$PORT" > ${tmpdir}/sink_port.txt
-	socat TCP-LISTEN:$PORT,reuseaddr,fork - \
-		>> ${tmpdir}/relay-output.txt 2>/dev/null < /dev/null &
-	echo $! > ${tmpdir}/socat.pid
+	${vtestdir}/helpers/tcp_capture.py ${tmpdir}/sink_port.txt ${tmpdir}/relay-output.txt \
+		> /dev/null 2>&1 < /dev/null &
+	echo $! > ${tmpdir}/sink.pid
+	for i in $(seq 1 50); do
+		test -s ${tmpdir}/sink_port.txt && break
+		sleep 0.1
+	done
+	test -s ${tmpdir}/sink_port.txt
 }
 
 # Start vigil-log-relay in source-socket mode.
@@ -41,7 +45,8 @@ shell {
 		--source-path "/v1/logs/follow?format=ndjson" \
 		--tcp-sink-host 127.0.0.1 \
 		--tcp-sink-port $PORT \
-		--healthcheck 127.0.0.1:9092 \
+		--healthcheck 127.0.0.1:0 \
+		--log-format json \
 		--source-reconnect-retries 5 \
 		>> ${tmpdir}/relay.log 2>&1 < /dev/null &
 	echo $! > ${tmpdir}/relay.pid
@@ -65,17 +70,20 @@ shell {
 
 # Healthcheck endpoint should respond 200
 shell {
+	# The relay binds a free port (--healthcheck 127.0.0.1:0) and logs it.
 	for i in $(seq 1 20); do
-		curl -sf http://127.0.0.1:9092/healthz && break
+		HPORT=$(grep 'healthcheck listening' ${tmpdir}/relay.log \
+			| sed -n 's/.*"addr":"[^"]*:\([0-9]*\)".*/\1/p')
+		test -n "$HPORT" && curl -sf http://127.0.0.1:$HPORT/healthz && break
 		sleep 0.2
 	done
-	curl -sf http://127.0.0.1:9092/healthz
+	curl -sf http://127.0.0.1:$HPORT/healthz
 }
 
 # Tear down
 shell {
 	kill $(cat ${tmpdir}/relay.pid) 2>/dev/null || true
-	kill $(cat ${tmpdir}/socat.pid) 2>/dev/null || true
+	kill $(cat ${tmpdir}/sink.pid) 2>/dev/null || true
 }
 
 process p1 -kill TERM

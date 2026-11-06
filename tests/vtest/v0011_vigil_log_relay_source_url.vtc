@@ -8,13 +8,17 @@ server s1 -repeat 20 {
 		-body "{\"service\":\"url-test\",\"message\":\"relay-url-test-line\"}\n"
 } -start
 
-# Free TCP port for the socat sink
+# TCP sink (tests/vtest/helpers/tcp_capture.py) on a free port, written to
+# sink_port.txt once it listens.
 shell {
-	PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); p=s.getsockname()[1]; s.close(); print(p)")
-	echo "$PORT" > ${tmpdir}/sink_port.txt
-	socat TCP-LISTEN:$PORT,reuseaddr,fork - \
-		>> ${tmpdir}/relay-output.txt 2>/dev/null < /dev/null &
-	echo $! > ${tmpdir}/socat.pid
+	${vtestdir}/helpers/tcp_capture.py ${tmpdir}/sink_port.txt ${tmpdir}/relay-output.txt \
+		> /dev/null 2>&1 < /dev/null &
+	echo $! > ${tmpdir}/sink.pid
+	for i in $(seq 1 50); do
+		test -s ${tmpdir}/sink_port.txt && break
+		sleep 0.1
+	done
+	test -s ${tmpdir}/sink_port.txt
 }
 
 # Start relay in --source-url mode
@@ -24,7 +28,8 @@ shell {
 		--source-url "http://${s1_sock}" \
 		--tcp-sink-host 127.0.0.1 \
 		--tcp-sink-port $PORT \
-		--healthcheck 127.0.0.1:9093 \
+		--healthcheck 127.0.0.1:0 \
+		--log-format json \
 		--source-reconnect-delay 100 \
 		--source-reconnect-retries 20 \
 		>> ${tmpdir}/relay.log 2>&1 < /dev/null &
@@ -43,15 +48,18 @@ shell {
 
 # Healthcheck must be alive
 shell {
+	# The relay binds a free port (--healthcheck 127.0.0.1:0) and logs it.
 	for i in $(seq 1 20); do
-		curl -sf http://127.0.0.1:9093/healthz && break
+		HPORT=$(grep 'healthcheck listening' ${tmpdir}/relay.log \
+			| sed -n 's/.*"addr":"[^"]*:\([0-9]*\)".*/\1/p')
+		test -n "$HPORT" && curl -sf http://127.0.0.1:$HPORT/healthz && break
 		sleep 0.2
 	done
-	curl -sf http://127.0.0.1:9093/healthz
+	curl -sf http://127.0.0.1:$HPORT/healthz
 }
 
-# Tear down relay and socat sink first, then let VTest2 clean up the server
+# Tear down relay and TCP sink first, then let VTest2 clean up the server
 shell {
 	kill $(cat ${tmpdir}/relay.pid) 2>/dev/null || true
-	kill $(cat ${tmpdir}/socat.pid) 2>/dev/null || true
+	kill $(cat ${tmpdir}/sink.pid) 2>/dev/null || true
 }
