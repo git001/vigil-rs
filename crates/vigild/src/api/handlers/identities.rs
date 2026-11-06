@@ -69,6 +69,7 @@ pub(crate) async fn list_identities(
     responses(
         (status = 200, description = "Identities added or updated."),
         (status = 403, description = "Forbidden."),
+        (status = 409, description = "A name belongs to an identity from a layer file (read-only over the API)."),
         (status = 500, description = "Internal error."),
     )
 )]
@@ -81,7 +82,10 @@ pub(crate) async fn add_identities(
         .require(IdentityAccess::Admin)
         .map_err(ApiError::forbidden_from)?;
     for (name, spec) in body.identities {
-        s.identity_store.add(name, spec).await;
+        s.identity_store
+            .add(name, spec)
+            .await
+            .map_err(ApiError::conflict)?;
     }
     ok(())
 }
@@ -95,6 +99,7 @@ pub(crate) async fn add_identities(
     responses(
         (status = 200, description = "Names of the removed identities.", body = Vec<String>),
         (status = 403, description = "Forbidden."),
+        (status = 409, description = "A name belongs to an identity from a layer file; nothing was removed."),
         (status = 500, description = "Internal error."),
     )
 )]
@@ -106,5 +111,9 @@ pub(crate) async fn remove_identities(
     caller
         .require(IdentityAccess::Admin)
         .map_err(ApiError::forbidden_from)?;
-    ok(s.identity_store.remove(&body.identities).await)
+    s.identity_store
+        .remove(&body.identities)
+        .await
+        .map_err(ApiError::conflict)
+        .and_then(ok)
 }

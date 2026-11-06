@@ -9,12 +9,20 @@ use rustls::pki_types::{CertificateDer, UnixTime};
 use rustls::server::WebPkiClientVerifier;
 use sha_crypt::sha512_check;
 use tokio::sync::RwLock;
-use vigil_types::identity::{Identity, IdentityAccess, IdentitySpec};
+use tracing::warn;
+use vigil_types::identity::{Identity, IdentityAccess, IdentitySource, IdentitySpec};
+
+mod layer;
+
+pub use layer::{LoadedIdentities, load_layer_identities};
 
 // ---------------------------------------------------------------------------
 // In-memory identity store
 // ---------------------------------------------------------------------------
 
+/// All identities: those from the layer files ([`IdentitySource::Layer`],
+/// replaced as a whole on every load) and those added over the API
+/// ([`IdentitySource::Api`]). Layer identities are read-only over the API.
 #[derive(Default)]
 pub struct IdentityStore {
     inner: RwLock<HashMap<String, Identity>>,
@@ -23,6 +31,18 @@ pub struct IdentityStore {
 impl IdentityStore {
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
+    }
+
+    /// A store holding the layer identities of the first load.
+    pub fn with_layer(identities: Vec<Identity>) -> Arc<Self> {
+        Arc::new(Self {
+            inner: RwLock::new(
+                identities
+                    .into_iter()
+                    .map(|id| (id.name.clone(), id))
+                    .collect(),
+            ),
+        })
     }
 
     pub async fn list(&self, names: &[String]) -> Vec<Identity> {
@@ -35,30 +55,68 @@ impl IdentityStore {
             .collect()
     }
 
-    pub async fn is_empty(&self) -> bool {
-        self.inner.read().await.is_empty()
+    /// No identity was added over the API. Then root and vigild's own UID
+    /// keep the Unix-socket bootstrap admin, even with layer identities.
+    pub async fn api_is_empty(&self) -> bool {
+        !self
+            .inner
+            .read()
+            .await
+            .values()
+            .any(|id| id.source == IdentitySource::Api)
     }
 
-    pub async fn add(&self, name: String, spec: IdentitySpec) {
+    /// Replace all layer identities (startup, replan). An API identity of
+    /// the same name is replaced too: the layer files win.
+    pub async fn set_layer(&self, identities: Vec<Identity>) {
+        let mut guard = self.inner.write().await;
+        guard.retain(|_, id| id.source == IdentitySource::Api);
+        for id in identities {
+            if guard.contains_key(&id.name) {
+                warn!(
+                    identity = %id.name,
+                    layer = id.layer.as_deref().unwrap_or_default(),
+                    "identity added over the API is replaced by the one in the layer file"
+                );
+            }
+            guard.insert(id.name.clone(), id);
+        }
+    }
+
+    /// Add or update an identity over the API. Layer identities cannot be
+    /// changed this way.
+    pub async fn add(&self, name: String, spec: IdentitySpec) -> anyhow::Result<()> {
+        let mut guard = self.inner.write().await;
+        if let Some(existing) = guard.get(&name) {
+            ensure_not_layer(existing)?;
+        }
         let identity = Identity {
             name: name.clone(),
             access: spec.access,
             local: spec.local,
             basic: spec.basic,
             tls: spec.tls,
+            source: IdentitySource::Api,
+            layer: None,
         };
-        self.inner.write().await.insert(name, identity);
+        guard.insert(name, identity);
+        Ok(())
     }
 
-    pub async fn remove(&self, names: &[String]) -> Vec<String> {
+    /// Remove identities added over the API; returns the names removed.
+    /// Naming a layer identity fails the whole request (nothing removed).
+    pub async fn remove(&self, names: &[String]) -> anyhow::Result<Vec<String>> {
         let mut guard = self.inner.write().await;
-        let mut removed = Vec::new();
         for name in names {
-            if guard.remove(name).is_some() {
-                removed.push(name.clone());
+            if let Some(existing) = guard.get(name) {
+                ensure_not_layer(existing)?;
             }
         }
-        removed
+        Ok(names
+            .iter()
+            .filter(|name| guard.remove(*name).is_some())
+            .cloned()
+            .collect())
     }
 
     /// Return the effective access level for an incoming Unix-socket connection
@@ -109,6 +167,16 @@ impl IdentityStore {
             .ok()
             .map(|_| identity.access)
     }
+}
+
+fn ensure_not_layer(id: &Identity) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        id.source != IdentitySource::Layer,
+        "identity {:?} is defined in layer {:?}; change it there",
+        id.name,
+        id.layer.as_deref().unwrap_or_default()
+    );
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

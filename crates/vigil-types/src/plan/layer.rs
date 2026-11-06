@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use super::Override;
 use super::alert::{AlertConfig, AlertsBlock, merge_alert};
 use super::check::{CheckConfig, merge_check};
+use super::identity::IdentityConfig;
 use super::service::{ServiceConfig, merge_service};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -26,6 +27,8 @@ pub struct Layer {
     pub checks: IndexMap<String, CheckConfig>,
     #[serde(default)]
     pub alerts: AlertsBlock,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub identities: IndexMap<String, IdentityConfig>,
 }
 
 /// The merged, resolved plan built from all layers in order.
@@ -35,6 +38,8 @@ pub struct Plan {
     pub services: IndexMap<String, ServiceConfig>,
     pub checks: IndexMap<String, CheckConfig>,
     pub alerts: IndexMap<String, AlertConfig>,
+    /// A later layer replaces a whole identity (no `override`).
+    pub identities: IndexMap<String, IdentityConfig>,
     /// Merged value of `alerts.max-queue-depth` across all layers (last wins).
     /// `None` means "use the built-in default".
     pub alert_queue_depth: Option<usize>,
@@ -49,6 +54,7 @@ impl Plan {
         let mut services: IndexMap<String, ServiceConfig> = IndexMap::new();
         let mut checks: IndexMap<String, CheckConfig> = IndexMap::new();
         let mut alerts: IndexMap<String, AlertConfig> = IndexMap::new();
+        let mut identities: IndexMap<String, IdentityConfig> = IndexMap::new();
         let mut alert_queue_depth: Option<usize> = None;
         let mut alert_max_queue_time: Option<String> = None;
 
@@ -102,6 +108,16 @@ impl Plan {
                     },
                 }
             }
+
+            for (name, id) in &layer.identities {
+                identities.insert(
+                    name.clone(),
+                    IdentityConfig {
+                        layer: layer.label.clone(),
+                        ..id.clone()
+                    },
+                );
+            }
         }
 
         Plan {
@@ -109,6 +125,7 @@ impl Plan {
             services,
             checks,
             alerts,
+            identities,
             alert_queue_depth,
             alert_max_queue_time,
         }

@@ -29,8 +29,8 @@ pub enum IdentityAccess {
 }
 
 /// Matches a connection coming in over the Unix socket by the caller's UID.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct LocalIdentity {
     /// Restrict to this UID. Omit to allow any local user.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -56,6 +56,17 @@ pub struct TlsIdentity {
     pub ca_cert: String,
 }
 
+/// Where an identity comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum IdentitySource {
+    /// Added over the API (`POST /v1/identities`); lost on restart.
+    #[default]
+    Api,
+    /// Defined in a layer file (`identities:`); read-only over the API.
+    Layer,
+}
+
 /// A named principal with a declared access level and optional auth info.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -68,6 +79,12 @@ pub struct Identity {
     pub basic: Option<BasicIdentity>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls: Option<TlsIdentity>,
+    /// `api` or `layer` (missing in answers of older vigild: `api`).
+    #[serde(default)]
+    pub source: IdentitySource,
+    /// The layer file (without extension) that defines it, for `layer`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

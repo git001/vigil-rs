@@ -6,7 +6,7 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-use vigild::{api, identity, logs, overlord, path_prefix, reaper, server, tls};
+use vigild::{api, logs, overlord, path_prefix, reaper, server, tls};
 
 use clap::Parser;
 use nix::sys::signal::Signal;
@@ -242,7 +242,13 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
         .as_ref()
         .map(|(l, _)| l.local_addr().map(|a| a.to_string()))
         .transpose()?;
-    let (overlord, log_store, metrics, overlord_task) = overlord::spawn(
+    let overlord::Spawned {
+        handle: overlord,
+        log_store,
+        metrics,
+        identity_store,
+        task: overlord_task,
+    } = overlord::spawn(
         args.layers_dir,
         http_address,
         https_address,
@@ -253,8 +259,8 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
         },
         path_prefix::notify_dir(&args.path_prefix),
         args.watch_layers,
-    )?;
-    let identity_store = identity::IdentityStore::new();
+    )
+    .await?;
 
     let (shutdown_tx, mut shutdown_rx) =
         tokio::sync::mpsc::channel::<vigil_types::api::DaemonAction>(1);

@@ -24,7 +24,6 @@ use tokio::sync::mpsc;
 use tower::ServiceExt;
 
 use vigild::api::{AppState, router};
-use vigild::identity::IdentityStore;
 use vigild::overlord;
 use vigild::server::TlsPeerCert;
 // nix is a direct dep of vigild — available transitively in integration tests
@@ -34,6 +33,7 @@ mod alerts;
 mod auth;
 mod checks;
 mod identities;
+mod layer_identities;
 mod logs;
 mod misc;
 mod services;
@@ -57,12 +57,31 @@ impl TestApp {
         Self::with_tls_anonymous(vigil_types::identity::IdentityAccess::Metrics).await
     }
 
+    /// Like `new`, with the layer file `001-auth.yaml` holding `yaml`.
+    pub async fn with_layer(yaml: &str) -> Self {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("001-auth.yaml"), yaml).unwrap();
+        Self::build(dir, vigil_types::identity::IdentityAccess::Metrics).await
+    }
+
     /// Like `new`, with an explicit `--tls-anonymous-access` level.
     pub async fn with_tls_anonymous(
         tls_anonymous_access: vigil_types::identity::IdentityAccess,
     ) -> Self {
-        let dir = TempDir::new().unwrap();
-        let (handle, log_store, metrics, _task) = overlord::spawn(
+        Self::build(TempDir::new().unwrap(), tls_anonymous_access).await
+    }
+
+    async fn build(
+        dir: TempDir,
+        tls_anonymous_access: vigil_types::identity::IdentityAccess,
+    ) -> Self {
+        let overlord::Spawned {
+            handle,
+            log_store,
+            metrics,
+            identity_store,
+            ..
+        } = overlord::spawn(
             dir.path().to_owned(),
             "test-addr".into(),
             None,
@@ -71,8 +90,8 @@ impl TestApp {
             std::env::temp_dir(),
             None,
         )
+        .await
         .unwrap();
-        let identity_store = IdentityStore::new();
         let (shutdown_tx, _shutdown_rx) = mpsc::channel(1);
 
         let state = AppState {

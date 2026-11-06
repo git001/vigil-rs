@@ -250,8 +250,12 @@ impl Overlord {
             plan,
             alerts,
             checks,
+            identities,
+            files,
         } = loaded;
         self.check_clients = checks;
+        self.identity_store.set_layer(identities).await;
+        self.watched_files.set(files);
         let old_plan = std::mem::replace(&mut self.plan, plan);
 
         let services_changed = count_changed(&old_plan.services, &self.plan.services);

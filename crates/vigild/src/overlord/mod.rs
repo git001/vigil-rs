@@ -15,6 +15,7 @@ use vigil_types::plan::Plan;
 
 use crate::alert::AlertSender;
 use crate::check::{self, CheckEvent};
+use crate::identity::IdentityStore;
 use crate::logs::LogStore;
 use crate::metrics::MetricsStore;
 use crate::service;
@@ -123,14 +124,30 @@ pub(super) struct Overlord {
     /// Services that are healthy (`active` for `healthy-time`, or a
     /// successful oneshot run). Checks of other services stay quiet.
     pub(super) healthy: std::collections::HashSet<String>,
+    /// Shared with the API server; the layer identities are replaced on
+    /// every successful load.
+    pub(super) identity_store: Arc<IdentityStore>,
+    /// The files the layers refer to (see [`plan::Loaded::files`]), watched
+    /// by `--watch-layers` too.
+    pub(super) watched_files: watch_layers::WatchedFiles,
 }
 
 // ---------------------------------------------------------------------------
 // Spawn
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::type_complexity)]
-pub fn spawn(
+/// What [`spawn`] hands to the API server.
+pub struct Spawned {
+    pub handle: Handle,
+    pub log_store: Arc<LogStore>,
+    pub metrics: Arc<MetricsStore>,
+    /// Identities from the layer files (kept current by every replan) and
+    /// those added over the API.
+    pub identity_store: Arc<IdentityStore>,
+    pub task: tokio::task::JoinHandle<()>,
+}
+
+pub async fn spawn(
     layers_dir: PathBuf,
     http_address: String,
     https_address: Option<String>,
@@ -138,12 +155,7 @@ pub fn spawn(
     exit_code_mode: service::ExitCodeMode,
     notify_dir: PathBuf,
     watch_layers: Option<std::time::Duration>,
-) -> anyhow::Result<(
-    Handle,
-    Arc<LogStore>,
-    Arc<MetricsStore>,
-    tokio::task::JoinHandle<()>,
-)> {
+) -> anyhow::Result<Spawned> {
     let (cmd_tx, cmd_rx) = mpsc::channel(128);
     let (event_tx, event_rx) = mpsc::channel(256);
     let (check_event_tx, check_event_rx) = mpsc::channel(256);
@@ -154,11 +166,19 @@ pub fn spawn(
     let broadcast_capacity = (log_buffer / 2).clamp(64, 4096);
     let log_store = LogStore::new(log_buffer, broadcast_capacity);
     let metrics = MetricsStore::new();
+    // Off the async runtime like every replan: a hanging file system (a
+    // dead NFS mount behind a `tls:` file) ends the start with an error
+    // instead of blocking it.
+    let dir = layers_dir.clone();
     let plan::Loaded {
         plan: plan_val,
         alerts,
         checks: check_clients,
-    } = plan::load(&layers_dir)?;
+        identities,
+        files,
+    } = crate::template::off_runtime("layers", move || plan::load(&dir)).await?;
+    let identity_store = IdentityStore::with_layer(identities);
+    let watched_files = watch_layers::WatchedFiles::new(files);
 
     let (queue_depth, max_age) = crate::alert::queue_limits(&plan_val);
     let mut alert_sender = AlertSender::with_queue_limits(queue_depth, max_age);
@@ -189,14 +209,22 @@ pub fn spawn(
         exit_code_mode,
         notify_dir,
         healthy: Default::default(),
+        identity_store: Arc::clone(&identity_store),
+        watched_files: watched_files.clone(),
     };
 
-    let join = tokio::spawn(run(ov));
+    let task = tokio::spawn(run(ov));
     if let Some(interval) = watch_layers {
         // Ends by itself when the overlord's command channel closes.
-        watch_layers::spawn(layers_dir, interval, cmd_tx.clone());
+        watch_layers::spawn(layers_dir, watched_files, interval, cmd_tx.clone());
     }
-    Ok((Handle { tx: cmd_tx }, log_store, metrics, join))
+    Ok(Spawned {
+        handle: Handle { tx: cmd_tx },
+        log_store,
+        metrics,
+        identity_store,
+        task,
+    })
 }
 
 // ---------------------------------------------------------------------------

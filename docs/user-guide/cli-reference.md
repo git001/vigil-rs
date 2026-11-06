@@ -317,10 +317,15 @@ Manage named principals for the access control system.
 | `write` | `read` + service/check control (start, stop, restart) |
 | `admin` | Full access including identity management |
 
-**Bootstrap mode:** While the identity store is empty, root and vigild's own
-UID get `admin` over the Unix socket, so the first identity can be added
-without credentials. Callers on the TLS listener get at most
-`--tls-anonymous-access` (default `metrics`).
+**Bootstrap mode:** While no identity was added over the API, root and
+vigild's own UID get `admin` over the Unix socket, so the first identity can
+be added without credentials. Identities from layer files do not end it.
+Callers on the TLS listener get at most `--tls-anonymous-access` (default
+`metrics`).
+
+Identities can also come from layer files (`identities:`, see
+[Identities](configuration.md#identities)). Those are read-only here: `add-local`
+or `remove` with their name fails and names the layer file.
 
 #### `identities list [NAME...]`
 
@@ -332,10 +337,11 @@ vigil identities list ops-user
 Example output:
 
 ```
-Name                     Access   Auth
-----------------------------------------------
-ops-user                 admin    local(uid=1000)
-ci-bot                   write    local(any)
+Name                     Access   Auth                     Source
+------------------------------------------------------------------------
+ci-bot                   write    local(any)               api
+log-relay                read     basic                    layer 001-auth
+ops-user                 admin    local(uid=1000)          api
 ```
 
 #### `identities add-local <NAME> [--access LEVEL] [--uid UID]`
@@ -354,8 +360,9 @@ Valid access levels: `metrics`, `read`, `write`, `admin`.
 
 #### Adding basic-auth or TLS identities
 
-`basic` (HTTP Basic Auth) and `tls` (client-certificate) identities are added
-directly via the REST API (`POST /v1/identities`). See the
+`basic` (HTTP Basic Auth) and `tls` (client-certificate) identities are
+defined in a layer file (see [Identities](configuration.md#identities)) or
+added directly via the REST API (`POST /v1/identities`). See the
 [REST API reference](../api-reference/rest-api.md) for details, and
 `examples/identities/` for a ready-to-run demonstration with all four levels.
 

@@ -17,6 +17,7 @@ fn layer(services: impl IntoIterator<Item = (&'static str, ServiceConfig)>) -> L
             .collect(),
         checks: IndexMap::new(),
         alerts: AlertsBlock::default(),
+        identities: IndexMap::new(),
     }
 }
 
@@ -155,6 +156,7 @@ fn alert_layer(name: &'static str, alert: AlertConfig) -> Layer {
             entries: [(name.to_owned(), alert)].into_iter().collect(),
             ..Default::default()
         },
+        identities: IndexMap::new(),
     }
 }
 
@@ -349,6 +351,7 @@ fn check_layer(name: &'static str, chk: CheckConfig) -> Layer {
         services: IndexMap::new(),
         checks: [(name.to_owned(), chk)].into_iter().collect(),
         alerts: AlertsBlock::default(),
+        identities: IndexMap::new(),
     }
 }
 

@@ -30,7 +30,7 @@ socket for programmatic control.
 | **REST API** | Full HTTP API over Unix socket; Swagger UI at `/docs` (assets loaded from unpkg.com — requires internet access; use `/openapi.json` in air-gapped environments) |
 | **OpenAPI** | Auto-generated spec via utoipa; served at `/openapi.json` |
 | **TLS listener** | Optional HTTPS API (`--tls-addr`); auto-generates self-signed cert |
-| **Identity management** | Named principals with `read`/`write`/`admin` access levels |
+| **Identity management** | Named principals with `metrics`/`read`/`write`/`admin` access levels (Unix UID, HTTP Basic, TLS client certificate); defined in layer files (password hash or CA from a file, e.g. a Kubernetes Secret) or added over the API |
 | **Signal forwarding** | SIGHUP / SIGUSR1 / SIGUSR2 forwarded to all running service process groups |
 | **Replan** | Hot-reload layer YAML files without restarting the daemon |
 | **mimalloc** | High-performance allocator enabled globally |
@@ -392,10 +392,11 @@ test starts a real `vigild` process (and sometimes `vigil-log-relay`) with a
 temporary layers directory and Unix socket, drives it through the HTTP API and
 the `vigil` CLI, and asserts on the responses.
 
-25 test files cover: system info, service/check/alert/identity CRUD, log
+26 test files cover: system info, service/check/alert/identity CRUD, log
 streaming, TLS listener, reaper, mTLS, alert body templates, log-relay socket
 and URL sources, TCP reconnect, JSON log format, HTTPS transport, service
-alerts, layer watching, shutdown exit codes, and more.
+alerts, layer watching, shutdown exit codes, identities in layer files, and
+more.
 
 ```sh
 # Run all VTest2 tests (requires VTest2 binary)

@@ -1,0 +1,9 @@
+# A read identity for vigil-log-relay, as a ConfigMap would ship it. The
+# password hash comes from a file, like a mounted Kubernetes Secret.
+#
+# The test replaces @SECRET_DIR@ with its own directory.
+identities:
+  log-relay:
+    access: read
+    basic:
+      password-hash-file: @SECRET_DIR@/log-relay.hash

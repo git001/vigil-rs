@@ -66,13 +66,14 @@ async fn resolve_access(
 ///   `Open` or `Metrics`). Never more: before v4 every TLS caller was admin
 ///   while no identity existed, so anyone reaching the port could control
 ///   all services.
-/// - **Unix socket**, no identities configured yet (bootstrap): `Admin` for
-///   root and for vigild's own UID, so the operator can add the first
-///   identity (e.g. via `kubectl exec`). Other UIDs get `Open`.
+/// - **Unix socket**, no identity added over the API yet (bootstrap):
+///   `Admin` for root and for vigild's own UID, so the operator can add the
+///   first identity (e.g. via `kubectl exec`). Identities from layer files
+///   do not end it. Other UIDs get `Open`.
 /// - Anything else: `Open`.
 fn anonymous_access(
     parts: &axum::http::request::Parts,
-    store_empty: bool,
+    bootstrap: bool,
     tls_anonymous: IdentityAccess,
 ) -> IdentityAccess {
     if parts.extensions.get::<TlsConnection>().is_some()
@@ -80,7 +81,7 @@ fn anonymous_access(
     {
         return tls_anonymous;
     }
-    if store_empty
+    if bootstrap
         && let Some(ConnectInfo(peer)) = parts.extensions.get::<ConnectInfo<UnixPeerInfo>>()
         && let Some(uid) = peer.uid
         && (uid == 0 || uid == nix::unistd::Uid::effective().as_raw())
@@ -117,13 +118,11 @@ impl axum::extract::FromRequestParts<AppState> for Caller {
         parts: &mut axum::http::request::Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let store_empty = state.identity_store.is_empty().await;
-        let identity = if store_empty {
-            IdentityAccess::Open
-        } else {
-            resolve_access(&state.identity_store, parts).await
-        };
-        let anonymous = anonymous_access(parts, store_empty, state.tls_anonymous_access);
+        let identity = resolve_access(&state.identity_store, parts).await;
+        // Only identities added over the API end the bootstrap: layer
+        // identities alone (e.g. a read identity for vigil-log-relay) keep it.
+        let bootstrap = state.identity_store.api_is_empty().await;
+        let anonymous = anonymous_access(parts, bootstrap, state.tls_anonymous_access);
         Ok(Caller(identity.max(anonymous)))
     }
 }

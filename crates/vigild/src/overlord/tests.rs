@@ -72,6 +72,7 @@ pub(super) fn make_overlord(
             services: services_plan,
             checks: IndexMap::new(),
             alerts: IndexMap::new(),
+            identities: IndexMap::new(),
             layers: Vec::new(),
             alert_queue_depth: None,
             alert_max_queue_time: None,
@@ -98,6 +99,8 @@ pub(super) fn make_overlord(
         exit_code_mode: service::ExitCodeMode::default(),
         notify_dir: std::env::temp_dir(),
         healthy: Default::default(),
+        identity_store: crate::identity::IdentityStore::new(),
+        watched_files: Default::default(),
     }
 }
 

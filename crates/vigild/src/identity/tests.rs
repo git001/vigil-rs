@@ -40,8 +40,14 @@ fn basic_spec(access: IdentityAccess, password: &str) -> IdentitySpec {
 #[tokio::test]
 async fn add_and_list_all() {
     let store = IdentityStore::new();
-    store.add("alice".into(), spec(IdentityAccess::Read)).await;
-    store.add("bob".into(), spec(IdentityAccess::Write)).await;
+    store
+        .add("alice".into(), spec(IdentityAccess::Read))
+        .await
+        .unwrap();
+    store
+        .add("bob".into(), spec(IdentityAccess::Write))
+        .await
+        .unwrap();
     let mut names: Vec<String> = store.list(&[]).await.into_iter().map(|i| i.name).collect();
     names.sort();
     assert_eq!(names, vec!["alice", "bob"]);
@@ -50,8 +56,14 @@ async fn add_and_list_all() {
 #[tokio::test]
 async fn list_with_filter() {
     let store = IdentityStore::new();
-    store.add("alice".into(), spec(IdentityAccess::Read)).await;
-    store.add("bob".into(), spec(IdentityAccess::Admin)).await;
+    store
+        .add("alice".into(), spec(IdentityAccess::Read))
+        .await
+        .unwrap();
+    store
+        .add("bob".into(), spec(IdentityAccess::Admin))
+        .await
+        .unwrap();
     let found = store.list(&["alice".to_string()]).await;
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].name, "alice");
@@ -60,7 +72,10 @@ async fn list_with_filter() {
 #[tokio::test]
 async fn list_filter_unknown_returns_empty() {
     let store = IdentityStore::new();
-    store.add("alice".into(), spec(IdentityAccess::Read)).await;
+    store
+        .add("alice".into(), spec(IdentityAccess::Read))
+        .await
+        .unwrap();
     let found = store.list(&["nobody".to_string()]).await;
     assert!(found.is_empty());
 }
@@ -68,34 +83,44 @@ async fn list_filter_unknown_returns_empty() {
 #[tokio::test]
 async fn is_empty_after_creation() {
     let store = IdentityStore::new();
-    assert!(store.is_empty().await);
-    store.add("alice".into(), spec(IdentityAccess::Read)).await;
-    assert!(!store.is_empty().await);
+    assert!(store.api_is_empty().await);
+    store
+        .add("alice".into(), spec(IdentityAccess::Read))
+        .await
+        .unwrap();
+    assert!(!store.api_is_empty().await);
 }
 
 #[tokio::test]
 async fn remove_existing() {
     let store = IdentityStore::new();
-    store.add("alice".into(), spec(IdentityAccess::Read)).await;
-    let removed = store.remove(&["alice".to_string()]).await;
+    store
+        .add("alice".into(), spec(IdentityAccess::Read))
+        .await
+        .unwrap();
+    let removed = store.remove(&["alice".to_string()]).await.unwrap();
     assert_eq!(removed, vec!["alice"]);
-    assert!(store.is_empty().await);
+    assert!(store.api_is_empty().await);
 }
 
 #[tokio::test]
 async fn remove_nonexistent_returns_empty_list() {
     let store = IdentityStore::new();
-    let removed = store.remove(&["ghost".to_string()]).await;
+    let removed = store.remove(&["ghost".to_string()]).await.unwrap();
     assert!(removed.is_empty());
 }
 
 #[tokio::test]
 async fn remove_mixed_existing_and_missing() {
     let store = IdentityStore::new();
-    store.add("alice".into(), spec(IdentityAccess::Read)).await;
+    store
+        .add("alice".into(), spec(IdentityAccess::Read))
+        .await
+        .unwrap();
     let removed = store
         .remove(&["alice".to_string(), "ghost".to_string()])
-        .await;
+        .await
+        .unwrap();
     assert_eq!(removed, vec!["alice"]);
 }
 
@@ -104,7 +129,8 @@ async fn local_access_any_uid() {
     let store = IdentityStore::new();
     store
         .add("local".into(), local_spec(IdentityAccess::Write, None))
-        .await;
+        .await
+        .unwrap();
     assert_eq!(store.local_access(0).await, Some(IdentityAccess::Write));
     assert_eq!(store.local_access(1000).await, Some(IdentityAccess::Write));
     assert_eq!(store.local_access(99999).await, Some(IdentityAccess::Write));
@@ -115,7 +141,8 @@ async fn local_access_specific_uid_match_and_miss() {
     let store = IdentityStore::new();
     store
         .add("uid42".into(), local_spec(IdentityAccess::Admin, Some(42)))
-        .await;
+        .await
+        .unwrap();
     assert_eq!(store.local_access(42).await, Some(IdentityAccess::Admin));
     assert_eq!(store.local_access(99).await, None);
 }
@@ -125,13 +152,15 @@ async fn local_access_returns_most_permissive() {
     let store = IdentityStore::new();
     store
         .add("read-all".into(), local_spec(IdentityAccess::Read, None))
-        .await;
+        .await
+        .unwrap();
     store
         .add(
             "admin-uid0".into(),
             local_spec(IdentityAccess::Admin, Some(0)),
         )
-        .await;
+        .await
+        .unwrap();
     // uid 0 matches both — should get Admin (max)
     assert_eq!(store.local_access(0).await, Some(IdentityAccess::Admin));
     // uid 1 matches only read-all
@@ -150,7 +179,8 @@ async fn local_access_no_local_identity_returns_none() {
     // identity with no local config
     store
         .add("apionly".into(), spec(IdentityAccess::Read))
-        .await;
+        .await
+        .unwrap();
     assert!(store.local_access(1000).await.is_none());
 }
 
@@ -159,7 +189,8 @@ async fn basic_access_correct_password() {
     let store = IdentityStore::new();
     store
         .add("carol".into(), basic_spec(IdentityAccess::Write, "s3cr3t"))
-        .await;
+        .await
+        .unwrap();
     assert_eq!(
         store.basic_access("carol", "s3cr3t").await,
         Some(IdentityAccess::Write)
@@ -171,7 +202,8 @@ async fn basic_access_wrong_password() {
     let store = IdentityStore::new();
     store
         .add("carol".into(), basic_spec(IdentityAccess::Write, "s3cr3t"))
-        .await;
+        .await
+        .unwrap();
     assert_eq!(store.basic_access("carol", "wrong").await, None);
 }
 
@@ -184,15 +216,24 @@ async fn basic_access_unknown_user() {
 #[tokio::test]
 async fn basic_access_no_basic_config_returns_none() {
     let store = IdentityStore::new();
-    store.add("alice".into(), spec(IdentityAccess::Read)).await;
+    store
+        .add("alice".into(), spec(IdentityAccess::Read))
+        .await
+        .unwrap();
     assert!(store.basic_access("alice", "anything").await.is_none());
 }
 
 #[tokio::test]
 async fn add_overwrites_existing_identity() {
     let store = IdentityStore::new();
-    store.add("alice".into(), spec(IdentityAccess::Read)).await;
-    store.add("alice".into(), spec(IdentityAccess::Admin)).await;
+    store
+        .add("alice".into(), spec(IdentityAccess::Read))
+        .await
+        .unwrap();
+    store
+        .add("alice".into(), spec(IdentityAccess::Admin))
+        .await
+        .unwrap();
     let ids = store.list(&[]).await;
     assert_eq!(ids.len(), 1);
     assert_eq!(ids[0].access, IdentityAccess::Admin);
@@ -274,7 +315,8 @@ async fn tls_access_matching_ca_returns_access_level() {
     let store = IdentityStore::new();
     store
         .add("ops".into(), tls_spec(IdentityAccess::Write, &ca_pem))
-        .await;
+        .await
+        .unwrap();
     assert_eq!(
         store.tls_access(&client_der).await,
         Some(IdentityAccess::Write)
@@ -289,7 +331,8 @@ async fn tls_access_wrong_ca_returns_none() {
     let store = IdentityStore::new();
     store
         .add("ops".into(), tls_spec(IdentityAccess::Admin, &other_ca_pem))
-        .await;
+        .await
+        .unwrap();
     assert_eq!(store.tls_access(&client_der).await, None);
 }
 
@@ -300,10 +343,12 @@ async fn tls_access_returns_most_permissive_when_multiple_identities_match() {
     let store = IdentityStore::new();
     store
         .add("read-svc".into(), tls_spec(IdentityAccess::Read, &ca_pem))
-        .await;
+        .await
+        .unwrap();
     store
         .add("admin-svc".into(), tls_spec(IdentityAccess::Admin, &ca_pem))
-        .await;
+        .await
+        .unwrap();
     assert_eq!(
         store.tls_access(&client_der).await,
         Some(IdentityAccess::Admin)
@@ -326,6 +371,61 @@ async fn tls_access_identity_without_tls_field_not_matched() {
     let store = IdentityStore::new();
     store
         .add("basic-only".into(), spec(IdentityAccess::Admin))
-        .await;
+        .await
+        .unwrap();
     assert_eq!(store.tls_access(&client_der).await, None);
+}
+
+fn layer_identity(name: &str, access: IdentityAccess) -> vigil_types::identity::Identity {
+    vigil_types::identity::Identity {
+        name: name.into(),
+        access,
+        local: Some(LocalIdentity { user_id: None }),
+        basic: None,
+        tls: None,
+        source: vigil_types::identity::IdentitySource::Layer,
+        layer: Some("001-auth".into()),
+    }
+}
+
+#[tokio::test]
+async fn set_layer_replaces_layer_identities_and_wins_over_api_ones() {
+    let store = IdentityStore::new();
+    store
+        .add("ops".into(), spec(IdentityAccess::Read))
+        .await
+        .unwrap();
+    store
+        .add("alice".into(), spec(IdentityAccess::Read))
+        .await
+        .unwrap();
+    store
+        .set_layer(vec![
+            layer_identity("ops", IdentityAccess::Admin),
+            layer_identity("relay", IdentityAccess::Read),
+        ])
+        .await;
+    let ops = store.list(&["ops".into()]).await;
+    assert_eq!(ops[0].access, IdentityAccess::Admin, "the layer file wins");
+    assert_eq!(store.list(&[]).await.len(), 3);
+
+    // A replan without "relay": gone; API identities stay.
+    store
+        .set_layer(vec![layer_identity("ops", IdentityAccess::Admin)])
+        .await;
+    let mut names: Vec<_> = store.list(&[]).await.into_iter().map(|i| i.name).collect();
+    names.sort();
+    assert_eq!(names, ["alice", "ops"]);
+    assert!(!store.api_is_empty().await, "alice came over the API");
+}
+
+#[tokio::test]
+async fn layer_identities_alone_keep_the_bootstrap() {
+    let store = IdentityStore::with_layer(vec![layer_identity("relay", IdentityAccess::Read)]);
+    assert!(store.api_is_empty().await);
+    let err = store.remove(&["relay".into()]).await.unwrap_err();
+    assert!(
+        err.to_string().contains("is defined in layer \"001-auth\""),
+        "{err}"
+    );
 }

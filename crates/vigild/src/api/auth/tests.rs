@@ -153,7 +153,8 @@ async fn correct_basic_auth_returns_level() {
                 tls: None,
             },
         )
-        .await;
+        .await
+        .unwrap();
 
     let encoded = B64.encode("bob:hunter2");
     let access = resolve_access(&store, &parts_with_auth(&format!("Basic {encoded}"))).await;
@@ -181,7 +182,8 @@ async fn wrong_password_returns_open() {
                 tls: None,
             },
         )
-        .await;
+        .await
+        .unwrap();
 
     let encoded = B64.encode("carol:wrong");
     let access = resolve_access(&store, &parts_with_auth(&format!("Basic {encoded}"))).await;

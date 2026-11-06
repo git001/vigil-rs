@@ -7,7 +7,10 @@
 //! Polling, not inotify, for the same reasons as `watch-files`: the kubelet
 //! swaps the ConfigMap's `..data` symlink atomically, and polling also works
 //! on NFS and overlayfs. One hash covers the names and contents of all layer
-//! files ([`is_layer_file`]); the kubelet's own `..` entries are skipped.
+//! files ([`is_layer_file`]; the kubelet's own `..` entries are skipped) and
+//! the contents of the files the layers refer to ([`WatchedFiles`]: `tls:`
+//! files, `password-hash-file`), so a rotated certificate or Kubernetes
+//! Secret is picked up too.
 //!
 //! A change triggers a replan once it has been stable for one polling round,
 //! so a ConfigMap with several files is applied once. The replan itself
@@ -16,6 +19,7 @@
 //! next change of the files triggers a new one.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
@@ -27,11 +31,32 @@ use super::plan::is_layer_file;
 use crate::duration::clamp_interval;
 use vigil_files::{ContentHasher, FILE_IO_TIMEOUT, PeriodicRead, ReadOutcome, hash_into};
 
+/// Files the layers refer to whose content matters as much as the layers'
+/// own (`tls:` files, `password-hash-file`). The overlord replaces the list
+/// after every successful load.
+#[derive(Clone, Default)]
+pub struct WatchedFiles(Arc<Mutex<Vec<PathBuf>>>);
+
+impl WatchedFiles {
+    pub fn new(files: Vec<PathBuf>) -> Self {
+        Self(Arc::new(Mutex::new(files)))
+    }
+
+    pub fn set(&self, files: Vec<PathBuf>) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = files;
+    }
+
+    fn get(&self) -> Vec<PathBuf> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
 /// Hash over the names and contents of the layer files in `dir`, in the
-/// order `load_plan` reads them. A missing directory has its own hash (it
-/// loads as an empty plan). `None`: the directory or a file could not be
-/// read; the round is skipped.
-fn layers_hash(dir: &Path) -> Option<u64> {
+/// order `load` reads them, and over the contents of `secrets`. A missing
+/// directory or secret file has its own hash (the next load reports it).
+/// `None`: the directory or a layer file could not be read; the round is
+/// skipped.
+fn layers_hash(dir: &Path, secrets: &[PathBuf]) -> Option<u64> {
     let mut h = ContentHasher::default();
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
@@ -53,6 +78,15 @@ fn layers_hash(dir: &Path) -> Option<u64> {
         let mut f = std::fs::File::open(dir.join(&name)).ok()?;
         hash_into(&mut h, &mut f).ok()?;
         // Separates this file's content from the next file's name.
+        h.update(b"\0");
+    }
+    for path in secrets {
+        h.update(path.as_os_str().as_encoded_bytes());
+        h.update(b"\0");
+        match std::fs::File::open(path) {
+            Ok(mut f) => hash_into(&mut h, &mut f).ok()?,
+            Err(_) => h.update(b"\0missing"),
+        }
         h.update(b"\0");
     }
     Some(h.finish())
@@ -90,7 +124,12 @@ impl Detector {
 
 /// Poll `dir` every `interval` and send a replan to the overlord when the
 /// layers changed. Runs until the overlord is gone.
-pub fn spawn(dir: PathBuf, interval: Duration, tx: mpsc::Sender<Cmd>) -> JoinHandle<()> {
+pub fn spawn(
+    dir: PathBuf,
+    secrets: WatchedFiles,
+    interval: Duration,
+    tx: mpsc::Sender<Cmd>,
+) -> JoinHandle<()> {
     let interval = clamp_interval(interval);
     tokio::spawn(async move {
         info!(dir = %dir.display(), ?interval, "watching layers");
@@ -101,7 +140,8 @@ pub fn spawn(dir: PathBuf, interval: Duration, tx: mpsc::Sender<Cmd>) -> JoinHan
         loop {
             ticker.tick().await;
             let d = dir.clone();
-            let hash = match reader.run(move || layers_hash(&d)).await {
+            let s = secrets.get();
+            let hash = match reader.run(move || layers_hash(&d, &s)).await {
                 ReadOutcome::Done(Some(h)) => h,
                 ReadOutcome::TimedOut => {
                     warn!(
@@ -150,7 +190,7 @@ mod tests {
     fn hash_covers_names_and_contents_but_not_kubelet_entries() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path();
-        let h = || layers_hash(p).unwrap();
+        let h = || layers_hash(p, &[]).unwrap();
         std::fs::write(p.join("001-base.yaml"), "services: {}\n").unwrap();
         let base = h();
 
@@ -169,10 +209,28 @@ mod tests {
     }
 
     #[test]
+    fn hash_covers_watched_files_of_identities() {
+        let dir = tempfile::tempdir().unwrap();
+        let secret = dir.path().join("log-relay.hash");
+        std::fs::write(&secret, "$6$old$hash\n").unwrap();
+        let secrets = [secret.clone()];
+        let h = || layers_hash(dir.path(), &secrets).unwrap();
+        let before = h();
+        assert_ne!(before, layers_hash(dir.path(), &[]).unwrap());
+
+        std::fs::write(&secret, "$6$new$hash\n").unwrap();
+        let rotated = h();
+        assert_ne!(rotated, before, "a rotated Secret triggers a replan");
+
+        std::fs::remove_file(&secret).unwrap();
+        assert_ne!(h(), rotated, "so does a removed one (the load reports it)");
+    }
+
+    #[test]
     fn missing_dir_has_its_own_hash() {
         let dir = tempfile::tempdir().unwrap();
-        let empty = layers_hash(dir.path()).unwrap();
-        let missing = layers_hash(&dir.path().join("nope")).unwrap();
+        let empty = layers_hash(dir.path(), &[]).unwrap();
+        let missing = layers_hash(&dir.path().join("nope"), &[]).unwrap();
         assert_ne!(empty, missing);
     }
 }

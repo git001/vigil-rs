@@ -322,7 +322,10 @@ paths:
       summary: List identities
       tags:
         - identities
-      description: Returns all or selected identities.
+      description: >-
+        Returns all or selected identities: those from layer files
+        (`source: layer`, read-only over the API) and those added over the
+        API (`source: api`).
       parameters:
         - name: names
           in: query
@@ -339,13 +342,16 @@ paths:
                 $ref: "#/components/schemas/IdentitiesResponse"
               example:
                 result:
-                  - name: admin
-                    access: admin
-                    local:
-                      user-id: 0
+                  - name: log-relay
+                    access: read
+                    basic:
+                      password-hash: "$6$testextra$Cq1GhPxDNtKxM7J.P1EovJ64dyEsjMy59Cr2zHgWhpmUsETC.YtW8GFsrGO810Kh5f/9.SYG53plbhT3VaA7z/"
+                    source: layer
+                    layer: 001-auth
                   - name: ops
                     access: write
                     local: {}
+                    source: api
         "500":
           $ref: "#/components/responses/Error"
 
@@ -353,7 +359,9 @@ paths:
       summary: Add or update identities
       tags:
         - identities
-      description: Creates or updates the named identities.
+      description: >-
+        Creates or updates the named identities. A name of an identity from
+        a layer file is rejected with 409 (change it in the layer file).
       requestBody:
         required: true
         content:
@@ -374,6 +382,14 @@ paths:
                 $ref: "#/components/schemas/EmptyResponse"
               example:
                 result: null
+        "409":
+          description: A name belongs to an identity from a layer file.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                message: 'identity "log-relay" is defined in layer "001-auth"; change it there'
         "500":
           $ref: "#/components/responses/Error"
 
@@ -381,7 +397,9 @@ paths:
       summary: Remove identities
       tags:
         - identities
-      description: Removes the named identities.
+      description: >-
+        Removes the named identities. If one of them comes from a layer
+        file, nothing is removed (409).
       requestBody:
         required: true
         content:
@@ -399,6 +417,14 @@ paths:
                 $ref: "#/components/schemas/RemovedIdentitiesResponse"
               example:
                 result: ["ops"]
+        "409":
+          description: A name belongs to an identity from a layer file; nothing was removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              example:
+                message: 'identity "log-relay" is defined in layer "001-auth"; change it there'
         "500":
           $ref: "#/components/responses/Error"
 
@@ -710,6 +736,15 @@ components:
           description: Restrict to this UID. Omit to allow any local user.
           example: 1000
 
+    BasicIdentity:
+      type: object
+      description: Matches HTTP Basic auth (user name = identity name).
+      properties:
+        password-hash:
+          type: string
+          description: SHA-512 crypt hash, e.g. from `openssl passwd -6`.
+      required: [password-hash]
+
     TlsIdentity:
       type: object
       description: Matches TLS connections whose client cert was signed by the given CA.
@@ -729,9 +764,19 @@ components:
           $ref: "#/components/schemas/IdentityAccess"
         local:
           $ref: "#/components/schemas/LocalIdentity"
+        basic:
+          $ref: "#/components/schemas/BasicIdentity"
         tls:
           $ref: "#/components/schemas/TlsIdentity"
-      required: [name, access]
+        source:
+          type: string
+          enum: [api, layer]
+          description: Added over the API, or defined in a layer file (read-only over the API).
+        layer:
+          type: string
+          description: The layer file (without extension) of a `layer` identity.
+          example: 001-auth
+      required: [name, access, source]
 
     IdentitiesResponse:
       type: object
@@ -750,6 +795,8 @@ components:
           $ref: "#/components/schemas/IdentityAccess"
         local:
           $ref: "#/components/schemas/LocalIdentity"
+        basic:
+          $ref: "#/components/schemas/BasicIdentity"
         tls:
           $ref: "#/components/schemas/TlsIdentity"
       required: [access]

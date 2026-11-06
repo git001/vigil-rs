@@ -66,7 +66,8 @@ alerts:
     pass-env-glob: *alert-env
 ```
 
-Identities are not part of layer files; see [Identities](#identities).
+Layer files can also define identities (`identities:`); see
+[Identities](#identities).
 
 ---
 
@@ -1606,10 +1607,37 @@ Identities control who may call the vigild REST API and what they are allowed
 to do. They are optional — if no identities are configured the daemon applies
 default access rules based on connection type (see below).
 
-Identities are managed over the API, not in layer files: `vigil identities
-add-local`, or `POST /v1/identities` with a body like the examples below (as
-JSON). vigild keeps them in memory, so they are gone after a restart and must
-be added again.
+Identities come from two sources:
+
+- **Layer files** (`identities:`, as in the examples below). They survive a
+  restart and can come from a ConfigMap, e.g. the read identity of
+  vigil-log-relay. Over the API they are read-only: `POST` or `DELETE` with
+  their name fails with `409` and the layer file that defines them. A replan
+  (also `--watch-layers`) replaces them as a whole, so an identity removed
+  from the layers loses its access at once. A later layer file replaces a
+  whole identity; there is no `override` for identities.
+- **The API**: `vigil identities add-local`, or `POST /v1/identities` with a
+  body like the examples below (as JSON). vigild keeps them in memory, so they
+  are gone after a restart. A layer identity of the same name replaces one
+  added over the API.
+
+`vigil identities list` shows the source of each identity:
+
+```
+Name                     Access   Auth                     Source
+------------------------------------------------------------------------
+log-relay                read     basic                    layer 001-auth
+ops                      write    local(any)               api
+```
+
+vigild checks layer identities when it loads the layers: every identity needs
+`access` and at least one of `local`, `basic` or `tls`; a password hash must
+be a SHA-512 crypt hash, a CA certificate valid PEM. Errors name the identity
+and its layer file:
+
+```
+identity "log-relay" (layer "001-auth"): password-hash-file: reading "/run/secrets/vigil/log-relay.hash"
+```
 
 ### Access levels
 
@@ -1625,9 +1653,16 @@ be added again.
 
 | Connection | Effective level |
 |------------|----------------|
-| Unix socket, UID 0 (root) or daemon UID, no identities configured yet | `admin` (bootstrap) |
-| Unix socket, any other UID, or once identities exist | `open` |
+| Unix socket, UID 0 (root) or daemon UID, no identity added over the API yet | `admin` (bootstrap) |
+| Unix socket, any other UID, or once an identity was added over the API | `open` |
 | TLS listener | `--tls-anonymous-access`: `metrics` (default) or `open` |
+
+Only identities added over the API end the bootstrap. Layer identities alone,
+e.g. just a read identity for vigil-log-relay, keep it: root and vigild's own
+UID stay `admin` on the Unix socket. Other UIDs cannot connect anyway while
+the socket keeps its default mode `600` (`--socket-mode`). To end the bootstrap from a layer file,
+add an identity over the API, or restrict the socket with a `local` identity
+of your own and manage the rest from there.
 
 Logs, services and every state change need an identity over TLS. For a
 log shipper such as vigil-log-relay, create an identity with `access: read`
@@ -1669,6 +1704,23 @@ identities:
       password-hash: "$6$rounds=5000$mysalt$hashedvalue..."
 ```
 
+In a layer file the hash can also come from a file, e.g. a mounted
+Kubernetes Secret, with `password-hash-file` instead of `password-hash`
+(exactly one of the two). The path must be absolute; a missing or empty file
+makes the layer invalid. Surrounding whitespace such as the trailing
+newline of a Secret is removed. With `--watch-layers`, vigild also watches the
+content of the file, so a rotated Secret applies without a change to the
+layer.
+
+```yaml
+identities:
+
+  log-relay:
+    access: read
+    basic:
+      password-hash-file: /run/secrets/vigil/log-relay.hash
+```
+
 The caller supplies the credential in the `Authorization: Basic …` header
 (standard HTTP Basic Auth, base64-encoded `username:password`).
 
@@ -1691,8 +1743,13 @@ certificate against the supplied CA.  Connections without a client certificate
 are still accepted but fall through to Open access unless another auth method
 matches.
 
-`ca-cert` must be an inline PEM string (a single CA cert, or a chain of
-concatenated PEM blocks):
+In a layer file, `tls.ca` names the PEM files with the CA certificates: one
+absolute path or a list, each file with one certificate or several. It is
+the same `ca` as in the `tls:` block of HTTP checks and alerts (see
+[TLS and proxy](#tls-and-proxy)), but the only key allowed here: `insecure`
+would let any certificate in, and `cert` and `key` have no meaning for an
+identity. The files are read when the layers are loaded; `--watch-layers`
+watches them, so a rotated CA takes effect with the next replan.
 
 ```yaml
 identities:
@@ -1700,19 +1757,16 @@ identities:
   ci-pipeline:
     access: write
     tls:
-      ca-cert: |
-        -----BEGIN CERTIFICATE-----
-        MIIBxTCCAW...
-        -----END CERTIFICATE-----
+      ca: /etc/vigil/certs/ci-ca.pem
 
   prometheus:
     access: metrics
     tls:
-      ca-cert: |
-        -----BEGIN CERTIFICATE-----
-        MIIBxTCC...
-        -----END CERTIFICATE-----
+      ca: [/etc/vigil/certs/monitoring-ca.pem, /etc/vigil/certs/monitoring-ca-next.pem]
 ```
+
+Over the REST API, an identity carries the CA as a PEM string in
+`tls.ca-cert` instead, see the [API reference](../api-reference/rest-api.md).
 
 See [Mutual TLS (mTLS)](../operator-guide/tls.md#mutual-tls-mtls) in the
 operator guide for a complete setup walkthrough.
@@ -1739,8 +1793,5 @@ identities:
   prometheus:
     access: metrics
     tls:
-      ca-cert: |
-        -----BEGIN CERTIFICATE-----
-        MIIBxTCC...
-        -----END CERTIFICATE-----
+      ca: /etc/vigil/certs/monitoring-ca.pem
 ```

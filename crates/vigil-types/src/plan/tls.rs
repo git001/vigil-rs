@@ -61,7 +61,7 @@ pub struct ProxyConfig {
     pub no_proxy: Option<String>,
 }
 
-fn one_or_many<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<PathBuf>, D::Error> {
+pub(super) fn one_or_many<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<PathBuf>, D::Error> {
     #[derive(Deserialize)]
     #[serde(untagged, expecting = "a path or a list of paths")]
     enum OneOrMany {

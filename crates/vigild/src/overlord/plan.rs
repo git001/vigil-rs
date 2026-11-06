@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 vigil-rs contributors
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use vigil_types::plan::{AlertConfig, CheckConfig, Layer, Plan, ServiceConfig};
@@ -18,17 +18,23 @@ pub(crate) fn is_layer_file(name: &str) -> bool {
     !name.starts_with("..") && (name.ends_with(".yaml") || name.ends_with(".yml"))
 }
 
-/// A validated plan, its alerts ready to send and the clients of its HTTP
-/// checks.
+/// A validated plan, its alerts ready to send, the clients of its HTTP
+/// checks and its identities.
 pub struct Loaded {
     pub plan: Plan,
     pub alerts: crate::alert::PreparedAlerts,
     pub checks: crate::check::PreparedChecks,
+    pub identities: Vec<vigil_types::identity::Identity>,
+    /// The files the layers refer to and that were read with them (`tls:`
+    /// of checks, alerts and identities, `password-hash-file`):
+    /// `--watch-layers` hashes them like the layer files.
+    pub files: Vec<std::path::PathBuf>,
 }
 
 /// Read, merge and validate the layers in `dir`, prepare the alerts
-/// against vigild's environment and build the HTTP check clients. Reads files: call it off the async
-/// runtime (see `off_runtime`), except at startup.
+/// against vigild's environment, build the HTTP check clients and load the
+/// identities. Reads files: call it off the async runtime (see
+/// `off_runtime`).
 pub fn load(dir: &Path) -> anyhow::Result<Loaded> {
     load_with(dir, &crate::alert::LoadEnv::process())
 }
@@ -38,11 +44,32 @@ fn load_with(dir: &Path, env: &crate::alert::LoadEnv) -> anyhow::Result<Loaded> 
     validate(&plan)?;
     let alerts = crate::alert::prepare_alerts(&plan.alerts, env)?;
     let checks = crate::check::prepare_checks(&plan.checks)?;
+    let identities = crate::identity::load_layer_identities(&plan.identities)?;
+    let files = referenced_files(&plan, identities.files);
     Ok(Loaded {
         plan,
         alerts,
         checks,
+        identities: identities.identities,
+        files,
     })
+}
+
+/// The files of the identities followed by those of the `tls:` blocks of
+/// HTTP checks and alerts, each once.
+fn referenced_files(plan: &Plan, identity_files: Vec<PathBuf>) -> Vec<PathBuf> {
+    let tls = plan
+        .checks
+        .values()
+        .filter_map(|c| c.http.as_ref()?.tls.as_ref())
+        .chain(plan.alerts.values().filter_map(|a| a.tls.as_ref()));
+    let mut files = identity_files;
+    for t in tls {
+        files.extend(t.ca.iter().chain(&t.cert).chain(&t.key).cloned());
+    }
+    let mut seen = std::collections::HashSet::new();
+    files.retain(|p| seen.insert(p.clone()));
+    files
 }
 
 fn read_plan(dir: &Path) -> anyhow::Result<Plan> {
@@ -308,8 +335,49 @@ mod tests {
         fs::write(dir.path().join(name), content).unwrap();
     }
 
-    /// Every example's layers must load (and pass validation), so example
-    /// configs cannot silently break, e.g. through new pass-env rules.
+    #[test]
+    fn later_layer_replaces_a_whole_identity() {
+        let dir = TempDir::new().unwrap();
+        write(
+            &dir,
+            "001-base.yaml",
+            "identities:\n  ops:\n    access: admin\n    local: {}\n",
+        );
+        write(
+            &dir,
+            "002-site.yaml",
+            "identities:\n  ops:\n    access: read\n    local:\n      user-id: 1000\n",
+        );
+        let loaded = load(dir.path()).unwrap();
+        let ops = &loaded.identities[0];
+        assert_eq!(ops.access, vigil_types::identity::IdentityAccess::Read);
+        assert_eq!(ops.local.as_ref().unwrap().user_id, Some(1000));
+        assert_eq!(ops.layer.as_deref(), Some("002-site"));
+    }
+
+    #[test]
+    fn identities_reject_override_and_unknown_keys() {
+        for (yaml, want) in [
+            (
+                "identities:\n  ops:\n    override: replace\n    access: admin\n    local: {}\n",
+                "unknown field `override`",
+            ),
+            (
+                "identities:\n  ops:\n    access: admin\n    basic:\n      password: x\n",
+                "unknown field `password`",
+            ),
+            (
+                "identities:\n  ops:\n    access: superuser\n    local: {}\n",
+                "unknown variant `superuser`",
+            ),
+        ] {
+            let dir = TempDir::new().unwrap();
+            write(&dir, "001.yaml", yaml);
+            let err = format!("{:#}", load_plan(dir.path()).unwrap_err());
+            assert!(err.contains(want), "{yaml}: {err}");
+        }
+    }
+
     #[test]
     fn unset_alert_env_variable_rejects_plan() {
         let dir = TempDir::new().unwrap();
@@ -355,6 +423,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn referenced_files_cover_tls_of_checks_and_alerts_once() {
+        let layer: Layer = serde_yaml::from_str(
+            "checks:\n  web:\n    http:\n      url: https://example.com/\n      tls:\n        ca: [/etc/vigil/ca/a.pem, /etc/vigil/ca/b.pem]\n        cert: /run/secrets/vigil/client.crt\n        key: /run/secrets/vigil/client.key\n  plain:\n    http:\n      url: https://example.com/\nalerts:\n  am:\n    url: https://alertmanager:9093/api/v2/alerts\n    tls:\n      ca: /etc/vigil/ca/a.pem\n",
+        )
+        .unwrap();
+        let plan = Plan::from_layers(vec![layer]);
+        let files = referenced_files(&plan, vec!["/run/secrets/vigil/log-relay.hash".into()]);
+        let want: Vec<PathBuf> = [
+            "/run/secrets/vigil/log-relay.hash",
+            "/etc/vigil/ca/a.pem",
+            "/etc/vigil/ca/b.pem",
+            "/run/secrets/vigil/client.crt",
+            "/run/secrets/vigil/client.key",
+        ]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+        assert_eq!(files, want);
+    }
+
+    /// Every example's layers must load (and pass validation), so example
+    /// configs cannot silently break, e.g. through new pass-env rules.
     #[test]
     fn all_example_layers_load() {
         let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");

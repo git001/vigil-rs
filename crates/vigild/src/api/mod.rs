@@ -125,6 +125,11 @@ impl ApiError {
     pub(super) fn not_found(msg: impl Into<String>) -> Self {
         ApiError(StatusCode::NOT_FOUND, anyhow::anyhow!("{}", msg.into()))
     }
+
+    /// `409 Conflict`, e.g. a change to an identity from a layer file.
+    pub(super) fn conflict(e: anyhow::Error) -> Self {
+        ApiError(StatusCode::CONFLICT, e)
+    }
 }
 
 impl<E: Into<anyhow::Error>> From<E> for ApiError {

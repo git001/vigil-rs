@@ -135,9 +135,10 @@ unauthenticated (Open access) unless another auth method matches.
 
 1. **vigild is started with `--tls-client-ca`** — this loads a CA certificate
    and configures the TLS listener to request (but not require) a client cert.
-2. **A TLS identity is registered** via `POST /v1/identities` — it stores the
-   CA's PEM and the access level to grant when a cert signed by that CA is
-   presented.
+2. **A TLS identity is registered**, in a layer file (`tls.ca`, see
+   [Identities](../user-guide/configuration.md#identities)) or via
+   `POST /v1/identities` — it stores the CA's PEM and the access level to
+   grant when a cert signed by that CA is presented.
 3. **At request time:** if a client cert is present, vigild verifies it
    cryptographically against every registered TLS identity.  The most-permissive
    matching level is used.  No match → Open (fallback).

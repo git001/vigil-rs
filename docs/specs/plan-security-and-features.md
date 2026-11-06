@@ -621,8 +621,32 @@ Decided by the user (2026-11-06):
   picked up.
 - **Bootstrap:** only identities added over the API end the Unix-socket
   bootstrap admin (root and vigild's UID). Layer identities alone, e.g. only
-  a read identity for vigil-log-relay, keep it; the prefix directory (0700)
-  limits the socket to those two UIDs anyway. The docs say so explicitly.
+  a read identity for vigil-log-relay, keep it; the socket's default mode
+  600 limits it to those two UIDs anyway. The docs say so explicitly.
+
+Implemented on 2026-11-06:
+- `vigil-types`: `Layer.identities` / `Plan.identities` (`IdentityConfig`,
+  `deny_unknown_fields`), `Identity.source` (`api` | `layer`) and
+  `Identity.layer`.
+- `vigild`: `plan::load()` checks the identities and reads their files
+  (`identity::load_layer_identities`); the overlord owns the identity store
+  and replaces the layer identities on every load (`set_layer`); `POST` /
+  `DELETE` on a layer identity answer `409`; the bootstrap checks
+  `api_is_empty()`; `--watch-layers` hashes the files the layers refer to
+  too (`WatchedFiles`: `tls:` files of checks, alerts and identities,
+  `password-hash-file`).
+- Identity `tls:` takes only `ca` (`IdentityTls`), read with
+  `vigil_tls::PemFile::layer`; `local` is `LocalIdentity` with
+  `deny_unknown_fields`; `password-hash-file` is read with `vigil-files`
+  (absolute path, missing or empty is an error).
+- `overlord::spawn` loads the layers with `off_runtime` at startup too.
+- An API identity with the name of a layer identity is replaced by the
+  layer one (with a warning).
+- CLI: `vigil identities list` shows `Source` and every auth method
+  (`basic` was shown as `-` before), sorted by name.
+- Tests: unit tests, `api_handlers/layer_identities.rs`, vtest v0026
+  (basic auth over TLS, read-only over the API, rotated secret, removal by
+  replan).
 
 Before 4d (same day): `env:VAR` in alerts (`url`, `headers`, `labels`,
 `send-info-fields`, `proxy`, `no-proxy`) is resolved and checked at load

@@ -1,0 +1,88 @@
+vtest "identities in layer files: read-only over the API, rotated secret, removed by replan"
+
+# The layer (fixtures/v0026/001-auth.yaml) defines the read identity
+# log-relay; its password hash comes from secrets/log-relay.hash. Password
+# extrapass at first, admpass after the "Secret" was rotated.
+shell {
+	mkdir -p ${tmpdir}/layers ${tmpdir}/secrets
+	cp ${vtestdir}/fixtures/v0026/log-relay-extrapass.hash ${tmpdir}/secrets/log-relay.hash
+	sed "s|@SECRET_DIR@|${tmpdir}/secrets|" \
+		${vtestdir}/fixtures/v0026/001-auth.yaml > ${tmpdir}/layers/001-auth.yaml
+}
+
+# vigil-log-relay reaches vigild over TLS: there the identity decides. On
+# the Unix socket this test's UID is vigild's own and keeps the bootstrap
+# admin, since no identity was added over the API.
+process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock --tls-addr 127.0.0.1:0 --watch-layers 1s" -start
+
+shell {
+	for i in $(seq 1 50); do
+		test -S ${tmpdir}/vigild.sock && break
+		sleep 0.1
+	done
+	test -S ${tmpdir}/vigild.sock
+	${vigil} --socket ${tmpdir}/vigild.sock system-info \
+		| sed -n 's/^https-address: .*:\([0-9]*\)$/\1/p' > ${tmpdir}/tls_port.txt
+	test -s ${tmpdir}/tls_port.txt
+}
+
+# 1. Basic auth over TLS with the layer identity: read yes, write no.
+shell {
+	code() {
+		curl -s -o /dev/null -w '%{http_code}' --insecure \
+			-u "$1" -X "$2" "https://127.0.0.1:$(cat ${tmpdir}/tls_port.txt)$3"
+	}
+	test "$(code log-relay:extrapass GET /v1/services)" = 200
+	test "$(code log-relay:extrapass POST /v1/replan)" = 403
+	test "$(code log-relay:wrong GET /v1/services)" = 403
+}
+
+# 2. Listed with its source; the bootstrap admin (this UID) stays, because
+#    no identity was added over the API.
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock identities list > ${tmpdir}/ids.txt
+	cat ${tmpdir}/ids.txt
+	grep -q 'log-relay.*read.*basic.*layer 001-auth' ${tmpdir}/ids.txt
+}
+
+# 3. Read-only over the API: remove fails with a clear message.
+shell {
+	! ${vigil} --socket ${tmpdir}/vigild.sock identities remove log-relay \
+		> ${tmpdir}/remove.txt 2>&1
+	cat ${tmpdir}/remove.txt
+	grep -q 'is defined in layer "001-auth"' ${tmpdir}/remove.txt
+}
+
+# 4. The Secret is rotated (written atomically, like the kubelet does):
+#    --watch-layers picks it up without a change to the layer file.
+shell {
+	cp ${vtestdir}/fixtures/v0026/log-relay-admpass.hash ${tmpdir}/secrets/.new
+	mv ${tmpdir}/secrets/.new ${tmpdir}/secrets/log-relay.hash
+	code() {
+		curl -s -o /dev/null -w '%{http_code}' --insecure \
+			-u "$1" "https://127.0.0.1:$(cat ${tmpdir}/tls_port.txt)/v1/services"
+	}
+	for i in $(seq 1 50); do
+		test "$(code log-relay:admpass)" = 200 && break
+		sleep 0.2
+	done
+	test "$(code log-relay:admpass)" = 200
+	test "$(code log-relay:extrapass)" = 403
+}
+
+# 5. The identity removed from the layer: access gone after the replan.
+shell {
+	cp ${vtestdir}/fixtures/v0026/no-identities.yaml ${tmpdir}/layers/001-auth.yaml
+	code() {
+		curl -s -o /dev/null -w '%{http_code}' --insecure \
+			-u log-relay:admpass "https://127.0.0.1:$(cat ${tmpdir}/tls_port.txt)/v1/services"
+	}
+	for i in $(seq 1 50); do
+		test "$(code)" = 403 && break
+		sleep 0.2
+	done
+	test "$(code)" = 403
+}
+
+process p1 -kill TERM
+process p1 -wait

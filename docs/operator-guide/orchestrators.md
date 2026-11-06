@@ -309,6 +309,57 @@ or over the REST API:
 curl -k -X POST https://<pod-ip>:8443/v1/replan
 ```
 
+### Identities from a ConfigMap and a Secret
+
+Identities in a layer file survive a restart, so the read identity of a log
+shipper can ship with the Pod. The password hash stays in a Secret; the layer
+names the file:
+
+```bash
+# The hash, not the password, goes into the Secret.
+kubectl create secret generic myapp-vigil-identities \
+  --from-literal=log-relay.hash="$(openssl passwd -6 'MY-pw1!')"
+```
+
+```yaml
+# ConfigMap myapp-vigil-layers, file 010-identities.yaml
+identities:
+  log-relay:
+    access: read
+    basic:
+      password-hash-file: /run/secrets/vigil/log-relay.hash
+```
+
+```yaml
+spec:
+  containers:
+    - name: app
+      volumeMounts:
+        - name: layers
+          mountPath: /etc/vigil/layers
+        - name: identities
+          mountPath: /run/secrets/vigil
+          readOnly: true
+  volumes:
+    - name: layers
+      configMap:
+        name: myapp-vigil-layers
+    - name: identities
+      secret:
+        secretName: myapp-vigil-identities
+```
+
+With `--watch-layers`, vigild also watches the content of
+`password-hash-file` and `tls.ca`: after `kubectl create secret …
+--dry-run=client -o yaml | kubectl apply -f -` with a new hash, the new
+password applies once the kubelet has updated the volume. Removing the
+identity from the ConfigMap removes its access with the next replan.
+
+Identities from layer files are read-only over the API and do not end the
+Unix-socket bootstrap: root and vigild's own UID stay admin on the socket
+(e.g. for `kubectl exec <pod> -- vigil …`). See
+[Identities](../user-guide/configuration.md#identities).
+
 ---
 
 ## Nomad

@@ -5,7 +5,9 @@ use std::collections::HashMap;
 
 use clap::Subcommand;
 use vigil_client::client::VigilClient;
-use vigil_types::identity::{IdentityAccess, IdentitySpec, LocalIdentity};
+use vigil_types::identity::{
+    Identity, IdentityAccess, IdentitySource, IdentitySpec, LocalIdentity,
+};
 
 #[derive(Debug, Subcommand)]
 pub enum IdentitiesCmd {
@@ -37,27 +39,21 @@ pub enum IdentitiesCmd {
 pub async fn run(client: &VigilClient, sub: IdentitiesCmd) -> anyhow::Result<()> {
     match sub {
         IdentitiesCmd::List { names } => {
-            let ids = client.list_identities(&names).await?;
+            let mut ids = client.list_identities(&names).await?;
             if ids.is_empty() {
                 println!("No identities.");
                 return Ok(());
             }
-            println!("{:<24} {:<8} {:<12}", "Name", "Access", "Auth");
-            println!("{}", "-".repeat(46));
-            for id in ids {
-                let auth = match (&id.local, &id.tls) {
-                    (Some(l), _) => match l.user_id {
-                        Some(uid) => format!("local(uid={})", uid),
-                        None => "local(any)".to_string(),
-                    },
-                    (_, Some(_)) => "tls".to_string(),
-                    _ => "-".to_string(),
-                };
+            ids.sort_by(|a, b| a.name.cmp(&b.name));
+            println!("{:<24} {:<8} {:<24} Source", "Name", "Access", "Auth");
+            println!("{}", "-".repeat(72));
+            for id in &ids {
                 println!(
-                    "{:<24} {:<8} {}",
+                    "{:<24} {:<8} {:<24} {}",
                     id.name,
                     format!("{:?}", id.access).to_lowercase(),
-                    auth,
+                    auth_methods(id),
+                    source(id),
                 );
             }
         }
@@ -100,5 +96,79 @@ fn parse_access(s: &str) -> anyhow::Result<IdentityAccess> {
             "unknown access level '{}': use metrics, read, write, or admin",
             other
         ),
+    }
+}
+
+/// `local(any)`, `local(uid=1000)`, `basic`, `tls`, comma-separated.
+fn auth_methods(id: &Identity) -> String {
+    let mut m = Vec::new();
+    if let Some(l) = &id.local {
+        m.push(match l.user_id {
+            Some(uid) => format!("local(uid={uid})"),
+            None => "local(any)".to_string(),
+        });
+    }
+    if id.basic.is_some() {
+        m.push("basic".to_string());
+    }
+    if id.tls.is_some() {
+        m.push("tls".to_string());
+    }
+    if m.is_empty() {
+        "-".to_string()
+    } else {
+        m.join(",")
+    }
+}
+
+/// `api`, or `layer <file>` for identities from layer files.
+fn source(id: &Identity) -> String {
+    match id.source {
+        IdentitySource::Api => "api".to_string(),
+        IdentitySource::Layer => format!("layer {}", id.layer.as_deref().unwrap_or("?")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vigil_types::identity::{BasicIdentity, TlsIdentity};
+
+    fn id(source: IdentitySource, layer: Option<&str>) -> Identity {
+        Identity {
+            name: "log-relay".into(),
+            access: IdentityAccess::Read,
+            local: None,
+            basic: None,
+            tls: None,
+            source,
+            layer: layer.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn auth_lists_every_method() {
+        let mut i = id(IdentitySource::Api, None);
+        assert_eq!(auth_methods(&i), "-");
+        i.basic = Some(BasicIdentity {
+            password_hash: "$6$x$y".into(),
+        });
+        assert_eq!(auth_methods(&i), "basic", "basic was shown as - before");
+        i.local = Some(LocalIdentity {
+            user_id: Some(1000),
+        });
+        i.tls = Some(TlsIdentity {
+            ca_cert: String::new(),
+        });
+        assert_eq!(auth_methods(&i), "local(uid=1000),basic,tls");
+    }
+
+    #[test]
+    fn source_names_the_layer_file() {
+        assert_eq!(source(&id(IdentitySource::Api, None)), "api");
+        assert_eq!(
+            source(&id(IdentitySource::Layer, Some("001-auth"))),
+            "layer 001-auth"
+        );
     }
 }
