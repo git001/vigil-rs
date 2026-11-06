@@ -152,6 +152,11 @@ fn validate_alert(alert: &AlertConfig) -> anyhow::Result<()> {
         alert.retry_attempts != Some(0),
         "retry-attempts must be at least 1"
     );
+    if let Some(t) = &alert.body_template {
+        minijinja::Environment::new()
+            .template_from_str(t)
+            .map_err(|e| anyhow::anyhow!("body-template: {e}"))?;
+    }
     for b in &alert.retry_backoff {
         crate::duration::parse_duration(b)
             .map_err(|e| anyhow::anyhow!("retry-backoff entry {b:?} is not a duration: {e}"))?;
@@ -719,6 +724,10 @@ mod tests {
                 Some("retry-backoff entry \"later\""),
             ),
             (alert("retry-attempts: 2"), None),
+            (
+                alert("body-template: '{{ unclosed'"),
+                Some("body-template: syntax error"),
+            ),
         ];
         for (yaml, want) in cases {
             let dir = TempDir::new().unwrap();

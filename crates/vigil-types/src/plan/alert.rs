@@ -95,8 +95,9 @@ pub struct AlertConfig {
     ///
     /// When set, the template is rendered and sent as the HTTP body instead of
     /// the default `{"source": …, "name": …, "status": …, …}` payload.  The rendered
-    /// string **must** be valid JSON.  On render or parse errors vigild logs a
-    /// warning and falls back to the default webhook payload.
+    /// string **must** be valid JSON. A syntax error makes the layer invalid;
+    /// on render errors or invalid JSON vigild logs a warning and falls back
+    /// to the default webhook payload.
     ///
     /// Available template variables:
     /// * `source`    — `"check"`, `"service"` or `"vigild"` (string)

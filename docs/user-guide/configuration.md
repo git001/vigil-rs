@@ -1187,9 +1187,11 @@ A [Jinja2](https://jinja.palletsprojects.com/)-compatible template string
 (rendered by [minijinja](https://github.com/mitsuhiko/minijinja)) that replaces
 the default webhook payload when `format: webhook` is configured.
 
-The rendered string **must be valid JSON**. On template parse errors, render
-errors, or invalid JSON output vigild logs a `WARN` and falls back to the
-default webhook payload — the alert is never silently dropped.
+The rendered string **must be valid JSON**. A template with a syntax error
+makes the layer invalid (checked when the layers load). Errors that only show
+when rendering (e.g. an unknown function) and output that is not valid JSON
+make vigild log a `WARN` and send the default webhook payload instead — the
+alert is never silently dropped.
 
 **Available template variables:**
 

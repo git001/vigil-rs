@@ -89,18 +89,21 @@ fn format_webhook_template(ev: &AlertEvent, cfg: &AlertConfig, template: &str) -
 
     // The syntax is checked when the layers load; this only fails on
     // runtime errors (e.g. calling an unknown function).
-    let rendered = match Environment::new().render_str(template, context!(
-        // Undefined (renders empty) for events that are not about a check.
-        check     => check_name(ev).map_or(minijinja::Value::UNDEFINED, minijinja::Value::from),
-        source    => ev.source.as_str(),
-        name      => &ev.name,
-        event     => &ev.event,
-        status    => ev.status_str(),
-        message   => &ev.message,
-        timestamp => Utc::now().to_rfc3339(),
-        labels    => resolved_map(&cfg.labels),
-        info      => resolved_map(&cfg.send_info_fields),
-    )) {
+    let rendered = match Environment::new().render_str(
+        template,
+        context!(
+            // Undefined (renders empty) for events that are not about a check.
+            check     => check_name(ev).map_or(minijinja::Value::UNDEFINED, minijinja::Value::from),
+            source    => ev.source.as_str(),
+            name      => &ev.name,
+            event     => &ev.event,
+            status    => ev.status_str(),
+            message   => &ev.message,
+            timestamp => Utc::now().to_rfc3339(),
+            labels    => resolved_map(&cfg.labels),
+            info      => resolved_map(&cfg.send_info_fields),
+        ),
+    ) {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!(alert_template_error = %e, "body_template render error — falling back to default webhook payload");
