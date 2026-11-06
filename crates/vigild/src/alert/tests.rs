@@ -14,14 +14,14 @@ use super::{AlertEntry, AlertEvent, AlertSender, AlertSource};
 fn empty_cfg() -> AlertConfig {
     AlertConfig {
         url: "http://example.com".into(),
-        format: AlertFormat::Webhook,
+        format: Some(AlertFormat::Webhook),
         on_check: vec![],
         on_service: vec![],
         on_vigild: vec![],
         headers: IndexMap::new(),
         labels: IndexMap::new(),
         send_info_fields: IndexMap::new(),
-        tls_insecure: false,
+        tls_insecure: None,
         tls_ca: None,
         proxy: None,
         proxy_ca: None,

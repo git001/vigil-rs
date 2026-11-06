@@ -1683,11 +1683,19 @@ async fn restart_while_stopping_keeps_the_kill_deadline() {
     let mut pending_restart = false;
     let (tx, rx) = tokio::sync::oneshot::channel();
     actor
-        .handle_restart(tx, &mut backoff_sleep, &mut stop_deadline, &mut pending_restart)
+        .handle_restart(
+            tx,
+            &mut backoff_sleep,
+            &mut stop_deadline,
+            &mut pending_restart,
+        )
         .await;
     rx.await.unwrap().unwrap();
     assert!(pending_restart, "starts again once stopped");
-    assert!(stop_deadline.is_none(), "the running deadline is not replaced");
+    assert!(
+        stop_deadline.is_none(),
+        "the running deadline is not replaced"
+    );
     assert_eq!(actor.state, ServiceState::Stopping);
 }
 

@@ -656,7 +656,10 @@ async fn reload_layers_removes_service_not_in_new_plan() {
     );
     let m = ov.metrics.render();
     assert!(m.contains("vigil_services_count 0"), "{m}");
-    assert!(!m.contains("vigil_service_info{service=\"old-svc\"}"), "{m}");
+    assert!(
+        !m.contains("vigil_service_info{service=\"old-svc\"}"),
+        "{m}"
+    );
 }
 
 #[tokio::test]

@@ -41,7 +41,7 @@ fn resolved_json(map: &IndexMap<String, String>) -> Value {
 // ---------------------------------------------------------------------------
 
 pub(super) fn format_payload(ev: &AlertEvent, cfg: &AlertConfig) -> Value {
-    match cfg.format {
+    match cfg.format() {
         AlertFormat::Webhook => {
             if let Some(tmpl) = &cfg.body_template {
                 format_webhook_template(ev, cfg, tmpl)

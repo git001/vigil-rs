@@ -22,7 +22,7 @@ use vigild::alert::AlertSender;
 fn alert_cfg(url: &str) -> AlertConfig {
     AlertConfig {
         url: format!("{url}/hook"),
-        format: AlertFormat::Webhook,
+        format: Some(AlertFormat::Webhook),
         on_check: vec!["my-check".to_string()],
         ..Default::default()
     }

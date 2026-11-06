@@ -211,6 +211,34 @@ fn alert_merge_deduplicates_on_check() {
 }
 
 #[test]
+fn alert_merge_keeps_format_and_tls_insecure_when_not_set() {
+    let mut base = alert("http://example.com");
+    base.format = Some(AlertFormat::Alertmanager);
+    base.tls_insecure = Some(true);
+    let mut overlay = alert("http://example.com");
+    overlay.labels.insert("cluster".into(), "prod".into());
+    let plan = Plan::from_layers(vec![
+        alert_layer("hook", base),
+        alert_layer("hook", overlay),
+    ]);
+    let a = &plan.alerts["hook"];
+    assert_eq!(a.format(), AlertFormat::Alertmanager);
+    assert!(a.tls_insecure());
+    assert_eq!(a.labels["cluster"], "prod");
+
+    // Set in a later layer: overrides.
+    let mut overlay = alert("http://example.com");
+    overlay.format = Some(AlertFormat::Webhook);
+    overlay.tls_insecure = Some(false);
+    let plan = Plan::from_layers(vec![
+        alert_layer("hook", plan.alerts["hook"].clone()),
+        alert_layer("hook", overlay),
+    ]);
+    assert_eq!(plan.alerts["hook"].format(), AlertFormat::Webhook);
+    assert!(!plan.alerts["hook"].tls_insecure());
+}
+
+#[test]
 fn alert_replace_override_discards_base() {
     let base = alert("http://old.example.com");
     let mut overlay = alert("http://new.example.com");
@@ -239,7 +267,7 @@ retry-backoff: [1s, 2s, 4s]
 "#;
     let cfg: AlertConfig = serde_yaml::from_str(yaml).expect("parse failed");
     assert_eq!(cfg.url, "http://example.com/hook");
-    assert_eq!(cfg.format, AlertFormat::Alertmanager);
+    assert_eq!(cfg.format(), AlertFormat::Alertmanager);
     assert_eq!(cfg.on_check, vec!["check-a", "check-b"]);
     assert_eq!(cfg.headers["Authorization"], "Bearer token");
     assert_eq!(cfg.labels["cluster"], "prod");

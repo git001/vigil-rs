@@ -178,7 +178,7 @@ fn template_invalid_json_output_falls_back_to_default() {
 #[test]
 fn template_ignored_for_alertmanager_format() {
     let mut cfg = empty_cfg();
-    cfg.format = AlertFormat::Alertmanager;
+    cfg.format = Some(AlertFormat::Alertmanager);
     cfg.body_template = Some(r#"{"text": "should be ignored"}"#.to_string());
     let v = format_payload(&AlertEvent::check("web", CheckStatus::Down), &cfg);
     // Must use alertmanager format, not the template
@@ -189,7 +189,7 @@ fn template_ignored_for_alertmanager_format() {
 #[test]
 fn template_ignored_for_cloudevents_format() {
     let mut cfg = empty_cfg();
-    cfg.format = AlertFormat::CloudEvents;
+    cfg.format = Some(AlertFormat::CloudEvents);
     cfg.body_template = Some(r#"{"text": "should be ignored"}"#.to_string());
     let v = format_payload(&AlertEvent::check("web", CheckStatus::Down), &cfg);
     assert_eq!(v["specversion"], "1.0");
@@ -198,7 +198,7 @@ fn template_ignored_for_cloudevents_format() {
 #[test]
 fn template_ignored_for_otlp_format() {
     let mut cfg = empty_cfg();
-    cfg.format = AlertFormat::OtlpLogs;
+    cfg.format = Some(AlertFormat::OtlpLogs);
     cfg.body_template = Some(r#"{"text": "should be ignored"}"#.to_string());
     let v = format_payload(&AlertEvent::check("web", CheckStatus::Down), &cfg);
     assert!(v["resourceLogs"].is_array());

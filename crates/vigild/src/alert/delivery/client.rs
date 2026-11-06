@@ -7,7 +7,7 @@ use vigil_types::plan::AlertConfig;
 
 pub(crate) fn build_client(cfg: &AlertConfig) -> Client {
     let config = crate::tls::HttpClientConfig {
-        insecure: cfg.tls_insecure,
+        insecure: cfg.tls_insecure(),
         ca: cfg.tls_ca.as_deref(),
         proxy: cfg.proxy.as_deref(),
         proxy_ca: cfg.proxy_ca.as_deref(),

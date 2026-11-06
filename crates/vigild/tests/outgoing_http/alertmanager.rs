@@ -26,7 +26,7 @@ async fn alertmanager_format_fires_on_down() {
         "am-alert".to_string(),
         AlertConfig {
             url: format!("{}/hook", mock_server.uri()),
-            format: AlertFormat::Alertmanager,
+            format: Some(AlertFormat::Alertmanager),
             on_check: vec!["my-check".to_string()],
             ..Default::default()
         },
@@ -55,7 +55,7 @@ async fn alertmanager_format_fires_resolved_on_up() {
         "am-alert".to_string(),
         AlertConfig {
             url: format!("{}/hook", mock_server.uri()),
-            format: AlertFormat::Alertmanager,
+            format: Some(AlertFormat::Alertmanager),
             on_check: vec!["my-check".to_string()],
             ..Default::default()
         },

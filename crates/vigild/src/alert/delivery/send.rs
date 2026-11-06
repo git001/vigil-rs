@@ -34,7 +34,7 @@ pub(crate) async fn http_send(client: &Client, cfg: &AlertConfig, body: Value) {
         error!("alert: url is empty (env var not set?), dropping alert");
         return;
     }
-    let content_type = match cfg.format {
+    let content_type = match cfg.format() {
         AlertFormat::CloudEvents => "application/cloudevents+json",
         _ => "application/json",
     };

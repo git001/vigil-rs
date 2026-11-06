@@ -189,7 +189,7 @@ impl Overlord {
                 AlertInfo {
                     name: name.clone(),
                     url: cfg.url.clone(),
-                    format: cfg.format,
+                    format: cfg.format(),
                     on_check: cfg.on_check.clone(),
                     on_service: cfg.on_service.clone(),
                     on_vigild: cfg.on_vigild.clone(),

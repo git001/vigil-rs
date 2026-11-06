@@ -584,10 +584,22 @@ mod tests {
                 "alerts:\n  a:\n    url: http://127.0.0.1/\n    on-vigild: [layers]\n    on-service: ['*']\n",
                 None,
             ),
-            ("alerts:\n  max-queue-depth: 0\n", Some("max-queue-depth must be at least 1")),
-            ("alerts:\n  max-queue-time: 500ms\n", Some("must be at least 1s")),
-            ("alerts:\n  max-queue-time: soon\n", Some("is not a duration")),
-            ("alerts:\n  max-queue-depth: 1\n  max-queue-time: 1s\n", None),
+            (
+                "alerts:\n  max-queue-depth: 0\n",
+                Some("max-queue-depth must be at least 1"),
+            ),
+            (
+                "alerts:\n  max-queue-time: 500ms\n",
+                Some("must be at least 1s"),
+            ),
+            (
+                "alerts:\n  max-queue-time: soon\n",
+                Some("is not a duration"),
+            ),
+            (
+                "alerts:\n  max-queue-depth: 1\n  max-queue-time: 1s\n",
+                None,
+            ),
         ];
         for (yaml, want) in cases {
             let dir = TempDir::new().unwrap();

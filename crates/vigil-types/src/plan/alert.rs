@@ -28,8 +28,10 @@ pub struct AlertConfig {
     pub override_mode: Override,
     /// HTTP(S) endpoint to POST alerts to.
     pub url: String,
-    #[serde(default)]
-    pub format: AlertFormat,
+    /// `None`: not set in this layer (a merge keeps the earlier value);
+    /// read it with [`AlertConfig::format`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<AlertFormat>,
     /// Extra HTTP headers (e.g. `Authorization`).
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub headers: IndexMap<String, String>,
@@ -57,8 +59,10 @@ pub struct AlertConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub on_vigild: Vec<String>,
     /// Skip TLS certificate verification (useful for self-signed certs).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub tls_insecure: bool,
+    /// `None`: not set in this layer; read it with
+    /// [`AlertConfig::tls_insecure`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_insecure: Option<bool>,
     /// PEM file with a CA certificate (or chain) to verify the server's TLS.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_ca: Option<std::path::PathBuf>,
@@ -114,6 +118,18 @@ pub struct AlertConfig {
     pub body_template: Option<String>,
 }
 
+impl AlertConfig {
+    /// Effective `format` (default `webhook`).
+    pub fn format(&self) -> AlertFormat {
+        self.format.unwrap_or_default()
+    }
+
+    /// Effective `tls-insecure` (default `false`).
+    pub fn tls_insecure(&self) -> bool {
+        self.tls_insecure.unwrap_or(false)
+    }
+}
+
 /// The `alerts:` block in a layer file.
 ///
 /// Global queue settings (`max-queue-depth`, `max-queue-time`) are optional
@@ -159,8 +175,8 @@ pub(super) fn merge_alert(base: &mut AlertConfig, overlay: &AlertConfig) {
     if !overlay.url.is_empty() {
         base.url = overlay.url.clone();
     }
-    base.format = overlay.format;
-    base.tls_insecure = overlay.tls_insecure;
+    opt!(format);
+    opt!(tls_insecure);
     opt!(tls_ca);
     opt!(proxy);
     opt!(proxy_ca);
