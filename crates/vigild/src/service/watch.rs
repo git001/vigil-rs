@@ -30,7 +30,7 @@ use tracing::warn;
 use crate::file_io::{ContentHasher, FILE_IO_TIMEOUT, PeriodicRead, ReadOutcome, hash_into};
 use crate::template::FileRead;
 
-pub const DEFAULT_WATCH_INTERVAL: Duration = Duration::from_secs(30);
+const DEFAULT_WATCH_INTERVAL: Duration = Duration::from_secs(30);
 
 /// State of one watched file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

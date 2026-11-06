@@ -16,16 +16,7 @@ use anyhow::Context;
 use nix::unistd::{AccessFlags, Uid, access};
 use tracing::info;
 
-/// Default `--path-prefix`.
-pub const DEFAULT_PATH_PREFIX: &str = "/run/vigil";
-
-/// File name of the control socket inside the prefix.
-pub const SOCKET_NAME: &str = "vigild.sock";
-
-/// Default control-socket path for a given prefix.
-pub fn socket_path(prefix: &Path) -> PathBuf {
-    prefix.join(SOCKET_NAME)
-}
+pub use vigil_types::paths::{DEFAULT_PATH_PREFIX, SOCKET_NAME, socket_path};
 
 /// Subdirectory for the per-start sd_notify sockets (`ready: notify`).
 pub const NOTIFY_DIR: &str = "notify";

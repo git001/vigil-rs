@@ -168,12 +168,7 @@ impl Overlord {
             .after
             .iter()
             .chain(config.requires.iter())
-            .all(|dep| {
-                self.services
-                    .get(dep)
-                    .map(|e| e.snapshot.state.is_ready())
-                    .unwrap_or(false)
-            });
+            .all(|dep| self.dep_ready(dep));
 
         // before: reverse — any service X where name ∈ X.before must be running first
         let before_ok = self
@@ -181,12 +176,7 @@ impl Overlord {
             .services
             .iter()
             .filter(|(other, c)| *other != name && c.before.contains(&name.to_string()))
-            .all(|(dep, _)| {
-                self.services
-                    .get(dep)
-                    .map(|e| e.snapshot.state.is_ready())
-                    .unwrap_or(false)
-            });
+            .all(|(dep, _)| self.dep_ready(dep));
 
         direct_ok && before_ok
     }
@@ -265,11 +255,10 @@ impl Overlord {
         self.sync_actors();
         self.pending_autostart.clear();
 
-        let current_svcs: Vec<String> = self.plan.services.keys().cloned().collect();
         let removed_svcs: Vec<String> = self
             .services
             .keys()
-            .filter(|n| !current_svcs.contains(n))
+            .filter(|n| !self.plan.services.contains_key(*n))
             .cloned()
             .collect();
         for name in removed_svcs {
@@ -279,11 +268,10 @@ impl Overlord {
             }
         }
 
-        let current_chks: Vec<String> = self.plan.checks.keys().cloned().collect();
         let removed_chks: Vec<String> = self
             .checks
             .keys()
-            .filter(|n| !current_chks.contains(n))
+            .filter(|n| !self.plan.checks.contains_key(*n))
             .cloned()
             .collect();
         for name in removed_chks {
@@ -293,6 +281,13 @@ impl Overlord {
         }
 
         self.autostart().await;
+    }
+
+    /// Whether the service `name` is ready (active, or a finished oneshot).
+    fn dep_ready(&self, name: &str) -> bool {
+        self.services
+            .get(name)
+            .is_some_and(|e| e.snapshot.state.is_ready())
     }
 
     pub(super) async fn stop_all(&mut self) {

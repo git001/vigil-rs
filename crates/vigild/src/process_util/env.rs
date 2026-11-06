@@ -125,9 +125,7 @@ impl EnvPolicy {
         }
         env.into_iter().collect()
     }
-}
 
-impl EnvPolicy {
     /// Policy of a service.
     pub fn for_service(cfg: &ServiceConfig) -> anyhow::Result<Self> {
         Self::compile(cfg.pass_env, &cfg.pass_env_glob, &cfg.pass_env_regex)
@@ -166,7 +164,7 @@ pub fn apply_env(cmd: &mut tokio::process::Command, env: Vec<(OsString, OsString
 
 /// Whole-string wildcard match: `*` matches any run of characters
 /// (including none), `?` exactly one character. Case-sensitive.
-pub fn glob_match(pattern: &str, name: &str) -> bool {
+fn glob_match(pattern: &str, name: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
     let n: Vec<char> = name.chars().collect();
     // Iterative matcher with backtracking to the last `*`.

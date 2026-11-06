@@ -8,6 +8,6 @@ mod parse;
 #[cfg(test)]
 mod tests;
 
-pub use env::{EnvPolicy, REDUNDANT_LISTS, apply_env, glob_match, redundant_lists};
+pub use env::{EnvPolicy, REDUNDANT_LISTS, apply_env, redundant_lists};
 pub use identity::{Credentials, apply_credentials, resolve_credentials, resolve_gid, resolve_uid};
 pub use parse::{parse_command, parse_command_templated};

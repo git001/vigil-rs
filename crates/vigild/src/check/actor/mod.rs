@@ -40,7 +40,8 @@ pub(super) async fn run(
         .and_then(|s| parse_duration(s).ok())
         .unwrap_or(DEFAULT_PERIOD);
     // The plan check enforces 1s..24h; never let a zero period reach
-    // `interval()` (it panics) or an unbounded one through.
+    // `interval()` (it panics) or an unbounded one through. Sub-second
+    // periods stay possible for unit tests, which bypass the plan check.
     let period = if period.is_zero() {
         DEFAULT_PERIOD
     } else {

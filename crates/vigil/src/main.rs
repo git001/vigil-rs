@@ -23,7 +23,7 @@ struct Args {
     #[arg(
         long,
         env = "VIGIL_PATH_PREFIX",
-        default_value = "/run/vigil",
+        default_value = vigil_types::paths::DEFAULT_PATH_PREFIX,
         help = "Runtime directory of vigild (same as vigild --path-prefix).\nThe socket is <path-prefix>/vigild.sock unless --socket is set."
     )]
     path_prefix: PathBuf,
@@ -183,7 +183,7 @@ async fn main() -> anyhow::Result<()> {
     } else {
         VigilClient::new_unix_trusting(
             args.socket
-                .unwrap_or_else(|| args.path_prefix.join("vigild.sock")),
+                .unwrap_or_else(|| vigil_types::paths::socket_path(&args.path_prefix)),
             args.socket_uid,
         )
     };
