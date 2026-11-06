@@ -14,6 +14,10 @@
 #   VTEST       Path to the vtest binary   (default: /datadisk/git-repos/VTest2/vtest)
 #   VIGILD_BIN  Path to a pre-built vigild (default: target/debug/vigild)
 #               Ignored in --coverage mode; the instrumented binary is used.
+#   CARGO_TEST_ARGS  Extra arguments for `cargo test` in --coverage mode,
+#               split on whitespace. Example for an unprivileged sandbox
+#               whose /etc/passwd lacks root:
+#               CARGO_TEST_ARGS="-- --skip resolve_uid_name_and --skip resolve_gid_name_and"
 
 set -euo pipefail
 
@@ -117,7 +121,8 @@ VIGIL_LOG_RELAY_BIN="${CARGO_LLVM_COV_TARGET_DIR}/debug/vigil-log-relay"
 
 echo "==> Running unit + Rust integration tests…"
 # With the show-env vars active, cargo test writes profraw files into target/.
-cargo test --workspace 2>&1 | tail -5
+read -ra CARGO_TEST_EXTRA <<< "${CARGO_TEST_ARGS:-}"
+cargo test --workspace "${CARGO_TEST_EXTRA[@]}" 2>&1 | tail -5
 
 echo "==> Running VTest2 tests…"
 # LLVM_PROFILE_FILE is set by show-env.  Explicitly re-export it so that
