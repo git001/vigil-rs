@@ -36,8 +36,12 @@ impl Actor {
             .then(|| Instant::now() + self.healthy_time());
     }
 
+    /// The service is healthy: it also starts a new backoff sequence, so
+    /// only failures in a row count towards giving up, not failures days
+    /// apart.
     pub(super) async fn report_healthy(&mut self) {
         self.healthy_deadline = None;
+        self.reset_backoff();
         self.send_event(EventKind::Healthy).await;
     }
 

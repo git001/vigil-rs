@@ -1690,3 +1690,14 @@ async fn restart_while_stopping_keeps_the_kill_deadline() {
     assert!(stop_deadline.is_none(), "the running deadline is not replaced");
     assert_eq!(actor.state, ServiceState::Stopping);
 }
+
+#[tokio::test]
+async fn healthy_service_starts_a_new_backoff_sequence() {
+    let (mut actor, _rx) = make_actor();
+    actor.next_backoff();
+    actor.next_backoff();
+    assert!(actor.backoff_count > 0);
+    actor.report_healthy().await;
+    assert_eq!(actor.backoff_count, 0);
+    assert_eq!(actor.current_backoff, DEFAULT_BACKOFF_DELAY);
+}

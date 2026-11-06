@@ -105,9 +105,9 @@ services:
       myservice-alive: restart         # restart when check 'myservice-alive' goes Down
 
     # --- Restart backoff ---
-    backoff-delay: 1s                  # initial delay before first restart attempt
-    backoff-factor: 2.0                # multiply delay by this after each attempt
-    backoff-limit: 30s                 # maximum delay cap
+    backoff-delay: 500ms               # delay before the first restart (default: 500ms)
+    backoff-factor: 2.0                # multiply the delay by this after each restart
+    backoff-limit: 30s                 # largest delay; reaching it means giving up (default: 30s)
 
     # --- Logging ---
     logs-forward: enabled              # enabled (default) | disabled | passthrough
@@ -685,14 +685,25 @@ the policy is applied to this service. Same values as `on-success`/`on-failure`.
 
 #### Backoff
 
-When a service restarts repeatedly, backoff limits restart frequency:
+When a service fails and `on-failure` is `restart`, vigild waits before each
+restart, longer every time:
 
 ```
 delay_n = min(backoff-delay * backoff-factor^n, backoff-limit)
 ```
 
-Example with defaults (`1s`, `2.0`, `30s`):
-`1s → 2s → 4s → 8s → 16s → 30s → 30s → …`
+Once the delay has grown to `backoff-limit`, vigild gives up at the next
+failure: the service goes to `error` (alert event `error`, see [service
+events](#service-events)) and stays there until you start it again.
+
+Example with the defaults (`500ms`, `2.0`, `30s`): restarts after
+`500ms → 1s → 2s → 4s → 8s → 16s`, the 7th failure in a row puts the service
+into `error`.
+
+The sequence starts again from `backoff-delay` when the service has been
+running for [`healthy-time`](#healthy-time) (or a oneshot run succeeded), and
+on a manual `vigil start` or `vigil restart`. So only failures in a row count,
+not failures days apart.
 
 #### `logs-forward`
 
