@@ -5,6 +5,12 @@ use clap::Subcommand;
 use vigil_client::client::VigilClient;
 use vigil_types::api::ServiceAction;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Output {
+    Table,
+    Json,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum ServicesCmd {
     /// List services and their current status.
@@ -13,8 +19,8 @@ pub enum ServicesCmd {
         /// Filter by service name(s).
         names: Vec<String>,
         /// Output format.
-        #[arg(short = 'o', long, env = "VIGIL_OUTPUT", default_value = "table", value_parser = ["table", "json"])]
-        output: String,
+        #[arg(short = 'o', long, env = "VIGIL_OUTPUT", value_enum, default_value_t = Output::Table)]
+        output: Output,
     },
 
     /// Start one or more services (empty = all).
@@ -34,7 +40,7 @@ pub async fn run(client: &VigilClient, sub: ServicesCmd) -> anyhow::Result<()> {
     match sub {
         ServicesCmd::List { names, output } => {
             let services = client.list_services(&names).await?;
-            if output == "json" {
+            if output == Output::Json {
                 println!("{}", serde_json::to_string_pretty(&services)?);
                 return Ok(());
             }

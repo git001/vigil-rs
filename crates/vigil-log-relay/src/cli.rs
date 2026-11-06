@@ -481,14 +481,15 @@ pub struct Cli {
     pub healthcheck_max_age: u64,
 
     // ---- Logging ----------------------------------------------------------
-    /// Log format: "text" or "json".
+    /// Format of the relay's own log.
     #[arg(
         long,
         env = "VIGIL_LOG_FORMAT",
-        default_value = "text",
+        value_enum,
+        default_value_t = LogFormat::Text,
         help_heading = "Logging"
     )]
-    pub log_format: String,
+    pub log_format: LogFormat,
 
     /// Enable debug logging with timestamps.
     #[arg(long, help_heading = "Logging")]
@@ -576,4 +577,11 @@ mod scope_tests {
     fn proxy_options_still_allowed_with_kubernetes() {
         parse(&["--kubernetes", "--source-proxy", "http://p:3128"]).unwrap();
     }
+}
+
+/// `--log-format`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum LogFormat {
+    Text,
+    Json,
 }

@@ -16,6 +16,24 @@ use tokio::signal::unix::SignalKind;
 use tracing::info;
 
 /// vigild — Rust service supervisor daemon
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum TlsAnonymous {
+    Open,
+    Metrics,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum ExitCode {
+    Propagate,
+    Fixed,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum LogFormat {
+    Text,
+    Json,
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "vigild", version, about, long_about = concat!(
     "vigild — Rust service supervisor daemon\n",
@@ -89,33 +107,23 @@ struct Args {
     /// /v1/checks, /v1/system-info, API docs) or `metrics` (also
     /// /v1/metrics). Logs, services and anything that changes state always
     /// need an identity over TLS.
-    #[arg(
-        long,
-        env = "VIGIL_TLS_ANONYMOUS_ACCESS",
-        default_value = "metrics",
-        value_parser = ["open", "metrics"]
-    )]
-    tls_anonymous_access: String,
+    #[arg(long, env = "VIGIL_TLS_ANONYMOUS_ACCESS", value_enum, default_value_t = TlsAnonymous::Metrics)]
+    tls_anonymous_access: TlsAnonymous,
 
     /// vigild's exit code when a policy shuts it down: `propagate` (the
     /// service's code after exit-code-map, 128+signal for signals) or `fixed`
     /// (v3 behaviour: 0 on success, 10 on failure).
-    #[arg(
-        long,
-        env = "VIGIL_EXIT_CODE",
-        default_value = "propagate",
-        value_parser = ["propagate", "fixed"]
-    )]
-    exit_code: String,
+    #[arg(long, env = "VIGIL_EXIT_CODE", value_enum, default_value_t = ExitCode::Propagate)]
+    exit_code: ExitCode,
 
     /// Enable init/subreaper mode: reap orphaned zombie processes.
     /// Automatically active when vigild runs as PID 1.
     #[arg(long, env = "VIGIL_REAPER")]
     reaper: bool,
 
-    /// Log format: "text" or "json".
-    #[arg(long, env = "VIGIL_LOG_FORMAT", default_value = "text")]
-    log_format: String,
+    /// Format of vigild's own log.
+    #[arg(long, env = "VIGIL_LOG_FORMAT", value_enum, default_value_t = LogFormat::Text)]
+    log_format: LogFormat,
 
     /// Reload the layers automatically when the files in --layers-dir
     /// change (e.g. a mounted ConfigMap), checking every INTERVAL
@@ -141,8 +149,8 @@ fn main() -> anyhow::Result<()> {
     } else {
         tracing_subscriber::EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into())
     };
-    match args.log_format.as_str() {
-        "json" => {
+    match args.log_format {
+        LogFormat::Json => {
             tracing_subscriber::fmt()
                 .json()
                 .with_env_filter(env_filter)
@@ -230,9 +238,9 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
         http_address,
         https_address,
         args.log_buffer,
-        match args.exit_code.as_str() {
-            "fixed" => vigild::service::ExitCodeMode::Fixed,
-            _ => vigild::service::ExitCodeMode::Propagate,
+        match args.exit_code {
+            ExitCode::Fixed => vigild::service::ExitCodeMode::Fixed,
+            ExitCode::Propagate => vigild::service::ExitCodeMode::Propagate,
         },
         path_prefix::notify_dir(&args.path_prefix),
         args.watch_layers,
@@ -242,13 +250,13 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
     let (shutdown_tx, mut shutdown_rx) =
         tokio::sync::mpsc::channel::<vigil_types::api::DaemonAction>(1);
 
-    let tls_anonymous_access = match args.tls_anonymous_access.as_str() {
-        "open" => vigil_types::identity::IdentityAccess::Open,
-        _ => vigil_types::identity::IdentityAccess::Metrics,
+    let tls_anonymous_access = match args.tls_anonymous_access {
+        TlsAnonymous::Open => vigil_types::identity::IdentityAccess::Open,
+        TlsAnonymous::Metrics => vigil_types::identity::IdentityAccess::Metrics,
     };
     if args.tls_addr.is_some() {
         info!(
-            access = %args.tls_anonymous_access,
+            access = ?args.tls_anonymous_access,
             "TLS API: callers without a matching identity get this access level"
         );
     }

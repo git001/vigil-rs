@@ -60,8 +60,8 @@ async fn main() -> Result<()> {
     } else {
         tracing_subscriber::EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into())
     };
-    match cli.log_format.as_str() {
-        "json" => {
+    match cli.log_format {
+        cli::LogFormat::Json => {
             tracing_subscriber::fmt()
                 .json()
                 .with_env_filter(env_filter)
