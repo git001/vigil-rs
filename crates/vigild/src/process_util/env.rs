@@ -32,20 +32,15 @@ pub struct EnvPolicy {
 }
 
 impl EnvPolicy {
-    /// Compile the policy. Errors on invalid regular expressions and on
-    /// `pass-env: true` combined with glob/regex lists (they would have no
-    /// effect, which is almost certainly a mistake).
+    /// Compile the policy. Errors on invalid regular expressions. With
+    /// `pass-env: true` the glob/regex lists have no effect; the plan check
+    /// warns about that ([`redundant_lists`]).
     pub fn compile(
         pass_env: Option<bool>,
         globs: &[String],
         regexes: &[String],
     ) -> anyhow::Result<Self> {
         let inherit_all = pass_env.unwrap_or(false);
-        anyhow::ensure!(
-            !(inherit_all && (!globs.is_empty() || !regexes.is_empty())),
-            "`pass-env: true` passes the whole environment; \
-             `pass-env-glob` / `pass-env-regex` would have no effect"
-        );
         let regexes = regexes
             .iter()
             .map(|r| {
@@ -139,7 +134,9 @@ impl EnvPolicy {
     }
 
     /// Policy of an exec check: the check's `pass-env` overrides the service
-    /// context's, glob/regex lists are combined (service first).
+    /// context's, glob/regex lists are combined (service first). With an
+    /// effective `pass-env: true` the lists do not matter: everything is
+    /// passed.
     pub fn for_exec_check(exec: &ExecCheck, ctx: Option<&ServiceConfig>) -> anyhow::Result<Self> {
         let pass_env = exec.pass_env.or_else(|| ctx.and_then(|s| s.pass_env));
         let mut globs: Vec<String> = ctx.map(|s| s.pass_env_glob.clone()).unwrap_or_default();
@@ -149,6 +146,17 @@ impl EnvPolicy {
         Self::compile(pass_env, &globs, &regexes)
     }
 }
+
+/// `pass-env: true` together with `pass-env-glob` / `pass-env-regex` in the
+/// same block: the lists have no effect (everything is passed anyway) and
+/// should be removed. Only a warning, the config still works.
+pub fn redundant_lists(pass_env: Option<bool>, globs: &[String], regexes: &[String]) -> bool {
+    pass_env == Some(true) && (!globs.is_empty() || !regexes.is_empty())
+}
+
+/// Warning text for [`redundant_lists`].
+pub const REDUNDANT_LISTS: &str = "pass-env: true passes the whole environment; \
+     pass-env-glob / pass-env-regex have no effect and should be removed";
 
 /// Apply a built environment to `cmd`, replacing everything inherited.
 pub fn apply_env(cmd: &mut tokio::process::Command, env: Vec<(OsString, OsString)>) {
@@ -267,10 +275,35 @@ mod tests {
     }
 
     #[test]
-    fn inherit_all_with_lists_is_rejected() {
-        let err = EnvPolicy::compile(Some(true), &["APP_*".into()], &[]).unwrap_err();
-        assert!(err.to_string().contains("no effect"), "{err}");
-        assert!(EnvPolicy::compile(Some(true), &[], &["X".into()]).is_err());
+    fn inherit_all_with_lists_passes_everything_and_is_redundant() {
+        let p = EnvPolicy::compile(Some(true), &["APP_*".into()], &["X".into()]).unwrap();
+        let env = p.build(parent(), None, &IndexMap::new());
+        assert_eq!(env.len(), parent().len());
+        assert!(redundant_lists(Some(true), &["APP_*".into()], &[]));
+        assert!(redundant_lists(Some(true), &[], &["X".into()]));
+        assert!(!redundant_lists(Some(true), &[], &[]));
+        assert!(!redundant_lists(None, &["APP_*".into()], &[]));
+    }
+
+    #[test]
+    fn exec_check_pass_env_true_overrides_the_service_lists() {
+        let svc = ServiceConfig {
+            pass_env_glob: vec!["APP_*".into()],
+            ..Default::default()
+        };
+        let exec = ExecCheck {
+            pass_env: Some(true),
+            ..Default::default()
+        };
+        let p = EnvPolicy::for_exec_check(&exec, Some(&svc)).unwrap();
+        let env = p.build(parent(), None, &IndexMap::new());
+        assert_eq!(env.len(), parent().len(), "everything is passed");
+
+        // Without pass-env on the check the service's lists apply.
+        let p = EnvPolicy::for_exec_check(&ExecCheck::default(), Some(&svc)).unwrap();
+        let env = p.build(parent(), None, &IndexMap::new());
+        assert!(value(&env, "APP_MODE").is_some());
+        assert!(value(&env, "DB_PASSWORD").is_none());
     }
 
     #[test]

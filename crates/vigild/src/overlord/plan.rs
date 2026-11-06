@@ -51,10 +51,13 @@ pub fn load_plan(dir: &Path) -> anyhow::Result<Plan> {
 /// Checks that need more than deserialization. Runs on startup and on every
 /// replan, so a bad layer is rejected before anything is (re)started.
 fn validate(plan: &Plan) -> anyhow::Result<()> {
-    use crate::process_util::EnvPolicy;
+    use crate::process_util::{EnvPolicy, REDUNDANT_LISTS, redundant_lists};
 
     for (name, svc) in &plan.services {
         EnvPolicy::for_service(svc).with_context(|| format!("service {name:?}"))?;
+        if redundant_lists(svc.pass_env, &svc.pass_env_glob, &svc.pass_env_regex) {
+            tracing::warn!(service = %name, "{REDUNDANT_LISTS}");
+        }
         validate_ready(plan, svc).with_context(|| format!("service {name:?}"))?;
         validate_oneshot(svc).with_context(|| format!("service {name:?}"))?;
         crate::template::check_service(svc).with_context(|| format!("service {name:?}"))?;
@@ -75,6 +78,12 @@ fn validate(plan: &Plan) -> anyhow::Result<()> {
                 .as_deref()
                 .and_then(|s| plan.services.get(s));
             EnvPolicy::for_exec_check(exec, ctx).with_context(|| format!("check {name:?}"))?;
+            // Only the check's own lists: a service context still needs its
+            // lists for the service itself.
+            let pass_env = exec.pass_env.or_else(|| ctx.and_then(|s| s.pass_env));
+            if redundant_lists(pass_env, &exec.pass_env_glob, &exec.pass_env_regex) {
+                tracing::warn!(check = %name, "{REDUNDANT_LISTS}");
+            }
             crate::template::check_exec_environment(&exec.environment)
                 .with_context(|| format!("check {name:?}"))?;
         }
@@ -226,19 +235,21 @@ mod tests {
         assert!(err.contains("invalid pass-env-regex"), "{err}");
     }
 
+    /// Redundant lists only warn (see `redundant_lists`); the layer loads.
     #[test]
-    fn pass_env_true_with_globs_rejects_plan() {
+    fn pass_env_true_with_globs_loads() {
         let dir = TempDir::new().unwrap();
         write(
             &dir,
             "001.yaml",
             "services:\n  app:\n    command: /bin/true\n    pass-env: true\n    pass-env-glob: [APP_*]\n",
         );
-        assert!(load_plan(dir.path()).is_err());
+        assert!(load_plan(dir.path()).is_ok());
     }
 
+    /// `pass-env: true` on the check overrides the context's lists.
     #[test]
-    fn exec_check_inherits_context_lists_for_validation() {
+    fn exec_check_pass_env_true_in_a_service_context_with_lists_loads() {
         let dir = TempDir::new().unwrap();
         write(
             &dir,
@@ -246,8 +257,7 @@ mod tests {
             "services:\n  app:\n    command: /bin/true\n    pass-env-glob: [APP_*]\n\
              checks:\n  c:\n    exec:\n      command: 'true'\n      service-context: app\n      pass-env: true\n",
         );
-        let err = format!("{:#}", load_plan(dir.path()).unwrap_err());
-        assert!(err.contains("check \"c\""), "{err}");
+        assert!(load_plan(dir.path()).is_ok());
     }
 
     #[test]

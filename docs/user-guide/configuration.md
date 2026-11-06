@@ -328,14 +328,19 @@ Secrets) that a service does not need. A service gets:
 
 | Field | Meaning |
 |---|---|
-| `pass-env` | `true` passes vigild's entire environment (the behaviour before v4). Cannot be combined with `pass-env-glob`/`pass-env-regex`. Default `false`. |
+| `pass-env` | `true` passes vigild's entire environment (the behaviour before v4); `pass-env-glob`/`pass-env-regex` then have no effect. Default `false`. |
 | `pass-env-glob` | List of variable names. `*` matches any characters, `?` exactly one; the pattern must match the **whole** name (`APP_*` does not match `MY_APP_X`). |
 | `pass-env-regex` | List of regular expressions, each anchored to the whole name (`TOKEN` does not match `MY_TOKEN`; write `.*TOKEN.*` for that). |
 
-Glob and regex matches are combined. Invalid regular expressions, or
-`pass-env: true` together with a list, make the layer invalid: vigild refuses
-to start, and `vigil replan` keeps the running plan. In layer merges the
-lists are appended and `pass-env` is overridden.
+Glob and regex matches are combined. Invalid regular expressions make the
+layer invalid: vigild refuses to start, and `vigil replan` keeps the running
+plan. `pass-env: true` together with a list in the same service or exec check
+loads, but vigild logs a warning: the list has no effect and should be
+removed. In layer merges the lists are appended and `pass-env` is overridden.
+
+An exec check with `pass-env: true` gets vigild's whole environment even when
+its `service-context` uses `pass-env-glob` / `pass-env-regex`; the service
+keeps its lists, so there is no warning for that.
 
 Which variables were passed is logged at debug level, as names only.
 
