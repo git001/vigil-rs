@@ -64,8 +64,9 @@ impl Overlord {
             );
         }
 
-        // Keep vigil_service_info and vigil_services_count in sync.
-        let names: Vec<&str> = self.services.keys().map(String::as_str).collect();
+        // Keep vigil_service_info and vigil_services_count in sync with the
+        // plan (removed services are dropped from `self.services` later).
+        let names: Vec<&str> = self.plan.services.keys().map(String::as_str).collect();
         self.metrics.set_services(&names);
 
         // Checks with startup: disabled are not auto-started.

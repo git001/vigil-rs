@@ -208,8 +208,10 @@ impl MetricsStore {
         })
     }
 
-    /// Register a service name in `vigil_service_info` and update the count.
+    /// Set `vigil_service_info` and `vigil_services_count` to exactly these
+    /// services (names removed by a replan disappear).
     pub fn set_services(&self, names: &[&str]) {
+        self.service_info.clear();
         for name in names {
             self.service_info
                 .get_or_create(&ServiceLabel {

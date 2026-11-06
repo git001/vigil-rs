@@ -654,6 +654,9 @@ async fn reload_layers_removes_service_not_in_new_plan() {
         !ov.services.contains_key("old-svc"),
         "removed service should no longer be tracked"
     );
+    let m = ov.metrics.render();
+    assert!(m.contains("vigil_services_count 0"), "{m}");
+    assert!(!m.contains("vigil_service_info{service=\"old-svc\"}"), "{m}");
 }
 
 #[tokio::test]
