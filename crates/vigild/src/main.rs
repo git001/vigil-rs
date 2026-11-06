@@ -203,13 +203,27 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
         .clone()
         .unwrap_or_else(|| path_prefix::socket_path(&args.path_prefix));
     let unix_listener = server::bind_unix(&socket, args.socket_mode)?;
-    let tls_listener = args.tls_addr.as_deref().map(server::bind_tls).transpose()?;
+    // The TLS listener and certificate too: a busy address or a broken
+    // --cert/--key must stop vigild before it starts any service.
+    let tls = match args.tls_addr.as_deref() {
+        Some(addr) => {
+            let listener = server::bind_tls(addr)?;
+            let acceptor = tls::load_or_generate(
+                args.cert.as_deref(),
+                args.key.as_deref(),
+                server::tls_hostname(addr),
+                args.tls_client_ca.as_deref(),
+            )?;
+            Some((listener, acceptor))
+        }
+        None => None,
+    };
 
     let http_address = socket.to_string_lossy().into_owned();
     // The bound address: with port 0 the kernel's choice, not ":0".
-    let https_address = tls_listener
+    let https_address = tls
         .as_ref()
-        .map(|l| l.local_addr().map(|a| a.to_string()))
+        .map(|(l, _)| l.local_addr().map(|a| a.to_string()))
         .transpose()?;
     let (overlord, log_store, metrics, overlord_task) = overlord::spawn(
         args.layers_dir,
@@ -258,14 +272,7 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
     });
 
     // Optional TLS server
-    let tls_task = if let (Some(addr), Some(listener)) = (args.tls_addr, tls_listener) {
-        let hostname = addr.split(':').next().unwrap_or("localhost").to_string();
-        let acceptor = tls::load_or_generate(
-            args.cert.as_deref(),
-            args.key.as_deref(),
-            &hostname,
-            args.tls_client_ca.as_deref(),
-        )?;
+    let tls_task = if let Some((listener, acceptor)) = tls {
         let tls_router = router.clone();
         let handle = tokio::spawn(async move {
             if let Err(e) = server::serve_tls(listener, acceptor, tls_router).await {

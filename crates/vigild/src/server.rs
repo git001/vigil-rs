@@ -182,6 +182,20 @@ pub fn bind_tls(addr: &str) -> anyhow::Result<TcpListener> {
     Ok(listener)
 }
 
+/// Host part of a `--tls-addr` (for the self-signed certificate):
+/// `127.0.0.1:8443` → `127.0.0.1`, `[::1]:8443` → `::1`, `myhost` →
+/// `myhost`.
+pub fn tls_hostname(addr: &str) -> &str {
+    if let Some(rest) = addr.strip_prefix('[') {
+        return rest.split(']').next().unwrap_or(rest);
+    }
+    match addr.rsplit_once(':') {
+        // More colons: a bare IPv6 address without a port.
+        Some((host, _)) if !host.contains(':') => host,
+        _ => addr,
+    }
+}
+
 /// Serve the API over TLS on an already bound listener (see [`bind_tls`]).
 pub async fn serve_tls(
     listener: TcpListener,
@@ -265,6 +279,15 @@ mod bind_tests {
 
     /// Regression: the temporary name used to be ".<name>.<pid>.tmp", so a
     /// final path close to the 107-byte limit failed to bind although it fits.
+    #[test]
+    fn tls_hostname_strips_port_and_brackets() {
+        assert_eq!(tls_hostname("127.0.0.1:8443"), "127.0.0.1");
+        assert_eq!(tls_hostname("vigil.example.com:8443"), "vigil.example.com");
+        assert_eq!(tls_hostname("[::1]:8443"), "::1");
+        assert_eq!(tls_hostname("::1"), "::1");
+        assert_eq!(tls_hostname("localhost"), "localhost");
+    }
+
     #[tokio::test]
     async fn final_path_at_limit_binds() {
         let dir = tempfile::tempdir().unwrap();
