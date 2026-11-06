@@ -50,6 +50,8 @@ path = "src/main.rs"
 
 [dependencies]
 vigil-types        = { path = "../vigil-types" }
+vigil-tls          = { workspace = true }
+vigil-files        = { workspace = true, features = ["tokio"] }
 tokio              = { workspace = true }
 tokio-stream       = { workspace = true }
 axum               = { workspace = true }
@@ -66,7 +68,6 @@ thiserror          = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 rustls             = { workspace = true }
-rustls-pemfile     = { workspace = true }
 tokio-rustls       = { workspace = true }
 rcgen              = { workspace = true }
 nix                = { workspace = true }

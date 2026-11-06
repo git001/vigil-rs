@@ -45,6 +45,7 @@ path = "src/lib.rs"
 
 [dependencies]
 vigil-types    = { path = "../vigil-types" }
+vigil-tls      = { workspace = true }
 tokio          = { workspace = true }
 hyper          = { workspace = true }
 hyper-util     = { workspace = true }

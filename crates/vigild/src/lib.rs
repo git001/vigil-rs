@@ -5,7 +5,6 @@ pub mod alert;
 pub mod api;
 pub mod check;
 pub mod duration;
-pub mod file_io;
 pub mod identity;
 pub mod logs;
 pub mod metrics;

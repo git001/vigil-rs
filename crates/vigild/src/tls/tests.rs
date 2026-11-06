@@ -51,7 +51,7 @@ fn generate_self_signed_produces_valid_cert() {
     init_crypto();
     let (certs, key) = generate_self_signed(&["localhost"]).unwrap();
     assert!(!certs.is_empty());
-    assert!(!key.is_empty());
+    assert!(!key.secret_der().is_empty());
     // Should also build a valid acceptor.
     acceptor_from_der(certs, key).unwrap();
 }
@@ -66,14 +66,8 @@ fn acceptor_from_der_mtls_builds_successfully() {
     let (ca_pem, _client_der, _) = gen_ca_and_client();
     let (cert_ders, key_der) = generate_self_signed(&["localhost"]).unwrap();
 
-    let ca_der: Vec<Vec<u8>> = rustls_pemfile::certs(&mut ca_pem.as_bytes())
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap()
-        .into_iter()
-        .map(|c| c.to_vec())
-        .collect();
-
-    acceptor_from_der_mtls(cert_ders, key_der, ca_der).unwrap();
+    let cas = vigil_tls::certs_from_pem("ca", ca_pem.as_bytes()).unwrap();
+    acceptor_from_der_mtls(cert_ders, key_der, cas).unwrap();
 }
 
 #[test]
@@ -112,7 +106,7 @@ fn load_or_generate_from_pem_files() {
     init_crypto();
     let (cert_ders, key_der) = generate_self_signed(&["localhost"]).unwrap();
     let cert_pem = cert_to_pem(&cert_ders[0]);
-    let key_pem = key_der_to_pem(&key_der);
+    let key_pem = key_der_to_pem(key_der.secret_der());
 
     let mut cert_file = NamedTempFile::new().unwrap();
     cert_file.write_all(cert_pem.as_bytes()).unwrap();
@@ -135,7 +129,7 @@ fn load_or_generate_empty_cert_file_errors() {
     let mut key_file = NamedTempFile::new().unwrap();
     let (_, key_der) = generate_self_signed(&["localhost"]).unwrap();
     key_file
-        .write_all(key_der_to_pem(&key_der).as_bytes())
+        .write_all(key_der_to_pem(key_der.secret_der()).as_bytes())
         .unwrap();
 
     let result = load_or_generate(
@@ -145,7 +139,11 @@ fn load_or_generate_empty_cert_file_errors() {
         None,
     );
     assert!(result.is_err());
-    assert!(result.err().unwrap().to_string().contains("no certificate"));
+    let err = format!("{:#}", result.err().unwrap());
+    assert!(
+        err.contains("--cert") && err.contains("no PEM certificate found"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -166,53 +164,11 @@ fn load_or_generate_empty_client_ca_file_errors() {
     let empty_ca = NamedTempFile::new().unwrap(); // empty
     let result = load_or_generate(None, None, "localhost", Some(empty_ca.path()));
     assert!(result.is_err());
+    let err = format!("{:#}", result.err().unwrap());
     assert!(
-        result
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("no CA certificates")
+        err.contains("--tls-client-ca") && err.contains("no PEM certificate found"),
+        "{err}"
     );
-}
-
-// -----------------------------------------------------------------------
-// load_pem_chain
-// -----------------------------------------------------------------------
-
-#[test]
-fn load_pem_chain_parses_single_cert() {
-    init_crypto();
-    let (cert_ders, _) = generate_self_signed(&["localhost"]).unwrap();
-    let pem = cert_to_pem(&cert_ders[0]);
-    let mut f = NamedTempFile::new().unwrap();
-    f.write_all(pem.as_bytes()).unwrap();
-    let certs = load_pem_chain(f.path()).unwrap();
-    assert_eq!(certs.len(), 1);
-}
-
-#[test]
-fn load_pem_chain_parses_two_certs() {
-    init_crypto();
-    let (c1, _) = generate_self_signed(&["a.test"]).unwrap();
-    let (c2, _) = generate_self_signed(&["b.test"]).unwrap();
-    let pem = format!("{}{}", cert_to_pem(&c1[0]), cert_to_pem(&c2[0]));
-    let mut f = NamedTempFile::new().unwrap();
-    f.write_all(pem.as_bytes()).unwrap();
-    let certs = load_pem_chain(f.path()).unwrap();
-    assert_eq!(certs.len(), 2);
-}
-
-#[test]
-fn load_pem_chain_empty_file_errors() {
-    let f = NamedTempFile::new().unwrap(); // empty
-    let err = load_pem_chain(f.path()).unwrap_err();
-    assert!(err.to_string().contains("no certificates"));
-}
-
-#[test]
-fn load_pem_chain_nonexistent_file_errors() {
-    let err = load_pem_chain(std::path::Path::new("/nonexistent/path.pem")).unwrap_err();
-    assert!(err.to_string().contains("No such file") || err.to_string().contains("os error"));
 }
 
 // -----------------------------------------------------------------------

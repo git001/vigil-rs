@@ -216,12 +216,21 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
     let tls = match args.tls_addr.as_deref() {
         Some(addr) => {
             let listener = server::bind_tls(addr)?;
-            let acceptor = tls::load_or_generate(
-                args.cert.as_deref(),
-                args.key.as_deref(),
-                server::tls_hostname(addr),
-                args.tls_client_ca.as_deref(),
-            )?;
+            let (cert, key, client_ca) = (
+                args.cert.clone(),
+                args.key.clone(),
+                args.tls_client_ca.clone(),
+            );
+            let hostname = server::tls_hostname(addr).to_owned();
+            let acceptor = vigil_files::off_runtime("TLS files", move || {
+                tls::load_or_generate(
+                    cert.as_deref(),
+                    key.as_deref(),
+                    &hostname,
+                    client_ca.as_deref(),
+                )
+            })
+            .await?;
             Some((listener, acceptor))
         }
         None => None,

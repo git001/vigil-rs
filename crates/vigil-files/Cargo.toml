@@ -1,0 +1,18 @@
+[package]
+name    = "vigil-files"
+version = "3.2.2"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "How vigild, vigil and vigil-log-relay read configured files (secrets, env files, certificates)"
+
+[features]
+# Reads off the async runtime with a time limit (dead NFS mounts).
+tokio = ["dep:tokio", "dep:anyhow"]
+
+[dependencies]
+tokio  = { workspace = true, optional = true }
+anyhow = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio    = { workspace = true }

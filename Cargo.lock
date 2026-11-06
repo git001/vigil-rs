@@ -3207,7 +3207,17 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+ "vigil-tls",
  "vigil-types",
+]
+
+[[package]]
+name = "vigil-files"
+version = "3.2.2"
+dependencies = [
+ "anyhow",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -3229,7 +3239,6 @@ dependencies = [
  "regex",
  "reqwest",
  "rustls",
- "rustls-pemfile",
  "serde",
  "serde_json",
  "socket2 0.5.10",
@@ -3239,7 +3248,22 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+ "vigil-files",
+ "vigil-tls",
  "vigil-types",
+]
+
+[[package]]
+name = "vigil-tls"
+version = "3.2.2"
+dependencies = [
+ "anyhow",
+ "rcgen",
+ "reqwest",
+ "rustls-pemfile",
+ "rustls-pki-types",
+ "tempfile",
+ "vigil-files",
 ]
 
 [[package]]
@@ -3284,7 +3308,6 @@ dependencies = [
  "regex",
  "reqwest",
  "rustls",
- "rustls-pemfile",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -3300,6 +3323,8 @@ dependencies = [
  "tracing-subscriber",
  "utoipa",
  "uuid",
+ "vigil-files",
+ "vigil-tls",
  "vigil-types",
  "wiremock",
 ]

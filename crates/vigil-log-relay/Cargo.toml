@@ -41,6 +41,8 @@ path = "src/main.rs"
 
 [dependencies]
 vigil-types        = { path = "../vigil-types" }
+vigil-tls          = { workspace = true }
+vigil-files        = { workspace = true, features = ["tokio"] }
 # Workspace shared deps
 tokio              = { workspace = true }
 serde              = { workspace = true }
@@ -64,7 +66,6 @@ tower              = { workspace = true }
 kube         = { version = "0.98", default-features = false, features = ["client", "runtime", "rustls-tls"] }
 http         = "1.1"
 rustls       = { version = "0.23", features = ["ring"], default-features = false }
-rustls-pemfile = "2"
 k8s-openapi  = { version = "0.24", features = ["v1_32"] }
 
 # Async I/O bridges (futures-io ↔ tokio-io, body streaming)

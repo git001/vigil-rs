@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "crates/vigil-types",
+    "crates/vigil-files",
+    "crates/vigil-tls",
     "crates/vigild",
     "crates/vigil",
     "crates/vigil-log-relay",
@@ -36,6 +38,9 @@ tracing-subscriber = { version = "0.3",  features = ["env-filter", "json"] }
 # TLS
 rustls             = { version = "0.23", features = ["aws-lc-rs"] }
 rustls-pemfile     = { version = "2" }
+rustls-pki-types   = { version = "1" }
+vigil-tls          = { path = "crates/vigil-tls" }
+vigil-files        = { path = "crates/vigil-files" }
 tokio-rustls       = { version = "0.26" }
 rcgen              = { version = "0.13" }
 # Unix / signals / process

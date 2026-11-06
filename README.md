@@ -43,6 +43,8 @@ socket for programmatic control.
 vigil-rs/
 ├── crates/
 │   ├── vigil-types/      # Shared types (plan, API, identity, signal) — no async
+│   ├── vigil-files/      # How all binaries read configured files (secrets, env files, certificates)
+│   ├── vigil-tls/        # TLS material for all binaries: CA bundles, cert + key, client settings
 │   ├── vigild/           # Daemon binary — axum HTTP server, overlord, service actors
 │   ├── vigil/            # CLI binary — hyper Unix-socket client
 │   └── vigil-log-relay/  # Standalone log forwarder — K8s pods / HTTP / Unix socket → TCP sink

@@ -8,7 +8,7 @@ use tokio::time::timeout;
 use tracing::{debug, warn};
 use vigil_types::plan::HttpCheck;
 
-use crate::tls::load_pem_chain;
+use vigil_tls::{ClientTls, PemFile};
 
 pub(super) async fn probe_http(
     client: &HttpClient,
@@ -25,27 +25,25 @@ pub(super) async fn probe_http(
     {
         // Note: reqwest has no per-proxy TLS config; danger_accept_invalid_certs
         // disables verification for all TLS connections in this client (proxy + target).
-        let mut b = HttpClient::builder()
+        let b = HttpClient::builder()
             .timeout(timeout_dur)
-            .danger_accept_invalid_certs(check.insecure || check.insecure_proxy)
             .redirect(if check.no_follow_redirects {
                 reqwest::redirect::Policy::none()
             } else {
                 reqwest::redirect::Policy::default()
             });
-        if let Some(ca_path) = &check.ca {
-            match load_pem_chain(ca_path) {
-                Ok(certs) => {
-                    for cert in certs {
-                        b = b.add_root_certificate(cert);
-                    }
-                }
-                Err(e) => {
-                    warn!(path = %ca_path.display(), error = %e, "http check: failed to load ca cert");
-                    return false;
-                }
+        let tls = ClientTls {
+            insecure: check.insecure || check.insecure_proxy,
+            ca: check.ca.iter().map(|p| PemFile::new("ca", p)).collect(),
+            ..Default::default()
+        };
+        let b = match tls.apply(b) {
+            Ok(b) => b,
+            Err(e) => {
+                warn!(error = %format!("{e:#}"), "http check: TLS settings");
+                return false;
             }
-        }
+        };
         owned = b.build().unwrap_or_default();
         &owned
     } else {

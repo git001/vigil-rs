@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 vigil-rs contributors
 
-use super::cert::load_pem_chain;
+use vigil_tls::{ClientTls, PemFile};
 
 /// Configuration for an outbound HTTP(S) client (used by alerts and checks).
 pub struct HttpClientConfig<'a> {
@@ -22,19 +22,18 @@ pub struct HttpClientConfig<'a> {
 /// is used: reqwest's own lookup of `HTTPS_PROXY` / `NO_PROXY` in vigild's
 /// environment is switched off.
 pub fn build_http_client(config: HttpClientConfig<'_>) -> anyhow::Result<reqwest::Client> {
-    let mut b = reqwest::ClientBuilder::new().danger_accept_invalid_certs(config.insecure);
-
-    if let Some(ca_path) = config.ca {
-        for cert in load_pem_chain(ca_path)? {
-            b = b.add_root_certificate(cert);
-        }
-    }
-
-    if let Some(ca_path) = config.proxy_ca {
-        for cert in load_pem_chain(ca_path)? {
-            b = b.add_root_certificate(cert);
-        }
-    }
+    let tls = ClientTls {
+        insecure: config.insecure,
+        ca: [
+            config.ca.map(|p| PemFile::new("tls-ca", p)),
+            config.proxy_ca.map(|p| PemFile::new("proxy-ca", p)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+        ..Default::default()
+    };
+    let mut b = tls.apply(reqwest::ClientBuilder::new())?;
 
     if let Some(proxy_url) = config.proxy {
         let proxy_uri: reqwest::Url = proxy_url

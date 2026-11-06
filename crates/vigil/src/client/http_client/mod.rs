@@ -78,46 +78,33 @@ pub(super) fn build_reqwest_client(config: HttpConfig) -> anyhow::Result<reqwest
         builder = builder.default_headers(headers);
     }
 
-    // TLS client certificate (mTLS).
-    if let Some(cert_path) = &config.cert {
-        let key_path = config
+    // Server CA, proxy CA and client certificate (mTLS). reqwest has no TLS
+    // settings of its own for the proxy: its CA applies to the whole client.
+    let tls = vigil_tls::ClientTls {
+        insecure: config.insecure,
+        ca: [
+            config
+                .cacert
+                .as_deref()
+                .map(|p| vigil_tls::PemFile::new("--cacert", p)),
+            config
+                .proxy_cacert
+                .as_deref()
+                .map(|p| vigil_tls::PemFile::new("--proxy-cacert", p)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+        cert: config
+            .cert
+            .as_deref()
+            .map(|p| vigil_tls::PemFile::new("--cert", p)),
+        key: config
             .key
-            .as_ref()
-            .with_context(|| "--cert requires --key to also be set")?;
-        let mut pem = std::fs::read(cert_path)
-            .with_context(|| format!("reading --cert {}", cert_path.display()))?;
-        let key_pem = std::fs::read(key_path)
-            .with_context(|| format!("reading --key {}", key_path.display()))?;
-        pem.extend_from_slice(&key_pem);
-        let identity = reqwest::Identity::from_pem(&pem)
-            .context("building TLS client identity from --cert / --key")?;
-        builder = builder.identity(identity);
-    } else if config.key.is_some() {
-        anyhow::bail!("--key requires --cert to also be set");
-    }
-
-    // Trust server CA (e.g. vigild's self-signed or internal CA).
-    if let Some(ca_path) = &config.cacert {
-        let pem = std::fs::read(ca_path)
-            .with_context(|| format!("reading --cacert {}", ca_path.display()))?;
-        let certs =
-            reqwest::Certificate::from_pem_bundle(&pem).context("parsing --cacert bundle")?;
-        for cert in certs {
-            builder = builder.add_root_certificate(cert);
-        }
-    }
-
-    // Trust custom CA certificates (e.g. proxy's self-signed CA).
-    // The PEM file may contain multiple concatenated certificates.
-    if let Some(ca_path) = &config.proxy_cacert {
-        let pem = std::fs::read(ca_path)
-            .with_context(|| format!("reading proxy CA cert: {}", ca_path.display()))?;
-        let certs =
-            reqwest::Certificate::from_pem_bundle(&pem).context("parsing proxy CA cert bundle")?;
-        for cert in certs {
-            builder = builder.add_root_certificate(cert);
-        }
-    }
+            .as_deref()
+            .map(|p| vigil_tls::PemFile::new("--key", p)),
+    };
+    builder = tls.apply(builder)?;
 
     // Resolve effective proxy: explicit arg > env vars (HTTPS first).
     let effective_proxy = config.proxy.or_else(|| {

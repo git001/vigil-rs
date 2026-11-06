@@ -36,7 +36,7 @@ pub fn is_template(s: &str) -> bool {
     s.contains("{{") || s.contains("{%")
 }
 
-pub use crate::file_io::{FILE_IO_TIMEOUT, off_runtime};
+pub use vigil_files::{FILE_IO_TIMEOUT, off_runtime};
 
 /// A file read while building a service's start: its path and a hash of
 /// the content that was used (`None`: it did not exist). `watch-files`
@@ -47,7 +47,7 @@ pub struct FileRead {
     pub hash: Option<u64>,
 }
 
-use crate::file_io::content_hash;
+use vigil_files::content_hash;
 
 /// Collects the files a [`Renderer`] reads.
 #[derive(Clone, Default)]

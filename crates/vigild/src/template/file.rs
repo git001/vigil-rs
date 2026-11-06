@@ -4,7 +4,6 @@
 //! Reading (secret) files: the `file(path[, default])` template function and
 //! `env-file`.
 
-use std::io::Read;
 use std::path::Path;
 
 use minijinja::{Error, ErrorKind};
@@ -12,39 +11,12 @@ use minijinja::{Error, ErrorKind};
 /// Largest file `file()` reads.
 pub(super) const MAX_FILE: u64 = 64 * 1024;
 
-/// Read `path` as text: a regular file (symlinks are followed, Kubernetes
-/// secret volumes consist of them), at most `max` bytes, UTF-8 without NUL
+/// Read `path` as text with vigil's file handling ([`vigil_files`]): an
+/// absolute path, a regular file, at most `max` bytes, UTF-8 without NUL
 /// bytes. `Ok(None)` if it does not exist. Errors name the path, never the
 /// content.
 pub(super) fn read_text(path: &str, max: u64) -> Result<Option<String>, String> {
-    let p = Path::new(path);
-    if !p.is_absolute() {
-        return Err(format!("{path:?}: path must be absolute"));
-    }
-    let mut f = match std::fs::File::open(p) {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("{path:?}: {e}")),
-    };
-    // Check the opened file, not the path: no race with a swapped symlink.
-    let meta = f.metadata().map_err(|e| format!("{path:?}: {e}"))?;
-    if !meta.is_file() {
-        return Err(format!("{path:?}: not a regular file"));
-    }
-    let mut buf = Vec::new();
-    (&mut f)
-        .take(max + 1)
-        .read_to_end(&mut buf)
-        .map_err(|e| format!("{path:?}: {e}"))?;
-    if buf.len() as u64 > max {
-        return Err(format!("{path:?}: larger than {} KiB", max / 1024));
-    }
-    if buf.contains(&0) {
-        return Err(format!("{path:?}: contains a NUL byte"));
-    }
-    String::from_utf8(buf)
-        .map(Some)
-        .map_err(|_| format!("{path:?}: not valid UTF-8"))
+    vigil_files::read_text(Path::new(path), max, vigil_files::PathRule::Absolute)
 }
 
 /// Content of `path` without one trailing newline. A missing or empty file

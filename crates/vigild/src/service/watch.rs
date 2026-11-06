@@ -27,8 +27,8 @@ use vigil_types::plan::{FileChangeAction, WatchFiles};
 use crate::duration::{clamp_interval, parse_duration};
 use tracing::warn;
 
-use crate::file_io::{ContentHasher, FILE_IO_TIMEOUT, PeriodicRead, ReadOutcome, hash_into};
 use crate::template::FileRead;
+use vigil_files::{ContentHasher, FILE_IO_TIMEOUT, PeriodicRead, ReadOutcome, hash_into};
 
 const DEFAULT_WATCH_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -213,7 +213,7 @@ impl FileWatch {
 mod tests {
     use super::*;
     use crate::duration::{MAX_INTERVAL, MIN_INTERVAL};
-    use crate::file_io::content_hash;
+    use vigil_files::content_hash;
 
     fn read(path: &Path, content: Option<&str>) -> FileRead {
         FileRead {
@@ -274,21 +274,24 @@ mod tests {
             vec![State::Content(1)],
         );
         let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-        w.reader.inflight = Some(tokio::task::spawn_blocking(move || {
-            let _ = release_rx.recv(); // "hangs" until released
-            vec![State::Content(2)]
-        }));
+        let out = w
+            .reader
+            .run_within(std::time::Duration::from_millis(50), move || {
+                let _ = release_rx.recv(); // "hangs" until released
+                vec![State::Content(2)]
+            })
+            .await;
+        assert_eq!(out, ReadOutcome::TimedOut);
         // still hanging: returns at once, keeps the handle
         assert_eq!(w.poll().await, None);
-        assert!(w.reader.inflight.is_some());
+        assert!(w.reader.is_hanging());
         release_tx.send(()).unwrap();
         // let the blocking task finish
-        while !w.reader.inflight.as_ref().unwrap().is_finished() {
+        while w.reader.is_hanging() {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         // finished: a fresh read of the real path (missing → change pending)
         assert_eq!(w.poll().await, None);
-        assert!(w.reader.inflight.is_none());
         assert_eq!(w.poll().await, Some(vec!["/a".into()]));
     }
 

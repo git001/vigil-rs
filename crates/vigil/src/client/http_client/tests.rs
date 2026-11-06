@@ -76,7 +76,7 @@ fn cert_without_key_returns_error() {
         ..default_config()
     })
     .unwrap_err();
-    assert!(err.to_string().contains("--cert requires --key"));
+    assert!(format!("{err:#}").contains("--cert needs a key as well"));
 }
 
 #[test]
@@ -89,7 +89,7 @@ fn key_without_cert_returns_error() {
         ..default_config()
     })
     .unwrap_err();
-    assert!(err.to_string().contains("--key requires --cert"));
+    assert!(format!("{err:#}").contains("--key needs a certificate as well"));
 }
 
 #[test]

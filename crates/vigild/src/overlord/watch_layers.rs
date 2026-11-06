@@ -25,7 +25,7 @@ use tracing::{info, warn};
 use super::Cmd;
 use super::plan::is_layer_file;
 use crate::duration::clamp_interval;
-use crate::file_io::{ContentHasher, FILE_IO_TIMEOUT, PeriodicRead, ReadOutcome, hash_into};
+use vigil_files::{ContentHasher, FILE_IO_TIMEOUT, PeriodicRead, ReadOutcome, hash_into};
 
 /// Hash over the names and contents of the layer files in `dir`, in the
 /// order `load_plan` reads them. A missing directory has its own hash (it

@@ -8,6 +8,9 @@ use vigil_types::plan::{AlertConfig, CheckConfig, Layer, Plan, ServiceConfig};
 
 use crate::process_util::{EnvPolicy, REDUNDANT_LISTS, redundant_lists};
 
+/// Largest layer file read.
+const MAX_LAYER_FILE: u64 = 4 * 1024 * 1024;
+
 /// Whether a directory entry is a layer file: `*.yaml` or `*.yml`, but not
 /// the kubelet's own entries of a ConfigMap volume (`..data`,
 /// `..2026_11_06_…`), which start with `..`.
@@ -56,8 +59,9 @@ fn read_plan(dir: &Path) -> anyhow::Result<Plan> {
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
-        let content =
-            std::fs::read_to_string(&path).with_context(|| format!("reading {path:?}"))?;
+        let content = vigil_files::read_text(&path, MAX_LAYER_FILE, vigil_files::PathRule::Any)
+            .map_err(|e| anyhow::anyhow!("reading {e}"))?
+            .with_context(|| format!("reading {path:?}: removed while loading"))?;
         let mut layer: Layer =
             serde_yaml::from_str(&content).with_context(|| format!("parsing {path:?}"))?;
         layer.order = order as u32;

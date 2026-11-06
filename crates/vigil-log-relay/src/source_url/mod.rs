@@ -11,6 +11,8 @@ use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_util::io::StreamReader;
 use tracing::{info, warn};
+use vigil_files::{FILE_IO_TIMEOUT, PeriodicRead, ReadOutcome};
+use vigil_tls::{ClientTls, PemFile};
 
 use crate::source_http::{bump_failures, spawn_liveness_ticker, stream_loop};
 use crate::{LineFilter, Liveness, ReconnectConfig, SourceConnConfig};
@@ -27,25 +29,34 @@ pub async fn run(
     cfg: ReconnectConfig,
     filter: LineFilter,
 ) -> Result<()> {
-    let mut builder = reqwest::Client::builder().danger_accept_invalid_certs(conn.source_insecure);
-    if let Some(ca_path) = &conn.source_cacert {
-        for cert in load_pem_chain(ca_path)
-            .with_context(|| format!("failed to load --source-cacert {}", ca_path.display()))?
-        {
-            builder = builder.add_root_certificate(cert);
+    // reqwest has no TLS settings of its own for the proxy: its CA and
+    // `insecure` apply to the whole client.
+    let insecure = conn.source_insecure || conn.proxy_insecure;
+    let files = [
+        conn.source_cacert.clone(),
+        conn.proxy_cacert.clone(),
+        conn.source_cert.clone(),
+        conn.source_key.clone(),
+    ];
+    let mut builder = vigil_files::off_runtime("TLS files", move || {
+        let [ca, proxy_ca, cert, key] = &files;
+        ClientTls {
+            insecure,
+            ca: [
+                ca.as_deref().map(|p| PemFile::new("--source-cacert", p)),
+                proxy_ca
+                    .as_deref()
+                    .map(|p| PemFile::new("--source-proxy-cacert", p)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+            cert: cert.as_deref().map(|p| PemFile::new("--source-cert", p)),
+            key: key.as_deref().map(|p| PemFile::new("--source-key", p)),
         }
-    }
-    if let (Some(cert_path), Some(key_path)) = (&conn.source_cert, &conn.source_key) {
-        let mut pem = std::fs::read(cert_path)
-            .with_context(|| format!("reading --source-cert {}", cert_path.display()))?;
-        let key_pem = std::fs::read(key_path)
-            .with_context(|| format!("reading --source-key {}", key_path.display()))?;
-        pem.push(b'\n');
-        pem.extend_from_slice(&key_pem);
-        let identity = reqwest::Identity::from_pem(&pem)
-            .context("building TLS client identity from --source-cert / --source-key")?;
-        builder = builder.identity(identity);
-    }
+        .apply(reqwest::Client::builder())
+    })
+    .await?;
     if conn.connect_timeout_ms > 0 {
         builder = builder.connect_timeout(Duration::from_millis(conn.connect_timeout_ms));
     }
@@ -69,29 +80,34 @@ pub async fn run(
         });
         builder = builder.proxy(proxy);
     }
-    if conn.proxy_insecure {
-        builder = builder.danger_accept_invalid_certs(true);
-    }
-    if let Some(ca_path) = &conn.proxy_cacert {
-        for cert in load_pem_chain(ca_path).with_context(|| {
-            format!("failed to load --source-proxy-cacert {}", ca_path.display())
-        })? {
-            builder = builder.add_root_certificate(cert);
-        }
-    }
     let client = builder.build()?;
 
     spawn_liveness_ticker(Arc::clone(&liveness));
 
     let mut backoff = Duration::from_millis(cfg.initial_delay_ms);
     let mut failures: u64 = 0;
+    // Read again per connection (rotated secrets); a dead NFS mount ties up
+    // at most one blocking thread.
+    let mut credentials = PeriodicRead::default();
 
     loop {
         liveness.tick();
 
         let mut request = client.get(&url);
         if let Some(path) = &conn.source_user_file {
-            match read_basic_credentials(path) {
+            let p = path.clone();
+            let read = match credentials.run(move || read_basic_credentials(&p)).await {
+                ReadOutcome::Done(r) => r,
+                ReadOutcome::TimedOut => Err(anyhow::anyhow!(
+                    "{path:?}: not read within {}s (hanging file system, e.g. a dead NFS mount?)",
+                    FILE_IO_TIMEOUT.as_secs()
+                )),
+                ReadOutcome::StillHanging => {
+                    Err(anyhow::anyhow!("{path:?}: the previous read still hangs"))
+                }
+                ReadOutcome::Failed => Err(anyhow::anyhow!("{path:?}: the read panicked")),
+            };
+            match read {
                 Ok((user, pass)) => request = request.basic_auth(user, Some(pass)),
                 Err(e) => {
                     warn!(error = %format!("{e:#}"), "cannot read --source-user-file");
@@ -139,41 +155,15 @@ pub async fn run(
 /// Read `user:password` from `path`. Only trailing newlines are stripped, so
 /// passwords may contain spaces and further colons.
 pub(crate) fn read_basic_credentials(path: &Path) -> Result<(String, String)> {
-    let raw =
-        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let raw = vigil_files::read_text(path, 64 * 1024, vigil_files::PathRule::Any)
+        .map_err(|e| anyhow::anyhow!("reading {e}"))?
+        .with_context(|| format!("reading {path:?}: No such file or directory"))?;
     let line = raw.trim_end_matches(['\n', '\r']);
     let (user, pass) = line
         .split_once(':')
         .with_context(|| format!("{}: expected `user:password`", path.display()))?;
     anyhow::ensure!(!user.is_empty(), "{}: empty user name", path.display());
     Ok((user.to_owned(), pass.to_owned()))
-}
-
-// ---------------------------------------------------------------------------
-// PEM certificate chain loader for reqwest
-// ---------------------------------------------------------------------------
-
-/// Load all PEM-encoded certificates from `path`, supporting chain files with
-/// multiple `-----BEGIN CERTIFICATE-----` blocks.
-fn load_pem_chain(path: &Path) -> Result<Vec<reqwest::Certificate>> {
-    let pem = std::fs::read_to_string(path)?;
-    let mut certs = Vec::new();
-    let mut block = String::new();
-    for line in pem.lines() {
-        block.push_str(line);
-        block.push('\n');
-        if line.trim() == "-----END CERTIFICATE-----" {
-            certs.push(
-                reqwest::Certificate::from_pem(block.as_bytes())
-                    .context("invalid PEM certificate block")?,
-            );
-            block.clear();
-        }
-    }
-    if certs.is_empty() {
-        anyhow::bail!("no certificates found in {}", path.display());
-    }
-    Ok(certs)
 }
 
 #[cfg(test)]

@@ -10,7 +10,9 @@ mod tests;
 // ---------------------------------------------------------------------------
 // Certificate generation / PEM helpers
 // ---------------------------------------------------------------------------
-pub use cert::{cert_to_pem, generate_self_signed, load_pem_chain};
+#[cfg(test)]
+pub use cert::cert_to_pem;
+pub use cert::generate_self_signed;
 
 // ---------------------------------------------------------------------------
 // TlsAcceptor construction

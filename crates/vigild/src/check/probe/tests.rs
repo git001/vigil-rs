@@ -31,7 +31,7 @@ async fn spawn_http_server(app: Router) -> u16 {
 
 async fn spawn_tls_server(app: Router) -> (u16, Vec<u8>) {
     let (cert_ders, key_der) = crate::tls::generate_self_signed(&["localhost"]).unwrap();
-    let cert_der = cert_ders[0].clone();
+    let cert_der = cert_ders[0].to_vec();
     let acceptor = crate::tls::acceptor_from_der(cert_ders, key_der).unwrap();
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

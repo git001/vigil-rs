@@ -1,0 +1,17 @@
+[package]
+name    = "vigil-tls"
+version = "3.2.2"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "TLS material for vigild, vigil and vigil-log-relay: CA bundles, certificate and key, client settings"
+
+[dependencies]
+anyhow            = { workspace = true }
+reqwest           = { workspace = true }
+rustls-pemfile    = { workspace = true }
+rustls-pki-types  = { workspace = true }
+vigil-files       = { workspace = true }
+
+[dev-dependencies]
+rcgen    = { workspace = true }
+tempfile = { workspace = true }
