@@ -65,35 +65,34 @@ pub fn prepare(prefix: &Path) -> anyhow::Result<()> {
         "--path-prefix {prefix:?} must be an absolute path"
     );
 
-    match std::fs::symlink_metadata(prefix) {
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => create_last(prefix)?,
-        Err(e) => return Err(e).with_context(|| format!("inspecting --path-prefix {prefix:?}")),
-    }
-    validate(prefix)?;
-
-    let notify = notify_dir(prefix);
-    match std::fs::symlink_metadata(&notify) {
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => create_last(&notify)?,
-        Err(e) => return Err(e).with_context(|| format!("inspecting {notify:?}")),
-    }
-    validate(&notify)
+    ensure_own_dir(prefix, "--path-prefix")?;
+    ensure_own_dir(&notify_dir(prefix), "notify directory")
 }
 
-fn create_last(prefix: &Path) -> anyhow::Result<()> {
+/// Create `dir` if it is missing (only its last component), then check that
+/// it is vigild's own directory. `what` names it in errors.
+fn ensure_own_dir(dir: &Path, what: &str) -> anyhow::Result<()> {
+    match std::fs::symlink_metadata(dir) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => create_last(dir, what)?,
+        Err(e) => return Err(e).with_context(|| format!("inspecting {what} {dir:?}")),
+    }
+    validate(dir, what)
+}
+
+fn create_last(prefix: &Path, what: &str) -> anyhow::Result<()> {
     let parent = prefix
         .parent()
-        .with_context(|| format!("--path-prefix {prefix:?} has no parent directory"))?;
+        .with_context(|| format!("{what} {prefix:?} has no parent directory"))?;
     let parent_md = std::fs::metadata(parent).with_context(|| {
         format!(
-            "--path-prefix {prefix:?}: parent directory {parent:?} does not exist \
+            "{what} {prefix:?}: parent directory {parent:?} does not exist \
              (vigild only creates the last path component)"
         )
     })?;
     anyhow::ensure!(
         parent_md.is_dir(),
-        "--path-prefix {prefix:?}: parent {parent:?} is not a directory"
+        "{what} {prefix:?}: parent {parent:?} is not a directory"
     );
 
     let mode = CREATED_DIR_MODE;
@@ -109,16 +108,16 @@ fn create_last(prefix: &Path) -> anyhow::Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
         Err(e) => Err(e).with_context(|| {
             format!(
-                "creating --path-prefix {prefix:?} (is {parent:?} writable for uid {}?)",
+                "creating {what} {prefix:?} (is {parent:?} writable for uid {}?)",
                 Uid::effective()
             )
         }),
     }
 }
 
-fn validate(prefix: &Path) -> anyhow::Result<()> {
+fn validate(prefix: &Path, what: &str) -> anyhow::Result<()> {
     let md = std::fs::symlink_metadata(prefix)
-        .with_context(|| format!("inspecting --path-prefix {prefix:?}"))?;
+        .with_context(|| format!("inspecting {what} {prefix:?}"))?;
     let euid = Uid::effective().as_raw();
     let mode = md.permissions().mode() & 0o7777;
     let hint = || {
@@ -138,22 +137,21 @@ fn validate(prefix: &Path) -> anyhow::Result<()> {
 
     anyhow::ensure!(
         !md.file_type().is_symlink() && md.is_dir(),
-        "--path-prefix {prefix:?} rejected: {}",
+        "{what} {prefix:?} rejected: {}",
         hint()
     );
     anyhow::ensure!(
         md.uid() == euid,
-        "--path-prefix {prefix:?} rejected (wrong owner): {}",
+        "{what} {prefix:?} rejected (wrong owner): {}",
         hint()
     );
     anyhow::ensure!(
         mode & 0o002 == 0,
-        "--path-prefix {prefix:?} rejected (writable by others): {}",
+        "{what} {prefix:?} rejected (writable by others): {}",
         hint()
     );
-    access(prefix, AccessFlags::W_OK | AccessFlags::X_OK).with_context(|| {
-        format!("--path-prefix {prefix:?} is not writable/searchable for uid {euid}")
-    })?;
+    access(prefix, AccessFlags::W_OK | AccessFlags::X_OK)
+        .with_context(|| format!("{what} {prefix:?} is not writable/searchable for uid {euid}"))?;
     Ok(())
 }
 
