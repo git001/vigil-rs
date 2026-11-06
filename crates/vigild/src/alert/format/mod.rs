@@ -28,12 +28,32 @@ pub(super) fn resolved_map(map: &IndexMap<String, String>) -> IndexMap<String, S
 }
 
 fn resolved_json(map: &IndexMap<String, String>) -> Value {
+    to_json(resolved_map(map))
+}
+
+fn to_json(map: IndexMap<String, String>) -> Value {
     Value::Object(
-        resolved_map(map)
-            .into_iter()
+        map.into_iter()
             .map(|(k, v)| (k, Value::String(v)))
             .collect(),
     )
+}
+
+/// The fields of the webhook payload and of CloudEvents `data`.
+fn event_json(ev: &AlertEvent, cfg: &AlertConfig) -> Value {
+    let mut v = json!({
+        "source":  ev.source.as_str(),
+        "name":    ev.name,
+        "event":   ev.event,
+        "status":  ev.status_str(),
+        "message": ev.message,
+        "labels":  resolved_json(&cfg.labels),
+        "info":    resolved_json(&cfg.send_info_fields),
+    });
+    if let Some(check) = check_name(ev) {
+        v["check"] = json!(check);
+    }
+    v
 }
 
 // ---------------------------------------------------------------------------
@@ -67,20 +87,9 @@ fn check_name(ev: &AlertEvent) -> Option<&str> {
 fn format_webhook_template(ev: &AlertEvent, cfg: &AlertConfig, template: &str) -> Value {
     use minijinja::{Environment, context};
 
-    let mut env = Environment::new();
-    if let Err(e) = env.add_template("body", template) {
-        tracing::warn!(alert_template_error = %e, "body_template parse error — falling back to default webhook payload");
-        return format_webhook(ev, cfg);
-    }
-    let tmpl = match env.get_template("body") {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::warn!(alert_template_error = %e, "body_template load error — falling back");
-            return format_webhook(ev, cfg);
-        }
-    };
-
-    let rendered = match tmpl.render(context!(
+    // The syntax is checked when the layers load; this only fails on
+    // runtime errors (e.g. calling an unknown function).
+    let rendered = match Environment::new().render_str(template, context!(
         // Undefined (renders empty) for events that are not about a check.
         check     => check_name(ev).map_or(minijinja::Value::UNDEFINED, minijinja::Value::from),
         source    => ev.source.as_str(),
@@ -113,19 +122,8 @@ fn format_webhook_template(ev: &AlertEvent, cfg: &AlertConfig, template: &str) -
 }
 
 fn format_webhook(ev: &AlertEvent, cfg: &AlertConfig) -> Value {
-    let mut v = json!({
-        "source": ev.source.as_str(),
-        "name": ev.name,
-        "event": ev.event,
-        "status": ev.status_str(),
-        "message": ev.message,
-        "timestamp": Utc::now().to_rfc3339(),
-        "labels": resolved_json(&cfg.labels),
-        "info": resolved_json(&cfg.send_info_fields),
-    });
-    if let Some(check) = check_name(ev) {
-        v["check"] = json!(check);
-    }
+    let mut v = event_json(ev, cfg);
+    v["timestamp"] = json!(Utc::now().to_rfc3339());
     v
 }
 
@@ -159,29 +157,10 @@ fn format_alertmanager(ev: &AlertEvent, cfg: &AlertConfig) -> Value {
     }])
 }
 
-fn to_json(map: IndexMap<String, String>) -> Value {
-    Value::Object(
-        map.into_iter()
-            .map(|(k, v)| (k, Value::String(v)))
-            .collect(),
-    )
-}
-
 /// Type `io.vigil.<source>.<event>`; check events keep
 /// `io.vigil.check.failed` / `io.vigil.check.recovered`.
 fn format_cloudevents(ev: &AlertEvent, cfg: &AlertConfig) -> Value {
-    let mut data = json!({
-        "source":  ev.source.as_str(),
-        "name":    ev.name,
-        "event":   ev.event,
-        "status":  ev.status_str(),
-        "message": ev.message,
-        "labels":  resolved_json(&cfg.labels),
-        "info":    resolved_json(&cfg.send_info_fields),
-    });
-    if let Some(check) = check_name(ev) {
-        data["check"] = json!(check);
-    }
+    let data = event_json(ev, cfg);
     json!({
         "specversion":      "1.0",
         "id":               Uuid::new_v4().to_string(),
