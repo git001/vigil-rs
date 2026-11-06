@@ -331,4 +331,74 @@ mod tests {
         drop(sock);
         assert!(!path.exists(), "socket file removed on drop");
     }
+
+    async fn next_msg(rx: &mut mpsc::Receiver<NotifyMsg>) -> NotifyMsg {
+        tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn oversized_datagrams_are_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, mut rx) = mpsc::channel(4);
+        let sock = NotifySocket::bind(dir.path(), "svc", None, 1, tx).unwrap();
+        let client = std::os::unix::net::UnixDatagram::unbound().unwrap();
+
+        let mut big = b"STATUS=".to_vec();
+        big.resize(MAX_DATAGRAM + 1, b'x');
+        client.send_to(&big, sock.path()).unwrap();
+        client.send_to(b"READY=1\n", sock.path()).unwrap();
+
+        let m = next_msg(&mut rx).await;
+        assert_eq!(m.get("STATUS"), None, "the truncated one never arrives");
+        assert_eq!(m.get("READY"), Some("1"));
+    }
+
+    #[tokio::test]
+    async fn passed_file_descriptors_are_closed() {
+        use nix::sys::socket::{ControlMessage, sendmsg};
+        use std::io::Read;
+        use std::os::fd::AsRawFd;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, mut rx) = mpsc::channel(4);
+        let sock = NotifySocket::bind(dir.path(), "svc", None, 1, tx).unwrap();
+        let client = std::os::unix::net::UnixDatagram::unbound().unwrap();
+        client.connect(sock.path()).unwrap();
+
+        // FDSTORE=1 with the write end of a pipe: once vigild closes its
+        // copy and we close ours, the read end sees EOF.
+        let (mut read_end, write_end) = std::io::pipe().unwrap();
+        let fds = [write_end.as_raw_fd()];
+        sendmsg::<()>(
+            client.as_raw_fd(),
+            &[std::io::IoSlice::new(b"FDSTORE=1\nSTATUS=fd\n")],
+            &[ControlMessage::ScmRights(&fds)],
+            MsgFlags::empty(),
+            None,
+        )
+        .unwrap();
+        let m = next_msg(&mut rx).await;
+        assert_eq!(m.get("STATUS"), Some("fd"), "the message itself counts");
+
+        drop(write_end);
+        // Poll without blocking: a blocking read could not be cancelled
+        // and would hang the test if the descriptor stayed open.
+        let flags = nix::fcntl::fcntl(read_end.as_raw_fd(), nix::fcntl::FcntlArg::F_GETFL).unwrap();
+        let flags = nix::fcntl::OFlag::from_bits_truncate(flags) | nix::fcntl::OFlag::O_NONBLOCK;
+        nix::fcntl::fcntl(read_end.as_raw_fd(), nix::fcntl::FcntlArg::F_SETFL(flags)).unwrap();
+        let mut buf = [0u8; 1];
+        for _ in 0..100 {
+            match read_end.read(&mut buf) {
+                Ok(0) => return, // EOF: vigild closed its copy
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                other => panic!("unexpected read result {other:?}"),
+            }
+        }
+        panic!("vigild kept the passed descriptor open");
+    }
 }

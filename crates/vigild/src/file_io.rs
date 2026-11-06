@@ -69,13 +69,21 @@ impl<T> Default for PeriodicRead<T> {
 
 impl<T: Send + 'static> PeriodicRead<T> {
     pub async fn run(&mut self, f: impl FnOnce() -> T + Send + 'static) -> ReadOutcome<T> {
+        self.run_within(FILE_IO_TIMEOUT, f).await
+    }
+
+    pub(crate) async fn run_within(
+        &mut self,
+        limit: Duration,
+        f: impl FnOnce() -> T + Send + 'static,
+    ) -> ReadOutcome<T> {
         if self.inflight.as_ref().is_some_and(|h| !h.is_finished()) {
             return ReadOutcome::StillHanging;
         }
         // A read that finished late is outdated; start a fresh one.
         self.inflight = None;
         let mut handle = tokio::task::spawn_blocking(f);
-        match tokio::time::timeout(FILE_IO_TIMEOUT, &mut handle).await {
+        match tokio::time::timeout(limit, &mut handle).await {
             Ok(Ok(v)) => ReadOutcome::Done(v),
             Ok(Err(_)) => ReadOutcome::Failed,
             Err(_) => {
@@ -179,5 +187,21 @@ mod tests {
         let mut h = ContentHasher::default();
         hash_into(&mut h, &mut &data[..]).unwrap();
         assert_eq!(h.finish(), content_hash(&data));
+    }
+
+    #[tokio::test]
+    async fn periodic_read_keeps_a_timed_out_read() {
+        let mut r = PeriodicRead::<u32>::default();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let out = r
+            .run_within(Duration::from_millis(50), move || {
+                let _ = release_rx.recv(); // "dead NFS" until released
+                1
+            })
+            .await;
+        assert_eq!(out, ReadOutcome::TimedOut);
+        assert!(r.inflight.is_some(), "kept, not started again");
+        assert_eq!(r.run(|| 2).await, ReadOutcome::StillHanging);
+        release_tx.send(()).unwrap();
     }
 }

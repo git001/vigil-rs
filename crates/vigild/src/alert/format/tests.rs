@@ -292,3 +292,24 @@ fn template_sees_source_name_event_and_message() {
     );
     assert_eq!(v["check"], "", "check is empty for non-check events");
 }
+
+#[test]
+fn otlp_attributes_carry_labels_and_send_info_fields() {
+    let mut cfg = empty_cfg();
+    cfg.labels.insert("cluster".into(), "prod-eu-1".into());
+    cfg.send_info_fields
+        .insert("pod".into(), "api-7d9f-x2x4q".into());
+    let v = format_otlp_logs(&backoff(), &cfg);
+    let attrs = v["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0]["attributes"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let get = |k: &str| {
+        attrs
+            .iter()
+            .find(|a| a["key"] == k)
+            .map(|a| a["value"]["stringValue"].clone())
+    };
+    assert_eq!(get("cluster"), Some("prod-eu-1".into()));
+    assert_eq!(get("pod"), Some("api-7d9f-x2x4q".into()));
+}

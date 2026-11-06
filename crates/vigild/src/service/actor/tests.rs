@@ -178,7 +178,7 @@ async fn start_process_becomes_active_then_exits_to_backoff() {
     ));
 
     // Shutdown the actor
-    tx.send(Cmd::Shutdown).await.unwrap();
+    shutdown(tx).await;
 }
 
 #[tokio::test]
@@ -721,6 +721,16 @@ fn spawn_run(
     (tx, event_rx)
 }
 
+/// Stop the actor and wait until it has cleaned up (killed its process).
+/// Without the wait the test's runtime ends first and the process is left
+/// behind.
+async fn shutdown(tx: mpsc::Sender<Cmd>) {
+    let _ = tx.send(Cmd::Shutdown).await;
+    tokio::time::timeout(Duration::from_secs(10), tx.closed())
+        .await
+        .expect("actor did not shut down");
+}
+
 async fn start(tx: &mpsc::Sender<Cmd>) {
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     tx.send(Cmd::Start(reply_tx)).await.unwrap();
@@ -878,7 +888,7 @@ async fn ready_notify_end_to_end_with_real_sender() {
         )),
         "{before:?}"
     );
-    tx.send(Cmd::Shutdown).await.unwrap();
+    shutdown(tx).await;
 }
 
 #[tokio::test]
@@ -922,7 +932,7 @@ async fn ready_timeout_stops_service_and_counts_as_failure() {
         )),
         "never became active: {seen:?}"
     );
-    tx.send(Cmd::Shutdown).await.unwrap();
+    shutdown(tx).await;
 }
 
 #[tokio::test]
@@ -977,7 +987,7 @@ async fn oneshot_success_ends_done_and_stays_starting_while_running() {
         seen.iter()
             .any(|k| matches!(k, EventKind::ProcessExited { success: true, .. }))
     );
-    tx.send(Cmd::Shutdown).await.unwrap();
+    shutdown(tx).await;
 }
 
 #[tokio::test]
@@ -985,7 +995,7 @@ async fn unscheduled_oneshot_failure_restarts_by_default() {
     let (tx, mut rx) = spawn_run(oneshot("/bin/sh -c 'exit 3'"), std::env::temp_dir());
     start(&tx).await;
     wait_event(&mut rx, is_state(ServiceState::Backoff)).await;
-    tx.send(Cmd::Shutdown).await.unwrap();
+    shutdown(tx).await;
 }
 
 #[tokio::test]
@@ -1004,7 +1014,7 @@ async fn scheduled_oneshot_failure_is_ignored_by_default() {
         )),
         "{seen:?}"
     );
-    tx.send(Cmd::Shutdown).await.unwrap();
+    shutdown(tx).await;
 }
 
 #[tokio::test]
@@ -1034,7 +1044,7 @@ async fn schedule_runs_job_and_skips_overlapping_runs() {
         }
     }
     assert_eq!(starts, 0, "overlapping run started");
-    tx.send(Cmd::Shutdown).await.unwrap();
+    shutdown(tx).await;
 }
 
 #[tokio::test]
@@ -1318,7 +1328,7 @@ async fn watched_file_change_restarts_the_service_with_the_new_value() {
     // no further restart without a change
     tokio::time::sleep(Duration::from_millis(400)).await;
     assert_eq!(wait_for_lines(&out, 2).await.len(), 2);
-    let _ = tx.send(Cmd::Shutdown).await;
+    shutdown(tx).await;
 }
 
 #[tokio::test]
@@ -1339,7 +1349,7 @@ async fn watched_file_change_can_send_a_signal_instead() {
     std::fs::write(&secret, "two").unwrap();
     // SIGHUP, no restart: the process keeps the old value
     assert_eq!(wait_for_lines(&out, 2).await, ["start one", "hup"]);
-    let _ = tx.send(Cmd::Shutdown).await;
+    shutdown(tx).await;
 }
 
 #[tokio::test]
@@ -1356,7 +1366,7 @@ async fn files_are_not_watched_without_a_watch_files_block() {
     std::fs::write(&secret, "two").unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(wait_for_lines(&out, 1).await, ["start one"], "no restart");
-    let _ = tx.send(Cmd::Shutdown).await;
+    shutdown(tx).await;
 }
 
 #[tokio::test]
@@ -1433,7 +1443,7 @@ async fn crash_loop_reports_backoff_with_the_exit_code() {
     start(&tx).await;
     let (ev, _) = next_health(&mut rx).await;
     assert_unhealthy(&ev, "backoff", "exited with code 3, restarting in 1s");
-    tx.send(Cmd::Shutdown).await.unwrap();
+    shutdown(tx).await;
 }
 
 #[tokio::test]
@@ -1451,7 +1461,7 @@ async fn service_becomes_healthy_after_healthy_time() {
     let (ev, _) = next_health(&mut rx).await;
     assert!(matches!(ev, EventKind::Healthy), "{ev:?}");
     assert!(started.elapsed() >= Duration::from_millis(900), "too early");
-    tx.send(Cmd::Shutdown).await.unwrap();
+    shutdown(tx).await;
 }
 
 #[tokio::test]
@@ -1468,7 +1478,7 @@ async fn oneshot_runs_report_healthy_or_failed() {
     let (ev, seen) = next_health(&mut rx).await;
     assert!(matches!(ev, EventKind::Healthy), "{ev:?}");
     assert!(seen.iter().any(is_state(ServiceState::Done)), "{seen:?}");
-    tx.send(Cmd::Shutdown).await.unwrap();
+    shutdown(tx).await;
 
     // Without a schedule a oneshot restarts on failure (`backoff`); with
     // `on-failure: ignore` (the default of cron jobs) the run just failed.
@@ -1480,7 +1490,7 @@ async fn oneshot_runs_report_healthy_or_failed() {
     start(&tx).await;
     let (ev, _) = next_health(&mut rx).await;
     assert_unhealthy(&ev, "failed", "exited with code 2");
-    tx.send(Cmd::Shutdown).await.unwrap();
+    shutdown(tx).await;
 }
 
 #[tokio::test]
@@ -1497,7 +1507,7 @@ async fn failed_start_reports_error() {
     assert!(reply_rx.await.unwrap().is_err());
     let (ev, _) = next_health(&mut rx).await;
     assert_unhealthy(&ev, "error", "failed to start: ");
-    tx.send(Cmd::Shutdown).await.unwrap();
+    shutdown(tx).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -1549,4 +1559,271 @@ async fn healthy_service_starts_a_new_backoff_sequence() {
     actor.report_healthy().await;
     assert_eq!(actor.backoff_count, 0);
     assert_eq!(actor.current_backoff, DEFAULT_BACKOFF_DELAY);
+}
+
+#[tokio::test]
+async fn backoff_limit_reached_gives_up_with_error() {
+    // delay = limit: the first failure waits, the second one gives up.
+    let (tx, mut rx) = spawn_run(
+        ServiceConfig {
+            command: Some("sh -c 'exit 1'".into()),
+            backoff_delay: Some("100ms".into()),
+            backoff_limit: Some("100ms".into()),
+            ..Default::default()
+        },
+        std::env::temp_dir(),
+    );
+    start(&tx).await;
+    let (ev, _) = next_health(&mut rx).await;
+    assert_unhealthy(&ev, "backoff", "exited with code 1, restarting in 100ms");
+    let (ev, seen) = next_health(&mut rx).await;
+    assert_unhealthy(
+        &ev,
+        "error",
+        "exited with code 1, giving up (backoff limit reached)",
+    );
+    assert!(seen.iter().any(is_state(ServiceState::Error)), "{seen:?}");
+    shutdown(tx).await;
+}
+
+#[tokio::test]
+async fn kill_delay_expiry_sends_sigkill() {
+    let dir = tempfile::tempdir().unwrap();
+    let up = dir.path().join("up");
+    let (tx, mut rx) = spawn_run(
+        ServiceConfig {
+            command: Some(format!(
+                r#"sh -c 'trap "" TERM; echo up > {}; while :; do sleep 0.05; done'"#,
+                up.display()
+            )),
+            kill_delay: Some("200ms".into()),
+            ..Default::default()
+        },
+        std::env::temp_dir(),
+    );
+    start(&tx).await;
+    wait_for_file(&up).await;
+
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    tx.send(Cmd::Stop(reply_tx)).await.unwrap();
+    reply_rx.await.unwrap().unwrap();
+    let seen = wait_event(&mut rx, is_state(ServiceState::Inactive)).await;
+    assert!(
+        seen.iter().any(|k| matches!(
+            k,
+            EventKind::ProcessExited { exit: Some(e), .. } if e.signal == Some(9)
+        )),
+        "SIGTERM is ignored, SIGKILL ends it: {seen:?}"
+    );
+    shutdown(tx).await;
+}
+
+#[tokio::test]
+async fn oneshot_with_on_success_ignore_ends_done() {
+    let cfg = ServiceConfig {
+        on_success: Some(vigil_types::plan::OnExit::Ignore),
+        ..oneshot("true")
+    };
+    let (tx, mut rx) = spawn_run(cfg, std::env::temp_dir());
+    start(&tx).await;
+    let (ev, seen) = next_health(&mut rx).await;
+    assert!(matches!(ev, EventKind::Healthy), "{ev:?}");
+    assert!(seen.iter().any(is_state(ServiceState::Done)), "{seen:?}");
+    shutdown(tx).await;
+}
+
+#[tokio::test]
+async fn forwarded_signal_reaches_the_service() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out");
+    let (tx, _rx) = spawn_run(
+        ServiceConfig {
+            command: Some(format!(
+                r#"sh -c 'trap "echo usr1 >> {out}" USR1; echo up >> {out}; while :; do sleep 0.05; done'"#,
+                out = out.display()
+            )),
+            ..Default::default()
+        },
+        std::env::temp_dir(),
+    );
+    start(&tx).await;
+    wait_for_lines(&out, 1).await;
+    tx.send(Cmd::ForwardSignal(Signal::SIGUSR1)).await.unwrap();
+    assert_eq!(wait_for_lines(&out, 2).await, ["up", "usr1"]);
+
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    tx.send(Cmd::Status(reply_tx)).await.unwrap();
+    let snap = reply_rx.await.unwrap();
+    assert_eq!(snap.name, "svc");
+    assert_eq!(snap.state, ServiceState::Active, "a signal is no stop");
+    shutdown(tx).await;
+}
+
+#[tokio::test]
+async fn check_passed_command_makes_the_service_ready() {
+    let (tx, mut rx) = spawn_run(
+        ServiceConfig {
+            command: Some("sleep 30".into()),
+            ready: Some(ReadyMode::Check),
+            ready_check: Some("c".into()),
+            ..Default::default()
+        },
+        std::env::temp_dir(),
+    );
+    start(&tx).await;
+    tx.send(Cmd::CheckPassed {
+        check: "c".into(),
+        started_at: std::time::Instant::now(),
+    })
+    .await
+    .unwrap();
+    wait_event(&mut rx, is_state(ServiceState::Active)).await;
+    shutdown(tx).await;
+}
+
+#[tokio::test]
+async fn readiness_is_ignored_once_the_ready_timeout_fired() {
+    let (mut actor, _rx) = make_actor_with_config(ServiceConfig {
+        command: Some("sleep 30".into()),
+        ready: Some(ReadyMode::Check),
+        ready_check: Some("c".into()),
+        ..Default::default()
+    });
+    actor.try_start().await.unwrap();
+    actor.handle_ready_timeout().await;
+    assert!(actor.ready_failed, "being stopped");
+    actor
+        .handle_check_passed("c", std::time::Instant::now())
+        .await;
+    assert_eq!(actor.state, ServiceState::Starting, "too late");
+    actor.cleanup().await;
+}
+
+#[tokio::test]
+async fn ready_timeout_does_nothing_once_the_service_is_active() {
+    let (mut actor, _rx) = make_actor_with_config(ServiceConfig {
+        command: Some("sleep 30".into()),
+        ..Default::default()
+    });
+    actor.try_start().await.unwrap();
+    assert_eq!(actor.state, ServiceState::Active);
+    actor.handle_ready_timeout().await;
+    assert!(!actor.ready_failed);
+    assert!(actor.stop_deadline.is_none(), "not stopped");
+    actor.cleanup().await;
+}
+
+#[tokio::test]
+async fn notify_without_a_process_is_ignored() {
+    let (mut actor, _rx) = make_actor();
+    let msg = crate::service::notify::NotifyMsg {
+        generation: actor.notify_generation,
+        pid: 1,
+        uid: actor.service_uid,
+        pgid: Some(1),
+        fields: vec![("READY".into(), "1".into())],
+    };
+    actor.handle_notify(msg).await;
+    assert_eq!(actor.state, ServiceState::Inactive);
+}
+
+#[tokio::test]
+async fn a_new_start_clears_the_old_status_message() {
+    let (mut actor, mut rx) = make_actor_with_config(ServiceConfig {
+        command: Some("sleep 30".into()),
+        ..Default::default()
+    });
+    actor.status_message = Some("warming up".into());
+    actor.try_start().await.unwrap();
+    assert!(actor.status_message.is_none());
+    let mut cleared = false;
+    while let Ok(ev) = rx.try_recv() {
+        cleared |= matches!(ev.kind, EventKind::StatusMessage { message: None });
+    }
+    assert!(cleared, "the overlord learns that the text is gone");
+    actor.cleanup().await;
+}
+
+#[test]
+fn describe_exit_names_signals_and_unknown_endings() {
+    use super::health::describe_exit;
+    use vigil_types::api::ExitInfo;
+    let sig = |n| {
+        Some(ExitInfo {
+            code: None,
+            signal: Some(n),
+        })
+    };
+    assert_eq!(describe_exit(sig(9)), "killed by SIGKILL");
+    assert_eq!(describe_exit(sig(200)), "killed by signal 200");
+    assert_eq!(describe_exit(None), "ended, exit status unknown");
+}
+
+#[tokio::test]
+async fn scheduled_run_that_wakes_early_does_not_start() {
+    let (mut actor, _rx) = make_actor_with_config(ServiceConfig {
+        schedule: Some("0 0 1 1 *".into()),
+        ..oneshot("true")
+    });
+    let later = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
+    actor.next_run = Some(later);
+    actor.handle_schedule_due().await;
+    assert_eq!(actor.state, ServiceState::Inactive);
+    assert_eq!(actor.next_run, Some(later), "still the same run");
+}
+
+#[tokio::test]
+async fn watch_tick_without_a_watch_stops_ticking() {
+    let (mut actor, _rx) = make_actor();
+    actor.watch_deadline = Some(tokio::time::Instant::now());
+    actor.handle_watch_tick().await;
+    assert!(actor.watch_deadline.is_none());
+}
+
+#[tokio::test]
+async fn watched_file_change_while_stopping_is_left_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let secret = dir.path().join("pw");
+    let out = dir.path().join("out");
+    std::fs::write(&secret, "one").unwrap();
+    let (mut actor, _rx) = make_actor_with_config(watched_service(&secret, &out, "restart"));
+    actor.try_start().await.unwrap();
+    assert!(actor.watch_deadline.is_some());
+
+    std::fs::write(&secret, "two").unwrap();
+    actor.state = ServiceState::Stopping; // as if `vigil stop` just ran
+    actor.handle_watch_tick().await; // change seen
+    actor.handle_watch_tick().await; // change stable
+    assert!(!actor.pending_restart, "no restart of a stopping service");
+    assert!(actor.stop_deadline.is_none());
+    actor.cleanup().await;
+}
+
+#[tokio::test]
+async fn watch_files_with_on_change_ignore_does_not_watch() {
+    let dir = tempfile::tempdir().unwrap();
+    let secret = dir.path().join("pw");
+    let out = dir.path().join("out");
+    std::fs::write(&secret, "one").unwrap();
+    let (mut actor, _rx) = make_actor_with_config(watched_service(&secret, &out, "ignore"));
+    actor.try_start().await.unwrap();
+    assert!(actor.watch.is_none());
+    assert!(actor.watch_deadline.is_none());
+    actor.cleanup().await;
+}
+
+#[tokio::test]
+async fn oneshot_jobs_are_not_watched() {
+    let dir = tempfile::tempdir().unwrap();
+    let secret = dir.path().join("pw");
+    let out = dir.path().join("out");
+    std::fs::write(&secret, "one").unwrap();
+    let cfg = ServiceConfig {
+        service_type: Some(vigil_types::plan::ServiceType::Oneshot),
+        ..watched_service(&secret, &out, "restart")
+    };
+    let (mut actor, _rx) = make_actor_with_config(cfg);
+    actor.try_start().await.unwrap();
+    assert!(actor.watch.is_none(), "every run reads its files anew");
+    actor.cleanup().await;
 }

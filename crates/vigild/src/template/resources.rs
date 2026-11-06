@@ -387,4 +387,13 @@ mod tests {
         ]);
         assert_eq!(detect_memory(r.path()), Ok(16384000 * 1024));
     }
+
+    #[test]
+    fn memory_without_cgroup_and_meminfo_is_an_error() {
+        let r = fake_root(&[]);
+        assert_eq!(
+            detect_memory(r.path()),
+            Err("cannot detect the available memory".to_string())
+        );
+    }
 }

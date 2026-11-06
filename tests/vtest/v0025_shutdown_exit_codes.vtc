@@ -1,0 +1,46 @@
+vtest "vigild: shutdown policies end vigild with the documented exit code"
+
+# Each part runs vigild in the foreground on a static layers directory and
+# checks its exit code. `timeout` keeps a broken policy from hanging the test
+# (it would exit with 124).
+
+# ---------------------------------------------------------------------------
+# Part 1: on-check-failure: shutdown, --exit-code fixed
+# ---------------------------------------------------------------------------
+shell {
+	rc=0
+	timeout 20 ${vigild} \
+		--layers-dir ${vtestdir}/fixtures/v0025/check-shutdown \
+		--socket     ${tmpdir}/check.sock \
+		--exit-code  fixed \
+		> ${tmpdir}/check.log 2>&1 < /dev/null || rc=$?
+	echo "exit code: $rc"
+	test "$rc" -eq 10
+	grep -q 'on-check-failure: shutdown' ${tmpdir}/check.log
+}
+
+# ---------------------------------------------------------------------------
+# Part 2: on-failure: shutdown, service exits 3, --exit-code propagate
+# ---------------------------------------------------------------------------
+shell {
+	rc=0
+	timeout 20 ${vigild} \
+		--layers-dir ${vtestdir}/fixtures/v0025/service-exit \
+		--socket     ${tmpdir}/propagate.sock \
+		> ${tmpdir}/propagate.log 2>&1 < /dev/null || rc=$?
+	echo "exit code: $rc"
+	test "$rc" -eq 3
+}
+
+# ---------------------------------------------------------------------------
+# Part 3: the same service with --exit-code fixed
+# ---------------------------------------------------------------------------
+shell {
+	rc=0
+	VIGIL_EXIT_CODE=fixed timeout 20 ${vigild} \
+		--layers-dir ${vtestdir}/fixtures/v0025/service-exit \
+		--socket     ${tmpdir}/fixed.sock \
+		> ${tmpdir}/fixed.log 2>&1 < /dev/null || rc=$?
+	echo "exit code: $rc"
+	test "$rc" -eq 10
+}

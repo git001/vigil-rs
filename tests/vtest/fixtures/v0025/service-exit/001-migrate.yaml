@@ -1,0 +1,9 @@
+# A job that fails with exit code 3 and takes vigild down with it.
+# --exit-code propagate (the default) passes the 3 on, --exit-code fixed
+# exits with 10.
+services:
+  migrate:
+    override: replace
+    command: sh -c 'exit 3'
+    startup: enabled
+    on-failure: shutdown

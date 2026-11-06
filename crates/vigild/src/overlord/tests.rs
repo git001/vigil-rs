@@ -1145,3 +1145,151 @@ async fn changed_service_context_restarts_the_exec_check() {
     );
     ov.stop_all().await;
 }
+
+// ------------------------------------------------------------------
+// Commands from the API, autostart ordering, scheduled runs
+// ------------------------------------------------------------------
+
+/// Replace `name`'s actor with a stub that accepts every command and
+/// reports which one it got.
+fn stub_actor(ov: &mut Overlord, name: &str) -> mpsc::UnboundedReceiver<String> {
+    let (tx, mut rx) = mpsc::channel::<service::Cmd>(8);
+    let (seen_tx, seen_rx) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        while let Some(cmd) = rx.recv().await {
+            let what = match cmd {
+                service::Cmd::Start(r) => {
+                    let _ = r.send(Ok(()));
+                    "start".to_owned()
+                }
+                service::Cmd::Stop(r) | service::Cmd::Restart(r) => {
+                    let _ = r.send(Ok(()));
+                    "stop/restart".to_owned()
+                }
+                service::Cmd::ForwardSignal(sig) => format!("signal {sig}"),
+                _ => "other".to_owned(),
+            };
+            let _ = seen_tx.send(what);
+        }
+    });
+    ov.services.get_mut(name).unwrap().handle = service::Handle { tx };
+    seen_rx
+}
+
+async fn services_action(
+    ov: &mut Overlord,
+    action: vigil_types::api::ServiceAction,
+    names: Vec<String>,
+) -> vigil_types::api::ChangeInfo {
+    let (reply, rx) = tokio::sync::oneshot::channel();
+    ov.handle_cmd(super::Cmd::Services {
+        action,
+        names,
+        reply,
+    })
+    .await;
+    rx.await.unwrap().unwrap()
+}
+
+async fn next_seen(rx: &mut mpsc::UnboundedReceiver<String>) -> String {
+    tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+        .await
+        .expect("no command arrived")
+        .unwrap()
+}
+
+#[tokio::test]
+async fn next_run_event_updates_the_snapshot() {
+    let mut ov = make_overlord(&[("app", &[], &[], &[])], &[]);
+    let at = Utc::now() + chrono::Duration::hours(1);
+    svc_event(&mut ov, service::EventKind::NextRun { at: Some(at) }).await;
+    assert_eq!(ov.services["app"].snapshot.next_run, Some(at));
+    svc_event(&mut ov, service::EventKind::NextRun { at: None }).await;
+    assert_eq!(ov.services["app"].snapshot.next_run, None);
+}
+
+#[tokio::test]
+async fn autostart_defers_a_service_until_its_dependency_runs() {
+    let mut ov = make_overlord(&[("db", &[], &[], &[]), ("app", &["db"], &[], &[])], &[]);
+    for cfg in ov.plan.services.values_mut() {
+        cfg.startup = Some(Startup::Enabled);
+    }
+    let mut db = stub_actor(&mut ov, "db");
+    let mut app = stub_actor(&mut ov, "app");
+    ov.autostart().await;
+    assert_eq!(next_seen(&mut db).await, "start");
+    // db is only starting (no Active event yet): app has to wait.
+    assert_eq!(ov.pending_autostart, ["app"]);
+    assert!(app.try_recv().is_err());
+    // A second autostart (replan) does not queue it twice.
+    ov.autostart().await;
+    assert_eq!(ov.pending_autostart, ["app"]);
+}
+
+#[tokio::test]
+async fn autostart_action_without_names_enables_and_starts_every_service() {
+    let mut ov = make_overlord(&[("a", &[], &[], &[]), ("b", &[], &[], &[])], &[]);
+    let mut a = stub_actor(&mut ov, "a");
+    let mut b = stub_actor(&mut ov, "b");
+    let change = services_action(&mut ov, vigil_types::api::ServiceAction::Autostart, vec![]).await;
+    assert_eq!(change.kind, "autostart");
+    assert_eq!(change.status, vigil_types::api::ChangeStatus::Done);
+    assert_eq!(next_seen(&mut a).await, "start");
+    assert_eq!(next_seen(&mut b).await, "start");
+    for cfg in ov.plan.services.values() {
+        assert_eq!(cfg.startup, Some(Startup::Enabled));
+    }
+
+    let (reply, rx) = tokio::sync::oneshot::channel();
+    ov.handle_cmd(super::Cmd::GetChanges { id: None, reply })
+        .await;
+    assert_eq!(rx.await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn replan_action_reloads_the_layers() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("001.yaml"),
+        "services:\n  app:\n    command: sleep 999\n",
+    )
+    .unwrap();
+    let mut ov = make_overlord(&[], &[]);
+    ov.layers_dir = dir.path().to_path_buf();
+    let change = services_action(
+        &mut ov,
+        vigil_types::api::ServiceAction::Replan,
+        vec!["app".into()],
+    )
+    .await;
+    assert_eq!(change.status, vigil_types::api::ChangeStatus::Done);
+    assert!(ov.plan.services.contains_key("app"));
+    ov.stop_all().await;
+}
+
+#[tokio::test]
+async fn forward_signal_command_reaches_every_service() {
+    let mut ov = make_overlord(&[("a", &[], &[], &[]), ("b", &[], &[], &[])], &[]);
+    let mut a = stub_actor(&mut ov, "a");
+    let mut b = stub_actor(&mut ov, "b");
+    ov.handle_cmd(super::Cmd::ForwardSignal {
+        signal: nix::sys::signal::Signal::SIGHUP,
+    })
+    .await;
+    assert_eq!(next_seen(&mut a).await, "signal SIGHUP");
+    assert_eq!(next_seen(&mut b).await, "signal SIGHUP");
+}
+
+#[tokio::test]
+async fn service_infos_show_done_for_oneshots() {
+    let mut ov = make_overlord(&[("job", &[], &[], &[])], &[]);
+    ov.plan.services.get_mut("job").unwrap().service_type =
+        Some(vigil_types::plan::ServiceType::Oneshot);
+    let (reply, rx) = tokio::sync::oneshot::channel();
+    ov.handle_cmd(super::Cmd::GetServices {
+        names: vec![],
+        reply,
+    })
+    .await;
+    assert_eq!(rx.await.unwrap()[0].on_success, "done");
+}

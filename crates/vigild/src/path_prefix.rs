@@ -267,4 +267,26 @@ mod tests {
     fn relative_path_is_rejected() {
         assert!(prepare(Path::new("run/vigil")).is_err());
     }
+
+    #[test]
+    fn prefix_below_a_file_is_an_error() {
+        let base = tempfile::tempdir().unwrap();
+        let file = base.path().join("file");
+        std::fs::write(&file, "").unwrap();
+        let err = format!("{:#}", prepare(&file.join("vigil")).unwrap_err());
+        assert!(err.contains("inspecting --path-prefix"), "{err}");
+    }
+
+    #[test]
+    fn read_only_parent_is_an_error() {
+        if Uid::effective().is_root() {
+            eprintln!("skipped: root can write anywhere");
+            return;
+        }
+        let base = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(base.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let err = format!("{:#}", prepare(&base.path().join("vigil")).unwrap_err());
+        std::fs::set_permissions(base.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(err.contains("writable for uid"), "{err}");
+    }
 }

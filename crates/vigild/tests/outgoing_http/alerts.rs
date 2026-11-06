@@ -199,3 +199,31 @@ async fn alert_not_triggered_for_unrelated_check() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     mock_server.verify().await;
 }
+
+#[tokio::test]
+async fn cloudevents_are_sent_with_their_content_type() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/hook"))
+        .and(header("Content-Type", "application/cloudevents+json"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let mut sender = AlertSender::new();
+    let mut alerts = IndexMap::new();
+    let mut cfg = alert_cfg(&mock_server.uri());
+    cfg.format = Some(AlertFormat::CloudEvents);
+    alerts.insert("my-alert".to_string(), cfg);
+    sender.update_alerts(alerts);
+    sender.spawn_worker();
+    sender.handle_check_event("my-check", CheckStatus::Down);
+
+    wait_for_requests(&mock_server, 1, Duration::from_millis(500)).await;
+    mock_server.verify().await;
+    let body: serde_json::Value =
+        serde_json::from_slice(&mock_server.received_requests().await.unwrap()[0].body).unwrap();
+    assert_eq!(body["type"], "io.vigil.check.failed");
+}

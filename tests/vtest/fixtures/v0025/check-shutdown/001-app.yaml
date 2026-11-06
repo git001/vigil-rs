@@ -1,0 +1,20 @@
+# A service whose health check always fails; the failure shuts vigild down.
+# With a check failure there is no process exit code to propagate, so vigild
+# exits with 10 in both --exit-code modes.
+services:
+  app:
+    override: replace
+    command: sleep 300
+    startup: enabled
+    on-check-failure:
+      app-health: shutdown
+
+checks:
+  app-health:
+    startup: enabled
+    delay: 0s
+    period: 1s
+    timeout: 1s
+    threshold: 1
+    exec:
+      command: "false"

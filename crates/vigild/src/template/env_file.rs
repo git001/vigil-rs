@@ -238,4 +238,14 @@ DB_USER=override
         assert!(check_entry("x.env").is_err());
         assert!(check_entry("-x.env").is_err());
     }
+
+    #[test]
+    fn double_quotes_keep_unknown_escapes() {
+        assert_eq!(
+            parse(r#"OPTS="--sep=\t --path=C:\temp \q""#).unwrap(),
+            kv(&[("OPTS", "--sep=\t --path=C:\temp \\q")])
+        );
+        let err = parse("PW=\"s3cret\\").unwrap_err();
+        assert!(err.contains("unterminated double quote"), "{err}");
+    }
 }
