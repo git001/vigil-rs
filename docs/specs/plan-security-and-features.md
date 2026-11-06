@@ -599,9 +599,38 @@ running service, removing it sends `recovered`.
 lost on every restart; `identities:` in a layer file was silently ignored.
 Decided by the user (2026-11-06): layer files may define identities, so they
 survive a restart and can come from a ConfigMap (e.g. the read identity of
-vigil-log-relay). Design details (merge with identities added over the API,
-replan, secrets such as password hashes from files) are open and decided
-before the implementation.
+vigil-log-relay).
+
+Decided by the user (2026-11-06):
+- **Two sources side by side.** Identities from layer files are read-only
+  over the API: `POST` or `DELETE` with the name of a layer identity is
+  rejected ("identity 'log-relay' is defined in layer 001-auth.yaml").
+  `vigil identities list` shows a `Source` column (`layer` / `api`).
+- **Replan** (also `--watch-layers`) replaces the layer identities as a
+  whole: one removed from the layers loses its access at once. Identities
+  added over the API are not touched.
+- **Several layers:** a later layer file replaces the whole identity; there
+  is no `override:` for identities (mixing auth methods would be dangerous),
+  so `override` there is an unknown key and an error.
+- **Secrets from files:** `basic.password-hash-file` and `tls.ca-cert-file`,
+  like `env-file` and `--source-user-file`. Setting both the inline value and
+  the file is an error. Files are read when loading (off the runtime, with
+  the file I/O timeout); a read error fails the load. `--watch-layers`
+  includes their content in its hash, so a rotated Kubernetes Secret is
+  picked up.
+- **Bootstrap:** only identities added over the API end the Unix-socket
+  bootstrap admin (root and vigild's UID). Layer identities alone, e.g. only
+  a read identity for vigil-log-relay, keep it; the prefix directory (0700)
+  limits the socket to those two UIDs anyway. The docs say so explicitly.
+
+Before 4d (same day): `env:VAR` in alerts (`url`, `headers`, `labels`,
+`send-info-fields`, `proxy`, `no-proxy`) is resolved and checked at load
+time; an unset variable is a hard error instead of an empty string at send
+time. Alerts see vigild's environment under the same rules as services:
+`pass-env`, `pass-env-glob`, `pass-env-regex` (default: only the base
+variables), with separate errors for "not set" and "not passed". The proxy
+variables (`HTTPS_PROXY`, …, `NO_PROXY`) are used only when the alert's
+policy passes them; reqwest's own lookup of them is switched off.
 
 ## Releases
 
