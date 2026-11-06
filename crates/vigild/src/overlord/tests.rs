@@ -1079,3 +1079,67 @@ async fn invalid_layers_keep_the_plan_and_alert_until_a_valid_reload() {
     );
     ov.stop_all().await;
 }
+
+// ------------------------------------------------------------------
+// sync_actors — disabled checks stop, a changed service context restarts
+// ------------------------------------------------------------------
+
+#[tokio::test]
+async fn replan_to_disabled_stops_a_running_check() {
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    let layer = dir.path().join("001.yaml");
+    std::fs::write(
+        &layer,
+        "checks:\n  c:\n    startup: enabled\n    exec:\n      command: \"true\"\n",
+    )
+    .unwrap();
+    let mut ov = make_overlord(&[], &[]);
+    ov.alert_sender.spawn_worker();
+    ov.layers_dir = dir.path().to_path_buf();
+    ov.reload_layers().await.unwrap();
+    assert!(ov.checks.contains_key("c"));
+
+    std::fs::write(
+        &layer,
+        "checks:\n  c:\n    startup: disabled\n    exec:\n      command: \"true\"\n",
+    )
+    .unwrap();
+    ov.reload_layers().await.unwrap();
+    assert!(!ov.checks.contains_key("c"), "disabled check must stop");
+}
+
+#[tokio::test]
+async fn changed_service_context_restarts_the_exec_check() {
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    let layer = dir.path().join("001.yaml");
+    let write = |env: &str| {
+        std::fs::write(
+            &layer,
+            format!(
+                "services:\n  app:\n    command: sleep 300\n    environment:\n      DB_HOST: {env}\n\
+                 checks:\n  c:\n    startup: enabled\n    exec:\n      command: \"true\"\n      service-context: app\n"
+            ),
+        )
+        .unwrap();
+    };
+    write("db-1.internal");
+    let mut ov = make_overlord(&[], &[]);
+    ov.alert_sender.spawn_worker();
+    ov.layers_dir = dir.path().to_path_buf();
+    ov.reload_layers().await.unwrap();
+    let first = ov.checks["c"].handle.tx.clone();
+
+    write("db-2.internal");
+    ov.reload_layers().await.unwrap();
+    assert!(
+        !ov.checks["c"].handle.tx.same_channel(&first),
+        "the check actor must be restarted with the new service context"
+    );
+    assert_eq!(
+        ov.checks["c"].context.as_ref().unwrap().environment["DB_HOST"],
+        "db-2.internal"
+    );
+    ov.stop_all().await;
+}

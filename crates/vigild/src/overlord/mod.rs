@@ -87,6 +87,9 @@ pub(super) struct ServiceEntry {
 pub(super) struct CheckEntry {
     pub(super) handle: check::Handle,
     pub(super) config: vigil_types::plan::CheckConfig,
+    /// Config of the exec check's `service-context` service when the actor
+    /// was spawned; a change restarts the check like a change of its own.
+    pub(super) context: Option<vigil_types::plan::ServiceConfig>,
 }
 
 pub(super) struct Overlord {

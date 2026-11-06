@@ -69,17 +69,27 @@ impl Overlord {
         let names: Vec<&str> = self.plan.services.keys().map(String::as_str).collect();
         self.metrics.set_services(&names);
 
-        // Checks with startup: disabled are not auto-started.
         let svc_configs = Arc::new(self.plan.services.clone());
         for (name, config) in &self.plan.checks {
+            // Checks with startup: disabled do not run; a replan to disabled
+            // stops a running one.
             if config.startup() == Startup::Disabled {
+                if let Some(entry) = self.checks.shift_remove(name) {
+                    info!(check = %name, "check disabled, stopping its actor");
+                    let _ = entry.handle.tx.try_send(check::Cmd::Shutdown);
+                }
                 continue;
             }
-            // Restart check actor if config changed since last (re)plan.
+            let context = config
+                .exec
+                .as_ref()
+                .and_then(|e| e.service_context.as_deref())
+                .and_then(|s| self.plan.services.get(s))
+                .cloned();
+            // Restart the check actor if its config or its service context
+            // changed since the last (re)plan.
             if let Some(entry) = self.checks.get(name) {
-                let old_json = serde_json::to_string(&entry.config).unwrap_or_default();
-                let new_json = serde_json::to_string(config).unwrap_or_default();
-                if old_json == new_json {
+                if same_json(&entry.config, config) && same_json(&entry.context, &context) {
                     continue;
                 }
                 info!(check = %name, "check config changed, restarting check actor");
@@ -103,6 +113,7 @@ impl Overlord {
                 CheckEntry {
                     handle,
                     config: config.clone(),
+                    context,
                 },
             );
         }
@@ -369,4 +380,9 @@ impl Overlord {
             .await
             .map_err(|_| anyhow::anyhow!("service actor '{}' dropped reply", name))?
     }
+}
+
+/// Whether two configs are equal (compared as JSON).
+fn same_json<T: serde::Serialize>(a: &T, b: &T) -> bool {
+    serde_json::to_string(a).ok() == serde_json::to_string(b).ok()
 }
