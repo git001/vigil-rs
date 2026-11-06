@@ -448,9 +448,9 @@ a `container` field is added:
 ```
 
 The `container` field is **omitted** when no `--container` flag is given (K8s
-default container). `stream` is `stdout`, `stderr` (K8s ≥ 1.32 with stream
-param enabled), or `output` (combined, fallback for older clusters or when
-`--no-stream-param` is set).
+default container). `stream` is `stdout` or `stderr` when the API server
+accepts the `stream=` parameter, otherwise `output` (one combined stream: older
+clusters, the feature gate is off, or `--no-stream-param` is set).
 
 | Flag | Env var | Default | Description |
 |---|---|---|---|
@@ -462,13 +462,14 @@ param enabled), or `output` (combined, fallback for older clusters or when
 | `--watch-interval SECS` | `WATCH_INTERVAL` | `10` | Seconds between reconcile ticks (restart finished streams) |
 | `--exclude-pod REGEX` | — | — | Skip pods whose name matches (repeatable, OR-combined) |
 | `--max-log-requests N` | `MAX_LOG_REQUESTS` | `0` | Max concurrent pod log streams (`0` = unlimited) |
-| `--no-stream-param` | `NO_STREAM_PARAM` | `false` | Disable `stream=Stdout/Stderr` query parameter; use combined stream |
+| `--no-stream-param` | `NO_STREAM_PARAM` | `false` | Never try the `stream=Stdout/Stderr` query parameter; use the combined stream |
 
-**`--no-stream-param`**: The `stream=` parameter was introduced in K8s 1.32 and
-is auto-enabled when the API server version is detected as ≥ 1.32. Some
-distributions (e.g. OpenShift) forbid it via admission control even on newer
-versions — set this flag when you see
-`"stream: Forbidden: may not be specified"` errors.
+**`--no-stream-param`**: The `stream=` parameter exists since K8s 1.32 but only
+works with the feature gate `PodLogsQuerySplitStreams`, which is off by default;
+some distributions (e.g. OpenShift) also forbid it via admission control. On
+K8s ≥ 1.32 the relay tries it first; when the API server answers
+`"stream: Forbidden: may not be specified"`, it logs one warning and uses the
+combined stream for all pods from then on. The flag skips that first attempt.
 
 ### Source proxy
 

@@ -19,6 +19,7 @@ mod stream;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -105,7 +106,11 @@ pub async fn run(
     let namespace = Arc::new(cli.namespace.clone());
     let selector = ContainerSelector::from_cli(cli.container.as_deref());
 
-    let use_stream_param = !cli.no_stream_param && detect_stream_param_support(&kube_client).await;
+    // Shared by all streams: the first one the API server rejects turns it
+    // off for the rest of the process.
+    let stream_param = Arc::new(AtomicBool::new(
+        !cli.no_stream_param && detect_stream_param_support(&kube_client).await,
+    ));
 
     let watcher_config = if cli.pod_selector.is_empty() {
         watcher::Config::default()
@@ -158,7 +163,7 @@ pub async fn run(
                                 if stream::try_start(
                                     &name, ck, &mut active, &semaphore,
                                     &kube_client, &namespace,
-                                    tail, since, use_stream_param,
+                                    tail, since, &stream_param,
                                     &filter, &tx,
                                 ) {
                                     any_started = true;
@@ -225,7 +230,7 @@ pub async fn run(
                         if stream::try_start(
                             name, ck, &mut active, &semaphore,
                             &kube_client, &namespace,
-                            tail, since, use_stream_param,
+                            tail, since, &stream_param,
                             &filter, &tx,
                         ) {
                             any_started = true;
@@ -248,8 +253,9 @@ pub async fn run(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Detect whether the K8s API server supports the `stream` query parameter
-/// for pod log endpoints (requires K8s ≥ 1.32).
+/// Whether to try the `stream` query parameter for pod logs (K8s ≥ 1.32).
+/// It also needs a feature gate the version does not tell; streams fall
+/// back to one combined stream if the API server rejects it.
 async fn detect_stream_param_support(client: &kube::Client) -> bool {
     let info = match client.apiserver_version().await {
         Ok(v) => v,
@@ -269,7 +275,7 @@ async fn detect_stream_param_support(client: &kube::Client) -> bool {
     if supported {
         info!(
             k8s_version = %format!("{}.{}", info.major, info.minor),
-            "K8s stream param supported — stdout/stderr separated"
+            "K8s ≥ 1.32 — trying separate stdout/stderr streams"
         );
     } else {
         info!(

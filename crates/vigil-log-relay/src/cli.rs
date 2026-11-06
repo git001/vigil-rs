@@ -330,12 +330,13 @@ pub struct Cli {
     )]
     pub max_log_requests: usize,
 
-    /// Disable the K8s stream= query parameter and use a single combined
-    /// stdout+stderr stream regardless of the API server version.
+    /// Never use the K8s stream= query parameter; always read one combined
+    /// stdout+stderr stream.
     ///
-    /// The stream= parameter was added in K8s 1.32 but some distributions
-    /// (e.g. OpenShift) forbid it via admission control even on newer versions.
-    /// Set this flag if you see "stream: Forbidden: may not be specified" errors.
+    /// Without this flag the relay tries separate streams on K8s >= 1.32 and
+    /// falls back to the combined stream by itself if the API server rejects
+    /// the parameter (feature gate PodLogsQuerySplitStreams off, or admission
+    /// control). The flag only saves that first rejected request.
     #[arg(long, env = "NO_STREAM_PARAM", help_heading = "Kubernetes")]
     pub no_stream_param: bool,
 

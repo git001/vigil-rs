@@ -322,16 +322,17 @@ to Filebeat over a local TCP connection.
 
 **K8s `stream` query parameter (stdout/stderr separation)**
 
-Kubernetes ≥ 1.32 supports a `stream=Stdout` / `stream=Stderr` query parameter
+Kubernetes ≥ 1.32 knows a `stream=Stdout` / `stream=Stderr` query parameter
 on the pod log endpoint, allowing stdout and stderr to be collected as separate
-labeled streams. vigil-log-relay detects the API server version at startup and
-enables this automatically.
+labeled streams. It only works with the feature gate `PodLogsQuerySplitStreams`,
+which is off by default (also on 1.35), and some distributions forbid it via
+admission control.
 
-Some distributions forbid the `stream=` parameter via
-admission control even when running K8s 1.32+. In that case the log stream open
-fails with HTTP 422 `"stream: Forbidden: may not be specified"`. Set the
-`--no-stream-param` flag (or `NO_STREAM_PARAM=true` env var) to fall back to the
-combined stdout+stderr stream:
+On K8s ≥ 1.32 vigil-log-relay therefore tries the parameter first. If the API
+server answers HTTP 422 `"stream: Forbidden: may not be specified"`, the relay
+logs one warning and switches to the combined stream (`"stream": "output"`)
+for all pods; no log lines are lost. To skip that first attempt, set
+`--no-stream-param` (or `NO_STREAM_PARAM=true`):
 
 ```yaml
 env:

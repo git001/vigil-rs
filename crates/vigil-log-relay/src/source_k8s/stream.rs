@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use kube::Client;
 use serde::Serialize;
@@ -43,7 +44,7 @@ pub fn try_start(
     namespace: &Arc<String>,
     tail_lines: i64,
     since_seconds: i64,
-    use_stream_param: bool,
+    stream_param: &Arc<AtomicBool>,
     filter: &Arc<LineFilter>,
     tx: &mpsc::Sender<String>,
 ) -> bool {
@@ -75,7 +76,7 @@ pub fn try_start(
         info!(pod = %pod, "starting log stream");
     }
 
-    let handle = if use_stream_param {
+    let handle = if stream_param.load(Ordering::Relaxed) {
         // K8s ≥ 1.32: request stdout and stderr as separate streams.
         let url_out = log_url(
             namespace,
@@ -93,11 +94,22 @@ pub fn try_start(
             since_seconds,
             Some("Stderr"),
         );
+        // Fallback if the API server rejects `stream` (feature gate off).
+        let url_combined = log_url(
+            namespace,
+            pod,
+            container_key,
+            tail_lines,
+            since_seconds,
+            None,
+        );
+        let stream_param = Arc::clone(stream_param);
         let client = kube_client.clone();
         let pod_str = pod.to_owned();
         let ns = Arc::clone(namespace);
         let cname_out = container_name.clone();
         let cname_err = container_name.clone();
+        let cname_out_fallback = container_name.clone();
         let filter_out = Arc::clone(filter);
         let filter_err = Arc::clone(filter);
         let tx_out = tx.clone();
@@ -116,12 +128,39 @@ pub fn try_start(
                 "stdout",
             ));
             let mut h_err = tokio::spawn(stream_pod(
-                client, url_err, pod_str, ns, cname_err, filter_err, tx_err, "stderr",
+                client.clone(),
+                url_err,
+                pod_str.clone(),
+                Arc::clone(&ns),
+                cname_err,
+                Arc::clone(&filter_err),
+                tx_err.clone(),
+                "stderr",
             ));
             // When either stream closes (K8s API server timeout), abort the sibling.
-            tokio::select! {
-                _ = &mut h_out => { h_err.abort(); }
-                _ = &mut h_err => { h_out.abort(); }
+            let first = tokio::select! {
+                r = &mut h_out => { h_err.abort(); r }
+                r = &mut h_err => { h_out.abort(); r }
+            };
+            if matches!(first, Ok(StreamEnd::StreamParamRejected)) {
+                if stream_param.swap(false, Ordering::Relaxed) {
+                    warn!(
+                        "the API server rejects the `stream` parameter (feature gate \
+                         PodLogsQuerySplitStreams off); using one combined stream \
+                         (stream: \"output\") from now on"
+                    );
+                }
+                stream_pod(
+                    client,
+                    url_combined,
+                    pod_str,
+                    ns,
+                    cname_out_fallback,
+                    filter_err,
+                    tx_err,
+                    "output",
+                )
+                .await;
             }
         })
     } else {
@@ -158,6 +197,22 @@ pub fn try_start(
 
     active.insert(key, handle);
     true
+}
+
+/// How a log stream ended.
+#[derive(Debug, PartialEq, Eq)]
+enum StreamEnd {
+    /// EOF, an error or a failed request; the reconcile loop restarts it.
+    Closed,
+    /// The API server does not accept the `stream` query parameter.
+    StreamParamRejected,
+}
+
+/// `stream=Stdout|Stderr` needs the PodLogsQuerySplitStreams feature gate,
+/// which is off by default even on recent Kubernetes versions; the API
+/// server then answers 422 "stream: Forbidden: may not be specified".
+fn is_stream_param_rejected(e: &kube::Error) -> bool {
+    matches!(e, kube::Error::Api(r) if r.code == 422 && r.message.contains("stream: Forbidden"))
 }
 
 // ---------------------------------------------------------------------------
@@ -202,27 +257,23 @@ async fn stream_pod(
     filter: Arc<LineFilter>,
     tx: mpsc::Sender<String>,
     stream_name: &'static str,
-) {
+) -> StreamEnd {
     let container_str = container.as_deref().map(|s| s.as_str());
 
     let req = match http::Request::get(&url).body(vec![]) {
         Ok(r) => r,
         Err(e) => {
             warn!(pod = %pod, stream = stream_name, error = %e, "failed to build log request");
-            return;
+            return StreamEnd::Closed;
         }
     };
 
     let byte_stream = match client.request_stream(req).await {
         Ok(s) => s,
+        Err(e) if is_stream_param_rejected(&e) => return StreamEnd::StreamParamRejected,
         Err(e) => {
-            let hint = if e.to_string().contains("may not be specified") {
-                " — use --no-stream-param to disable stdout/stderr separation"
-            } else {
-                ""
-            };
-            warn!(pod = %pod, stream = stream_name, error = %e, hint, "failed to open log stream");
-            return;
+            warn!(pod = %pod, stream = stream_name, error = %e, "failed to open log stream");
+            return StreamEnd::Closed;
         }
     };
 
@@ -268,12 +319,62 @@ async fn stream_pod(
             }
             Ok(None) => {
                 info!(pod = %pod, stream = stream_name, "log stream EOF");
-                break;
+                return StreamEnd::Closed;
             }
             Err(e) => {
                 warn!(pod = %pod, stream = stream_name, error = %e, "log stream error");
-                break;
+                return StreamEnd::Closed;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn api_error(code: u16, message: &str) -> kube::Error {
+        kube::Error::Api(kube::core::ErrorResponse {
+            status: "Failure".into(),
+            message: message.into(),
+            reason: "Invalid".into(),
+            code,
+        })
+    }
+
+    #[test]
+    fn rejected_stream_param_is_recognised() {
+        // The answer of a 1.35 API server without the feature gate.
+        let e = api_error(
+            422,
+            r#"PodLogOptions "logger-a" is invalid: stream: Forbidden: may not be specified"#,
+        );
+        assert!(is_stream_param_rejected(&e));
+        // Other errors keep the separate streams.
+        assert!(!is_stream_param_rejected(&api_error(
+            422,
+            "tailLines: Invalid value"
+        )));
+        assert!(!is_stream_param_rejected(&api_error(
+            403,
+            "stream: Forbidden"
+        )));
+    }
+
+    #[test]
+    fn log_url_adds_only_the_given_parameters() {
+        assert_eq!(
+            log_url("ns", "p", "", 0, 0, None),
+            "/api/v1/namespaces/ns/pods/p/log?follow=true&timestamps=true"
+        );
+        assert_eq!(
+            log_url("ns", "p", "app", 5, 10, Some("Stderr")),
+            "/api/v1/namespaces/ns/pods/p/log?follow=true&timestamps=true\
+             &container=app&tailLines=5&stream=Stderr"
+        );
+        assert_eq!(
+            log_url("ns", "p", "", 0, 10, None),
+            "/api/v1/namespaces/ns/pods/p/log?follow=true&timestamps=true&sinceSeconds=10"
+        );
     }
 }
