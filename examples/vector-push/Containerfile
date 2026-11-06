@@ -1,0 +1,59 @@
+# vigil-rs + Vector, push mode
+#
+# vigild pushes the log lines of dummy-logger to Vector's Unix socket:
+#
+#   dummy-logger  →  vigild push task  →  /tmp/vector-input.sock (Unix socket)
+#                 →  Vector socket source (unix_stream, json)
+#                 →  remap transform      (collector=vector, level)
+#                 →  console sink         (JSON lines → podman logs)
+#
+# Unlike examples/vector, Vector needs no curl process: vigild is the client.
+# The container runs as a non-root user and keeps everything under /tmp, so it
+# also runs with a random UID (OpenShift).
+#
+# Build (from the vigil-rs repo root):
+#   podman build -f examples/vector-push/Containerfile -t vigil-vector-push .
+#
+# Run:
+#   podman run --rm --name vigil-vector-push vigil-vector-push
+#
+# Expected output (podman logs):
+#   {"collector":"vector","level":"info","message":"INFO  req=3 GET /api/users …","service":"dummy-logger","stream":"stdout","timestamp":"…"}
+#
+# Interact:
+#   podman exec vigil-vector-push vigil services list
+#   podman exec vigil-vector-push vigil logs -f
+
+# ---------------------------------------------------------------------------
+# Stage 1 — build vigild + vigil (static musl binaries)
+# ---------------------------------------------------------------------------
+FROM docker.io/library/rust:alpine AS vigil-builder
+
+RUN apk add --no-cache musl-dev
+
+WORKDIR /vigil-rs
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+
+RUN cargo build --release --bin vigild --bin vigil
+
+# ---------------------------------------------------------------------------
+# Stage 2 — final image: Vector (Alpine/musl) + vigil
+# ---------------------------------------------------------------------------
+FROM docker.io/timberio/vector:0.61.0-alpine
+
+COPY --from=vigil-builder /vigil-rs/target/release/vigild /usr/local/bin/vigild
+COPY --from=vigil-builder /vigil-rs/target/release/vigil  /usr/local/bin/vigil
+
+COPY examples/vector-push/vector.toml /etc/vector/vigil-vector.toml
+COPY examples/vector-push/layers/     /etc/vigil/layers/
+
+# Runtime files go to /tmp/vigil (vigild creates it); /run is not writable
+# without root. The vigil client reads the same variable.
+ENV VIGIL_LAYERS=/etc/vigil/layers \
+    VIGIL_PATH_PREFIX=/tmp/vigil
+
+USER 1001
+
+# vigild is PID 1 — dummy-logger and vector are supervised child processes.
+ENTRYPOINT ["/usr/local/bin/vigild"]

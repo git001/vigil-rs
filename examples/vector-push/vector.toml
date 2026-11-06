@@ -1,0 +1,50 @@
+# Vector configuration for the vigil-rs push example.
+#
+# Data flow:
+#   Unix socket /tmp/vector-input.sock  (vigild connects here and pushes ndjson)
+#     → socket source    (mode unix_stream, one JSON object per line)
+#     → remap transform  (add collector=vector, level from stream)
+#     → console sink     (JSON lines → podman logs)
+#
+# vigild is the client, Vector is the server: no curl process, no polling.
+
+# The container runs without root: Vector keeps its state under /tmp.
+data_dir = "/tmp"
+
+[sources.vigil_push]
+type = "socket"
+mode = "unix_stream"
+path = "/tmp/vector-input.sock"
+# Only vigild (same user) needs to connect.
+socket_file_mode = 0o600
+# Each line vigild pushes is one JSON object:
+#   {"timestamp":"…","service":"dummy-logger","stream":"stdout","message":"…"}
+framing.method = "newline_delimited"
+decoding.codec = "json"
+
+[transforms.enrich]
+type   = "remap"
+inputs = ["vigil_push"]
+source = """
+# Tag every record with the collector so downstream sinks (Loki,
+# Elasticsearch, …) can label log streams by source.
+.collector = "vector"
+
+# Map vigild's stream to a log level so level-based routing works.
+if .stream == "stderr" {
+  .level = "error"
+} else {
+  .level = "info"
+}
+
+# Drop socket-source metadata that is not useful downstream.
+del(.source_type)
+del(.host)
+"""
+
+[sinks.console]
+type     = "console"
+inputs   = ["enrich"]
+# JSON lines to stdout: podman logs shows them. In a real setup use loki,
+# elasticsearch, s3 and so on instead.
+encoding.codec = "json"

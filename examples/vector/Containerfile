@@ -12,6 +12,9 @@
 # path, so nothing is printed twice. Vector itself runs with
 # logs-forward: passthrough and writes to the container's stdout.
 #
+# examples/vector-push shows the same pipeline without curl: vigild pushes the
+# lines to Vector's Unix socket.
+#
 # Build (from the vigil-rs repo root):
 #   podman build -f examples/vector/Containerfile -t vigil-vector .
 #

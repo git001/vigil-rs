@@ -477,6 +477,40 @@ podman exec vigil-vector vigil logs -f
 
 ---
 
+## vector-push — Vector via vigild push (Unix socket)
+
+**Features:** `logs-push-socket` · `logs-forward: disabled` · `logs-forward: passthrough` · Vector socket source · non-root container (random UID)
+
+The push variant of `vector`, like `filebeat-push` and `fluentbit`: vigild
+connects to Vector's Unix socket and streams ndjson directly. Vector needs no
+curl process and no exec source.
+
+Data flow:
+
+```
+dummy-logger  →  vigild push task  →  /tmp/vector-input.sock  (Unix socket)
+                                    →  Vector socket source (mode unix_stream, json)
+                                    →  remap transform (add collector=vector, derive level)
+                                    →  console sink (JSON lines → podman logs)
+```
+
+The image runs as UID 1001 with `VIGIL_PATH_PREFIX=/tmp/vigil` and keeps the
+socket and Vector's data under `/tmp`, so it also runs with a random UID as on
+OpenShift.
+
+```
+podman build -f examples/vector-push/Containerfile -t vigil-vector-push .
+podman run --rm --name vigil-vector-push vigil-vector-push
+
+# Expected output:
+# {"collector":"vector","level":"info","message":"INFO ...","service":"dummy-logger","stream":"stdout","timestamp":"..."}
+
+podman exec vigil-vector-push vigil services list
+podman exec vigil-vector-push vigil logs -f
+```
+
+---
+
 ## kubernetes-pod-logs — Kubernetes pod log collector
 
 **Features:** TCP push to Filebeat · event-driven pod watch · in-cluster Kubernetes API · RBAC
