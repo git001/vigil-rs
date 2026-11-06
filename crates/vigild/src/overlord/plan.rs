@@ -395,8 +395,8 @@ mod tests {
         );
     }
 
-    /// The variables the examples reference (a deployment sets them). Their
-    /// certificate paths (`/etc/vigil/certs/ca.pem`) only exist there too.
+    /// The variables the examples reference, as their README sets them. The
+    /// examples load as shipped: no file they name may be missing.
     fn examples_env() -> crate::alert::LoadEnv {
         let parent = [
             (
@@ -419,7 +419,6 @@ mod tests {
         ];
         crate::alert::LoadEnv {
             parent: parent.iter().map(|(k, v)| (k.into(), v.into())).collect(),
-            skip_files: true,
         }
     }
 
@@ -459,12 +458,13 @@ mod tests {
                 checked += 1;
             }
         }
-        // examples/layers-minimal has no layers/ subdir; it is a layers dir itself.
-        let minimal = examples.join("layers-minimal");
-        if minimal.is_dir() {
-            load_with(&minimal, &examples_env())
+        // examples/layers and examples/layers-minimal have no layers/
+        // subdir; they are layers dirs themselves.
+        for name in ["layers", "layers-minimal"] {
+            let dir = examples.join(name);
+            load_with(&dir, &examples_env())
                 .map(|_| ())
-                .unwrap_or_else(|e| panic!("{minimal:?}: {e:#}"));
+                .unwrap_or_else(|e| panic!("{dir:?}: {e:#}"));
             checked += 1;
         }
         assert!(checked > 5, "only {checked} example layer dirs found");

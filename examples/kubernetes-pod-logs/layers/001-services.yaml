@@ -48,7 +48,6 @@ services:
       - VIGIL_LOG_FORMAT
       - RUST_LOG
       - TCP_SINK_*
-      - SOURCE_*
       - DEST_*
       - HEALTHCHECK*
       - MAX_LOG_REQUESTS
@@ -63,7 +62,8 @@ services:
     # Variables read by vigil-log-relay --kubernetes:
     #   NAMESPACE        namespace to watch (required)
     #   POD_SELECTOR     label selector, e.g. "app=myapp" (optional)
-    #   WATCH_INTERVAL   seconds between pod-list refreshes (default: 30)
+    #   WATCH_INTERVAL   seconds between stream-reconnect checks (default: 10);
+    #                    pod discovery itself is event-driven
     #   TCP_SINK_HOST    TCP sink host (default: 127.0.0.1)
     #   TCP_SINK_PORT    TCP sink port (default: 5170)
 
@@ -73,7 +73,8 @@ checks:
     # Verifies the watch loop is running and not stuck.
     # vigil-log-relay serves GET /healthz on 127.0.0.1:9091 (--healthcheck
     # default). Returns 200 while the watch loop ticks, 503 if no tick has been
-    # received within --healthcheck-max-age seconds (default: 90 s = 3× WATCH_INTERVAL).
+    # received within --healthcheck-max-age seconds (default 30 = 3 times the
+    # default WATCH_INTERVAL of 10; the Deployment sets 90 for an interval of 30).
     level: alive
     startup: enabled
     delay: 40s     # first check after one full cycle (WATCH_INTERVAL=30s + margin)

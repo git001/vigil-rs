@@ -31,7 +31,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1 — build vigild + vigil
 # ---------------------------------------------------------------------------
-FROM rust:alpine AS vigil-builder
+FROM docker.io/library/rust:alpine AS vigil-builder
 
 RUN apk add --no-cache musl-dev
 
@@ -44,17 +44,15 @@ RUN cargo build --release --bin vigild --bin vigil
 # ---------------------------------------------------------------------------
 # Stage 2 — final image
 # ---------------------------------------------------------------------------
-FROM alpine:3.21
+FROM docker.io/library/alpine:3.21
 
 RUN apk add --no-cache \
     nginx \
     curl \
     socat
 
-# Fake api binary for the example
-RUN mkdir -p /app && \
-    printf '#!/bin/sh\necho "api listening on 127.0.0.1:3000"\nwhile true; do sleep 60; done\n' \
-    > /app/api && chmod +x /app/api
+# Fake api binary for the example (answers on 127.0.0.1:3000)
+COPY examples/migrate-from-s6/fake-api /app/api
 
 # vigil binaries
 COPY --from=vigil-builder /vigil-rs/target/release/vigild /usr/local/bin/vigild

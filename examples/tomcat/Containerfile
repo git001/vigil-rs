@@ -21,7 +21,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1 — build vigild + vigil (static musl binaries — run on any Linux)
 # ---------------------------------------------------------------------------
-FROM rust:alpine AS vigil-builder
+FROM docker.io/library/rust:alpine AS vigil-builder
 
 RUN apk add --no-cache musl-dev
 
@@ -34,7 +34,7 @@ RUN cargo build --release --bin vigild --bin vigil
 # ---------------------------------------------------------------------------
 # Stage 2 — final image based on the official Tomcat image
 # ---------------------------------------------------------------------------
-FROM tomcat:10.1-jre21-temurin
+FROM docker.io/library/tomcat:10.1-jre21-temurin
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*

@@ -126,10 +126,6 @@ pub(crate) fn prepare(
     env: &crate::alert::LoadEnv,
 ) -> anyhow::Result<(AlertConfig, Client)> {
     let out = resolve_all(cfg, &env.parent)?;
-    #[cfg(test)]
-    if env.skip_files {
-        return Ok((out, Client::new()));
-    }
     let client = http_client(&out)?;
     Ok((out, client))
 }

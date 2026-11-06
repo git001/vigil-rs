@@ -9,6 +9,12 @@ services:
     command: /usr/local/tomcat/bin/catalina.sh run
     startup: enabled
 
+    # vigild passes only PATH, TZ, HOME, USER and LOGNAME by default. The
+    # tomcat image sets JAVA_HOME, CATALINA_HOME, the native library path and
+    # the locale; JAVA_OPTS and CATALINA_OPTS from "podman run -e" should
+    # reach Tomcat too.
+    pass-env-glob: [JAVA_HOME, JAVA_OPTS, JAVA_TOOL_OPTIONS, CATALINA_*, TOMCAT_*, LD_LIBRARY_PATH, LANG, LC_*]
+
     # SIGTERM triggers Tomcat's graceful shutdown sequence:
     #   1. Stop accepting new HTTP connections
     #   2. Drain in-flight requests

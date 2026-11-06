@@ -24,11 +24,12 @@ lifecycle:
 |-----------|---------------------------------------------------------|
 | `ticker`  | Prints a timestamp every second (runs forever)          |
 | `counter` | Counts 1–30 then exits cleanly; auto-restarts           |
-| `canary`  | Crashes after 10 s to demonstrate `on-failure: restart` |
+| `canary`  | Disabled at start; once started with `vigil services start canary`, crashes after 10 s to demonstrate `on-failure: restart` |
 
 ```
 vigild --layers-dir examples/layers-minimal --path-prefix /tmp/vigil-demo &
 vigil --path-prefix /tmp/vigil-demo services list
+vigil --path-prefix /tmp/vigil-demo checks list
 vigil --path-prefix /tmp/vigil-demo logs -f
 ```
 
@@ -50,8 +51,47 @@ receivers that require a specific JSON shape.
 ```bash
 export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 export TEAMS_WEBHOOK_URL=https://your-org.webhook.office.com/webhookb2/...
+export WEBHOOK_URL=http://my-webhook-endpoint:8080/alert
+export WEBHOOK_AUTH="Bearer MY-tok3n"
 export CLUSTER_NAME=prod-eu-1
 vigild --layers-dir examples/alerts-webhook/layers --path-prefix /tmp/vigil-demo
+vigil --path-prefix /tmp/vigil-demo alerts list
+```
+
+---
+
+## http-check — HTTP health check with an alert
+
+**Features:** HTTP check · `tls:` and `proxy:` blocks (commented) · Alertmanager alert
+
+One HTTP check against `https://example.com/` and one Alertmanager alert
+that fires when the check goes down. The commented `tls:` and `proxy:`
+blocks show a private CA, a client certificate and a proxy.
+
+```
+vigild --layers-dir examples/http-check/layers --path-prefix /tmp/vigil-demo &
+vigil --path-prefix /tmp/vigil-demo checks list
+```
+
+---
+
+## alerts — every alert format
+
+**Features:** `webhook` · `alertmanager` · `cloud-events` · `otlp-logs` · `env:` values with `pass-env-glob` · retries · `proxy:` · `tls:` (commented)
+
+One HTTP check and one alert per format, plus a proxy and a full example.
+Every `env:VAR` must be set and allowed by the alert's `pass-env-glob`,
+otherwise vigild refuses the layer. The header of `layers/001-alerts.yaml`
+lists the variables. The `tls:` blocks are commented out because their CA
+files do not exist on a demo machine; an unreadable `tls.ca` makes the layer
+invalid.
+
+```
+export WEBHOOK_AUTH="Bearer MY-tok3n" CLUSTER_NAME=prod-eu-1
+export KUBERNETES_NAMESPACE=shop KUBERNETES_SERVICE_NAME=api
+export ALERTMANAGER_URL=http://alertmanager:9093/api/v2/alerts ALERTMANAGER_AUTH="Bearer MY-tok3n"
+export HTTPS_PROXY=http://corp-proxy.example.com:3128 NO_PROXY=localhost,.internal
+vigild --layers-dir examples/alerts/layers --path-prefix /tmp/vigil-demo &
 vigil --path-prefix /tmp/vigil-demo alerts list
 ```
 
@@ -115,29 +155,37 @@ podman run --rm -p 8080:8080 vigil-hug
 
 ---
 
-## identities — service identity management
+## identities — access control with identities in a layer file
 
-**Features:** exec checks with `service-context` · `kill -0` liveness pattern · flaky service / restart demo
+**Features:** `identities:` in a layer file · HTTP Basic auth · access levels `metrics` / `read` / `write` / `admin` · exec checks with `service-context`
 
-Three lightweight shell services (`counter`, `ticker`, `flaky`) provide
-something observable while demonstrating the identity and user-context
-features of vigil-rs.
+Four users, one per access level, are defined in `layers/010-identities.yaml`.
+Three lightweight shell services (`counter`, `ticker`, `flaky`) give them
+something to look at and control.
 
-- `service-context: <name>` on an exec check inherits the service's
-  `user`, `group`, `working-dir`, and `environment`
+- Identities from layer files are read-only over the API and do not end the
+  bootstrap: root in the container stays admin on the Unix socket.
+- The demo uses the TLS listener on 127.0.0.1:8443 inside the container: there
+  each request gets the access of its user. Over the Unix socket, root in the
+  container is admin anyway (bootstrap).
 - `flaky` exits randomly with a non-zero code to exercise `on-failure: restart`
-  and the backoff logic
+  and the backoff logic.
 
 ```
 podman build -f examples/identities/Containerfile -t vigil-identities .
-podman run --rm vigil-identities
+podman run --rm -d --name vigil-identities vigil-identities
+podman exec vigil-identities vigil identities list
+podman exec vigil-identities \
+  vigil --url https://127.0.0.1:8443 -k -u 'reader:r3ad0nly!' services list
 ```
+
+The Containerfile header shows what each user may and may not do.
 
 ---
 
 ## migrate-from-s6 — side-by-side s6-overlay → vigil-rs migration
 
-**Features:** `logs-forward: disabled` · `after:` · HTTP + TCP checks · migration guide
+**Features:** `logs-forward: disabled` · `logs-push-socket` · `after:` · HTTP + TCP checks · migration guide
 
 Shows the same two-service stack (nginx + API) built twice:
 
@@ -153,16 +201,17 @@ polling loop) just to run a health check. The vigil-rs version expresses the
 same check as two lines of YAML.
 
 Notable vigil-rs layer settings:
-- `logs-forward: disabled` on nginx — nginx access logs go to the internal
-  log buffer only (`vigil logs -f`) and are not printed to `podman logs`
+- `logs-forward: disabled` with `logs-push-socket` on nginx and the API —
+  their lines go to the `log-writer` service (like `s6-log`), which prints
+  them to `podman logs` without vigild's `[service]` prefix
 - `after: [nginx]` on the API service — replaces `dependencies.d/nginx`
 
 ```
 # Build the s6 version
-podman build -f examples/migrate-from-s6/Containerfile.s6 -t vigil-s6-before .
+podman build -f examples/migrate-from-s6/Containerfile.s6 -t migrate-s6-before .
 
 # Build the vigil-rs version
-podman build -f examples/migrate-from-s6/Containerfile -t vigil-s6-after .
+podman build -f examples/migrate-from-s6/Containerfile -t migrate-s6-after .
 ```
 
 ---
@@ -430,7 +479,7 @@ podman exec vigil-vector vigil logs -f
 
 ## kubernetes-pod-logs — Kubernetes pod log collector
 
-**Features:** `after:` · TCP push to Filebeat · dynamic pod watch · in-cluster Kubernetes API · RBAC
+**Features:** TCP push to Filebeat · event-driven pod watch · in-cluster Kubernetes API · RBAC
 
 Collects logs from pods running in a Kubernetes namespace. Designed to run
 **inside** the cluster as a single-container Deployment — no DaemonSet, no
@@ -443,10 +492,11 @@ vigil-rs supervises two services in one container:
 | `pod-log-collector` | `vigil-log-relay --kubernetes`: watches pods, streams logs via Kubernetes API, pushes ndjson to Filebeat via TCP |
 | `filebeat` | Listens on TCP 5170, decodes ndjson, emits enriched JSON to stdout |
 
-The pod list is refreshed every `WATCH_INTERVAL` seconds (default: 30 s):
+Pods are discovered through the Kubernetes watch API, without polling:
 - New pods get a log stream started automatically.
 - Deleted pods have their stream stopped and cleaned up.
-- Crashed streams (pod evicted mid-stream) are restarted on the next cycle.
+- Streams the API server closes (typically every few minutes) are restarted
+  within `WATCH_INTERVAL` seconds (the Deployment sets 30).
 
 Data flow:
 
@@ -458,9 +508,9 @@ Kubernetes API  →  vigil-log-relay --kubernetes
                 →  console sink (JSON lines → kubectl logs)
 ```
 
-If Filebeat or the collector crashes, vigil-rs restarts with exponential
-backoff. `after: [filebeat]` ensures the collector does not push before
-Filebeat's TCP listener is ready.
+If Filebeat or the collector crashes, vigil-rs restarts it with exponential
+backoff. The collector needs no `after: [filebeat]`: it reconnects to the TCP
+sink with backoff until Filebeat listens.
 
 **Log latency:** Filebeat's internal event queue flushes every 10 seconds by
 default (`queue.mem.flush.timeout`). Expect up to ~10 s delay between a log
@@ -472,16 +522,17 @@ reduce latency, add `queue.mem: flush.timeout: 1s` to `filebeat.yml`.
 podman build -f examples/kubernetes-pod-logs/Containerfile \
              -t vigil-k8s-pod-logs .
 
-# Deploy (requires cluster access)
+# Deploy (requires cluster access). The manifests use the namespace
+# zzz-test-build and an OpenShift image stream; adjust both for your cluster.
 kubectl apply -f examples/kubernetes-pod-logs/k8s/rbac.yaml
 kubectl apply -f examples/kubernetes-pod-logs/k8s/deployment.yaml
 
 # Watch logs
-kubectl logs -f -n monitoring deploy/vigil-pod-log-collector
+kubectl logs -f -n zzz-test-build deploy/vigil-pod-log-collector
 
 # Inspect from inside
-kubectl exec -n monitoring deploy/vigil-pod-log-collector -- vigil services list
-kubectl exec -n monitoring deploy/vigil-pod-log-collector -- vigil checks list
+kubectl exec -n zzz-test-build deploy/vigil-pod-log-collector -- vigil services list
+kubectl exec -n zzz-test-build deploy/vigil-pod-log-collector -- vigil checks list
 ```
 
 Required RBAC (`k8s/rbac.yaml`):
@@ -490,7 +541,7 @@ Required RBAC (`k8s/rbac.yaml`):
 rules:
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]

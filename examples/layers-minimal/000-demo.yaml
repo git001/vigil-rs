@@ -8,9 +8,10 @@ summary: Minimal demo — requires only a POSIX shell
 #
 # Then in another terminal:
 #
-#   vigil --path-prefix /tmp/vigil-demo services
-#   vigil --path-prefix /tmp/vigil-demo logs --n 20
-#   vigil --path-prefix /tmp/vigil-demo checks
+#   vigil --path-prefix /tmp/vigil-demo services list
+#   vigil --path-prefix /tmp/vigil-demo logs -n 20
+#   vigil --path-prefix /tmp/vigil-demo checks list
+#   vigil --path-prefix /tmp/vigil-demo services start canary
 
 services:
 
@@ -52,10 +53,13 @@ checks:
     period: 5s
     timeout: 2s
     threshold: 2
-    # Check that the ticker process is running by looking for its marker string.
+    # Check that the ticker process is running by looking for its marker
+    # string. The brackets keep pgrep from matching this check's own command.
     exec:
-      command: pgrep -f "while true; do date"
+      command: pgrep -f "[w]hile true; do date"
 
+  # Reports down when no SSH server listens on port 22; that is expected on
+  # a machine without one and shows what a failing check looks like.
   localhost-ssh:
     level: ready
     startup: enabled

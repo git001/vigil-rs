@@ -214,7 +214,6 @@ async fn delivery_worker_sends_fresh_job() {
 fn env_of(pairs: &[(&str, &str)]) -> crate::alert::LoadEnv {
     crate::alert::LoadEnv {
         parent: pairs.iter().map(|(k, v)| (k.into(), v.into())).collect(),
-        skip_files: false,
     }
 }
 

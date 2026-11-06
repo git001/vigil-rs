@@ -1,6 +1,7 @@
 # vigil-rs identity example
 #
-# Demonstrates per-role access control with four users:
+# Demonstrates per-role access control with four users defined in the layer
+# file 010-identities.yaml:
 #
 #   metrics-bot   m3tr1cs!    metrics  — GET /v1/metrics only
 #   reader        r3ad0nly!   read     — all GET endpoints
@@ -13,33 +14,37 @@
 # Run:
 #   podman run --rm -d --name vigil-identities vigil-identities
 #
-# Bootstrap (add the identities — only needed once while store is empty):
-#   podman exec vigil-identities setup-identities
+# Try it over the TLS listener (127.0.0.1:8443, self-signed certificate):
+# there each request gets the access of its user. Over the Unix socket, root
+# in the container is admin anyway (bootstrap, see 010-identities.yaml), so a
+# password cannot lower its access.
 #
-# Try it:
+#   # the identities, with Source "layer" (root over the Unix socket):
+#   podman exec vigil-identities vigil identities list
+#
 #   # reader can list services:
 #   podman exec vigil-identities \
-#     vigil --url http+unix:///run/vigil/vigild.sock services list \
-#     -u reader:r3ad0nly!
+#     vigil --url https://127.0.0.1:8443 -k -u 'reader:r3ad0nly!' services list
 #
 #   # metrics-bot can fetch metrics:
 #   podman exec vigil-identities \
-#     curl --unix-socket /run/vigil/vigild.sock \
-#          -u metrics-bot:m3tr1cs! http://localhost/v1/metrics
+#     curl -sk -u 'metrics-bot:m3tr1cs!' https://127.0.0.1:8443/v1/metrics
 #
-#   # writer can restart a service:
+#   # metrics-bot is blocked from listing services (403):
 #   podman exec vigil-identities \
-#     vigil services restart counter -u writer:wr1t3acc!
+#     curl -sk -o /dev/null -w '%{http_code}\n' \
+#          -u 'metrics-bot:m3tr1cs!' https://127.0.0.1:8443/v1/services
 #
-#   # metrics-bot is blocked from listing services (returns 403):
+#   # writer can restart a service, reader cannot (403):
 #   podman exec vigil-identities \
-#     curl --unix-socket /run/vigil/vigild.sock \
-#          -u metrics-bot:m3tr1cs! http://localhost/v1/services
+#     vigil --url https://127.0.0.1:8443 -k -u 'writer:wr1t3acc!' services restart counter
+#   podman exec vigil-identities \
+#     vigil --url https://127.0.0.1:8443 -k -u 'reader:r3ad0nly!' services restart counter
 
 # ---------------------------------------------------------------------------
 # Stage 1 — build vigild + vigil
 # ---------------------------------------------------------------------------
-FROM rust:alpine AS vigil-builder
+FROM docker.io/library/rust:alpine AS vigil-builder
 
 RUN apk add --no-cache musl-dev
 
@@ -52,7 +57,7 @@ RUN cargo build --release --bin vigild --bin vigil
 # ---------------------------------------------------------------------------
 # Stage 2 — final image
 # ---------------------------------------------------------------------------
-FROM alpine:3.21
+FROM docker.io/library/alpine:3.21
 
 RUN apk add --no-cache curl
 
@@ -60,13 +65,11 @@ RUN apk add --no-cache curl
 COPY --from=vigil-builder /vigil-rs/target/release/vigild /usr/local/bin/vigild
 COPY --from=vigil-builder /vigil-rs/target/release/vigil  /usr/local/bin/vigil
 
-# Layers and scripts
-COPY examples/identities/layers/    /etc/vigil/layers/
-COPY examples/identities/scripts/setup-identities /usr/local/bin/setup-identities
-RUN chmod +x /usr/local/bin/setup-identities
+# Layers: services and identities
+COPY examples/identities/layers/ /etc/vigil/layers/
 
-RUN mkdir -p /run/vigil
-
-ENTRYPOINT ["/usr/local/bin/vigild", \
-    "--layers-dir", "/etc/vigil/layers", \
-    "--socket",     "/run/vigil/vigild.sock"]
+# The socket is /run/vigil/vigild.sock (default --path-prefix /run/vigil).
+# The TLS listener uses a self-signed certificate that vigild generates; only
+# reachable inside the container here.
+ENTRYPOINT ["/usr/local/bin/vigild", "--layers-dir", "/etc/vigil/layers", \
+    "--tls-addr", "127.0.0.1:8443"]

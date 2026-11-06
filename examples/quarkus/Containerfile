@@ -5,7 +5,7 @@
 #   - ready check via /q/health/ready (Quarkus readiness probe, gates LB traffic)
 #   - on-check-failure restart on persistent liveness failures
 #   - proper SIGTERM → Quarkus graceful shutdown
-#   - forward-logs: enabled (app stdout/stderr visible via "podman logs")
+#   - logs-forward: enabled (app stdout/stderr visible via "podman logs")
 #
 # Build (from the vigil-rs repo root):
 #   podman build -f examples/quarkus/Containerfile -t vigil-quarkus .
@@ -24,7 +24,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1 — build Quarkus application (fast-jar)
 # ---------------------------------------------------------------------------
-FROM maven:3.9-eclipse-temurin-21-alpine AS quarkus-builder
+FROM docker.io/library/maven:3.9-eclipse-temurin-21-alpine AS quarkus-builder
 
 WORKDIR /app
 
@@ -39,7 +39,7 @@ RUN mvn -B package -DskipTests -q
 # ---------------------------------------------------------------------------
 # Stage 2 — build vigild + vigil (static musl binaries)
 # ---------------------------------------------------------------------------
-FROM rust:alpine AS vigil-builder
+FROM docker.io/library/rust:alpine AS vigil-builder
 
 RUN apk add --no-cache musl-dev
 
@@ -52,9 +52,9 @@ RUN cargo build --release --bin vigild --bin vigil
 # ---------------------------------------------------------------------------
 # Stage 3 — final image: lightweight JRE + static vigil binaries
 # ---------------------------------------------------------------------------
-FROM eclipse-temurin:21-alpine
+FROM docker.io/library/eclipse-temurin:21-alpine
 
-# curl is used by the HTTP health check inside vigild
+# curl for trying the API by hand (vigild's HTTP checks do not need it)
 RUN apk add --no-cache curl
 
 # vigil binaries (statically linked musl — work on any Linux libc)

@@ -1,7 +1,7 @@
 # Deploys the vigil-rs kubernetes-pod-logs collector.
 #
 # One replica is sufficient — vigil-rs restarts Filebeat and the
-# pod-log-collector script if either crashes (with exponential backoff).
+# pod-log-collector (vigil-log-relay) if either crashes (with exponential backoff).
 #
 # Set NAMESPACE to the namespace whose pod logs you want to collect.
 # To watch multiple namespaces, deploy one instance per namespace.
@@ -39,13 +39,29 @@ spec:
           image: image-registry.openshift-image-registry.svc:5000/zzz-test-build/vigil-k8s-pod-logs:latest
           imagePullPolicy: Always
 
+          # vigil-rs needs no root and no capabilities. OpenShift's restricted
+          # policy sets the same; on other clusters these lines enforce it.
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+
           env:
             # Namespace to watch for pod logs
             - name: NAMESPACE
               value: "zzz-test-build"
-            # Seconds between pod-list refreshes
+            # Seconds between stream-reconnect checks (pod discovery itself is
+            # event-driven)
             - name: WATCH_INTERVAL
               value: "30"
+            # /healthz answers 503 after this many seconds without a tick; keep
+            # it at least 3 times WATCH_INTERVAL (the default 30 fits the
+            # default interval of 10)
+            - name: HEALTHCHECK_MAX_AGE
+              value: "90"
             # Label selector — omit to collect all pods in the namespace.
             # Examples: "app=myapp"  "app=api,env=prod"  "tier notin (cache)"
             - name: POD_SELECTOR
@@ -68,8 +84,9 @@ spec:
             httpGet:
               path: /v1/checks
               port: 8443
+              # The kubelet does not verify the certificate of HTTPS probes, so
+              # vigild's self-signed certificate works as is.
               scheme: HTTPS
-              insecureSkipTLSVerify: true   # vigild uses a self-signed cert by default
             initialDelaySeconds: 15
             periodSeconds: 30
             timeoutSeconds: 5
@@ -80,7 +97,6 @@ spec:
               path: /v1/checks
               port: 8443
               scheme: HTTPS
-              insecureSkipTLSVerify: true
             initialDelaySeconds: 10
             periodSeconds: 15
             timeoutSeconds: 5
@@ -94,5 +110,5 @@ spec:
               cpu: 200m
               memory: 256Mi
 
-          # vigild Unix socket at /tmp/vigild.sock — not exposed externally
+          # vigild Unix socket at /tmp/vigil/vigild.sock — not exposed externally
           # but useful for: kubectl exec <pod> -- vigil services list

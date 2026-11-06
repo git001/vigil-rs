@@ -25,7 +25,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1 — build vigild + vigil (static musl — runs on any Linux)
 # ---------------------------------------------------------------------------
-FROM rust:alpine AS vigil-builder
+FROM docker.io/library/rust:alpine AS vigil-builder
 
 RUN apk add --no-cache musl-dev
 
@@ -38,7 +38,7 @@ RUN cargo build --release --bin vigild --bin vigil
 # ---------------------------------------------------------------------------
 # Stage 2 — final image
 # ---------------------------------------------------------------------------
-FROM alpine:3.21
+FROM docker.io/library/alpine:3.21
 
 RUN apk add --no-cache \
     caddy \

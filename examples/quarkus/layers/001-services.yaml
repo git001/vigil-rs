@@ -9,6 +9,11 @@ services:
     command: java -jar /opt/quarkus/quarkus-run.jar
     startup: enabled
 
+    # vigild passes only PATH, TZ, HOME, USER and LOGNAME by default. The
+    # JVM options and Quarkus settings from the image or "podman run -e"
+    # (QUARKUS_HTTP_PORT=9090, for example) should reach the application.
+    pass-env-glob: [JAVA_HOME, JAVA_OPTS, JAVA_TOOL_OPTIONS, QUARKUS_*, LANG, LC_*]
+
     # SIGTERM triggers Quarkus's graceful shutdown:
     #   1. Quarkus fires @Observes ShutdownEvent on all beans
     #   2. In-flight HTTP requests are drained

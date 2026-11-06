@@ -17,8 +17,8 @@ services:
     logs-forward: disabled
 
   vector:
-    summary: Vector — consumes vigild SSE stream and emits enriched JSON
-    # Vector reads the vigild SSE stream via its exec source (see vector.toml).
+    summary: Vector — reads the vigild ndjson stream and emits enriched JSON
+    # Vector reads the vigild ndjson stream via its exec source (see vector.toml).
     # The config path is fixed; override by mounting a different file.
     command: vector --config /etc/vector/vector.toml
     startup: enabled

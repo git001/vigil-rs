@@ -1,5 +1,5 @@
 # Stage 1 — build vigild and vigil as static musl binaries
-FROM rust:alpine AS vigil-builder
+FROM docker.io/library/rust:alpine AS vigil-builder
 RUN apk add --no-cache musl-dev
 WORKDIR /vigil-rs
 COPY Cargo.toml Cargo.lock ./
@@ -7,7 +7,7 @@ COPY crates/ crates/
 RUN cargo build --release --bin vigild --bin vigil
 
 # Stage 2 — final image: Fluent Bit (debug variant includes shell + curl)
-FROM fluent/fluent-bit:4.2-debug
+FROM docker.io/fluent/fluent-bit:4.2-debug
 COPY --from=vigil-builder /vigil-rs/target/release/vigild /usr/local/bin/vigild
 COPY --from=vigil-builder /vigil-rs/target/release/vigil  /usr/local/bin/vigil
 COPY examples/fluentbit/fluent-bit.conf /fluent-bit/etc/vigil-fluent-bit.conf

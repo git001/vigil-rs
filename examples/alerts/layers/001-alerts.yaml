@@ -1,5 +1,16 @@
 summary: website health check with multi-format alerting
 
+# To use (every env:VAR below must be set, or vigild refuses the layer):
+#   export WEBHOOK_AUTH="Bearer MY-tok3n"
+#   export CLUSTER_NAME=prod-eu-1
+#   export KUBERNETES_NAMESPACE=shop
+#   export KUBERNETES_SERVICE_NAME=api
+#   export ALERTMANAGER_URL=http://alertmanager:9093/api/v2/alerts
+#   export ALERTMANAGER_AUTH="Bearer MY-tok3n"
+#   export HTTPS_PROXY=http://corp-proxy.example.com:3128
+#   export NO_PROXY=localhost,.internal
+#   vigild --layers-dir examples/alerts/layers --path-prefix /tmp/vigil-demo
+
 # ---------------------------------------------------------------------------
 # Checks
 # ---------------------------------------------------------------------------
@@ -106,9 +117,11 @@ alerts:
     pass-env-glob: [CLUSTER_NAME]
     format: alertmanager
     on-check: [website-alive]
-    tls:
-      ca: /etc/vigil/certs/internal-ca.pem
-      # Alternatively, insecure: true skips the certificate check entirely.
+    # An unreadable tls.ca makes the layer invalid: uncomment these lines
+    # once the CA file exists. Alternatively, insecure: true skips the
+    # certificate check entirely.
+    # tls:
+    #   ca: /etc/vigil/certs/internal-ca.pem
     labels:
       cluster: "env:CLUSTER_NAME"
 
@@ -127,8 +140,8 @@ alerts:
     proxy:
       url: "http://corp-proxy.example.com:3128"
       no-proxy: "localhost, .internal, 10.0.0.0/8"
-    tls:
-      ca: /etc/vigil/certs/proxy-ca.pem
+    # tls:
+    #   ca: /etc/vigil/certs/proxy-ca.pem
     labels:
       cluster: "env:CLUSTER_NAME"
 
@@ -155,5 +168,5 @@ alerts:
     proxy:
       url: "env:HTTPS_PROXY"
       no-proxy: "env:NO_PROXY"
-    tls:
-      ca: /etc/vigil/certs/internal-ca.pem
+    # tls:
+    #   ca: /etc/vigil/certs/internal-ca.pem

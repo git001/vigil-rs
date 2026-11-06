@@ -15,7 +15,7 @@ subreaper via `prctl(PR_SET_CHILD_SUBREAPER)`.
 
 ```dockerfile
 # Stage 1: build
-FROM rust:alpine AS builder
+FROM docker.io/library/rust:alpine AS builder
 RUN apk add --no-cache musl-dev
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
@@ -23,7 +23,7 @@ COPY crates/ crates/
 RUN cargo build --release --bin vigild --bin vigil
 
 # Stage 2: runtime
-FROM alpine:3.21
+FROM docker.io/library/alpine:3.21
 
 COPY --from=builder /src/target/release/vigild /usr/local/bin/vigild
 COPY --from=builder /src/target/release/vigil  /usr/local/bin/vigil

@@ -14,7 +14,7 @@
 #                -t vigil-k8s-pod-logs .
 
 # Stage 1 — build vigil binaries from local source
-FROM rust:1-slim-bookworm AS builder
+FROM docker.io/library/rust:1-slim-bookworm AS builder
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/

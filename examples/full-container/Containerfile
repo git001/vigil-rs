@@ -7,14 +7,14 @@
 #   podman run --rm -p 8080:8080 vigil-h2o
 #
 # Interact with vigild inside the running container:
-#   podman exec <ctr> vigil services
+#   podman exec <ctr> vigil services list
 #   podman exec <ctr> vigil logs
-#   podman exec <ctr> vigil checks
+#   podman exec <ctr> vigil checks list
 
 # ---------------------------------------------------------------------------
 # Stage 1 — build vigild + vigil
 # ---------------------------------------------------------------------------
-FROM rust:1-bookworm AS vigil-builder
+FROM docker.io/library/rust:1-bookworm AS vigil-builder
 
 WORKDIR /vigil-rs
 COPY Cargo.toml Cargo.lock ./
@@ -25,7 +25,7 @@ RUN cargo build --release --bin vigild --bin vigil
 # ---------------------------------------------------------------------------
 # Stage 2 — final image
 # ---------------------------------------------------------------------------
-FROM debian:bookworm-slim
+FROM docker.io/library/debian:bookworm-slim
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \

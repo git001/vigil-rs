@@ -7,7 +7,7 @@
 # If either crashes, vigil-rs restarts it with exponential backoff.
 #
 # Prerequisites:
-#   - ServiceAccount with get/list on pods and get on pods/log (see k8s/rbac.yaml)
+#   - ServiceAccount with get/list/watch on pods and get on pods/log (see k8s/rbac.yaml)
 #   - NAMESPACE env var set to the target namespace
 #
 # Build (from repo root):
@@ -18,8 +18,10 @@
 #   kubectl apply -f examples/kubernetes-pod-logs/k8s/rbac.yaml
 #   kubectl apply -f examples/kubernetes-pod-logs/k8s/deployment.yaml
 
-# Stage 1 — pull binaries from the published vigil-rs image (no local build needed)
-FROM ghcr.io/git001/vigil-rs:2 AS vigil-binaries
+# Stage 1 — pull binaries from the published vigil-rs image (no local build
+# needed). The layer and the settings below need vigil-rs 4; until 4.0 is
+# released, build with Containerfile.build instead.
+FROM ghcr.io/git001/vigil-rs:4 AS vigil-binaries
 
 # Stage 2 — final image: Filebeat (Ubuntu) + vigil binaries
 FROM docker.elastic.co/beats/filebeat:8.17.0

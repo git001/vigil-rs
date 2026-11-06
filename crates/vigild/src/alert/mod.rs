@@ -67,10 +67,6 @@ pub struct LoadEnv {
     /// vigild's environment, which each alert sees through its `pass-env*`
     /// policy.
     pub parent: Vec<(std::ffi::OsString, std::ffi::OsString)>,
-    /// Do not read the files an alert names (`tls:`): only
-    /// for the shipped examples, whose paths exist in a deployment.
-    #[cfg(test)]
-    pub skip_files: bool,
 }
 
 impl LoadEnv {
@@ -78,8 +74,6 @@ impl LoadEnv {
     pub fn process() -> Self {
         Self {
             parent: std::env::vars_os().collect(),
-            #[cfg(test)]
-            skip_files: false,
         }
     }
 }

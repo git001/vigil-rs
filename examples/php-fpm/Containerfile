@@ -24,7 +24,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1 — build vigild + vigil (static musl binaries)
 # ---------------------------------------------------------------------------
-FROM rust:alpine AS vigil-builder
+FROM docker.io/library/rust:alpine AS vigil-builder
 
 RUN apk add --no-cache musl-dev
 
@@ -37,7 +37,7 @@ RUN cargo build --release --bin vigild --bin vigil
 # ---------------------------------------------------------------------------
 # Stage 2 — final image: Alpine + PHP-FPM
 # ---------------------------------------------------------------------------
-FROM alpine:3.21
+FROM docker.io/library/alpine:3.21
 
 # php83-fpm: the process manager
 # procps:    provides pgrep (used by the vigil exec health check)

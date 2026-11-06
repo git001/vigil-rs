@@ -1,0 +1,16 @@
+#!/bin/sh
+# Stand-in for the real backend: answers every HTTP request on
+# 127.0.0.1:3000 with "api ok", so nginx and the api-ready check have
+# something to talk to. Arguments (--listen …) are accepted and ignored.
+if [ "$1" = "--respond" ]; then
+    # One connection: read the request headers up to the empty line, then
+    # answer. Answering before reading makes nginx see a reset (502).
+    cr=$(printf '\r')
+    while IFS= read -r line; do
+        if [ "$line" = "$cr" ] || [ -z "$line" ]; then break; fi
+    done
+    printf 'HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 7\r\n\r\napi ok\n'
+    exit 0
+fi
+echo "api listening on 127.0.0.1:3000"
+exec socat TCP-LISTEN:3000,bind=127.0.0.1,fork,reuseaddr EXEC:"/app/api --respond"
