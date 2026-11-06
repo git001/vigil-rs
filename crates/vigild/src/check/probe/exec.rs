@@ -85,38 +85,52 @@ pub(super) async fn probe_exec(
         }
     };
 
-    let command = exec.command.clone();
-    let working_dir = eff_working_dir.map(str::to_owned);
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.args(["-c", &exec.command]);
+    apply_env(&mut cmd, env);
+    if let Some(dir) = eff_working_dir {
+        cmd.current_dir(dir);
+    }
+    apply_credentials(&mut cmd, creds);
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::null());
+    // Own process group: a timed-out check is killed with everything it
+    // started (e.g. both sides of `curl … | grep …`).
+    cmd.process_group(0);
 
-    match timeout(timeout_dur, async move {
-        let mut cmd = tokio::process::Command::new("sh");
-        cmd.args(["-c", &command]);
-
-        apply_env(&mut cmd, env);
-        if let Some(dir) = &working_dir {
-            cmd.current_dir(dir);
+    let spawned_at = std::time::Instant::now();
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            debug!(command = %exec.command, error = %e, "exec probe: process did not start");
+            return false;
         }
-        apply_credentials(&mut cmd, creds);
-
-        cmd.stdout(std::process::Stdio::null());
-        cmd.stderr(std::process::Stdio::null());
-        let spawned_at = std::time::Instant::now();
-        let mut child = cmd.spawn().ok()?;
-        crate::reaper::wait_child(&mut child, spawned_at).await.ok()
-    })
+    };
+    match timeout(
+        timeout_dur,
+        crate::reaper::wait_child(&mut child, spawned_at),
+    )
     .await
     {
-        Ok(Some(status)) => {
+        Ok(Ok(status)) => {
             let passed = status.success();
             debug!(command = %exec.command, exit_code = ?status.code(), passed, "exec probe");
             passed
         }
-        Ok(None) => {
-            debug!(command = %exec.command, "exec probe: process did not start");
+        Ok(Err(e)) => {
+            debug!(command = %exec.command, error = %e, "exec probe: waiting failed");
             false
         }
         Err(_) => {
-            debug!(command = %exec.command, "exec probe timed out");
+            debug!(command = %exec.command, "exec probe timed out, killing it");
+            if let Some(pid) = child.id() {
+                let _ = nix::sys::signal::killpg(
+                    nix::unistd::Pid::from_raw(pid as i32),
+                    nix::sys::signal::Signal::SIGKILL,
+                );
+            }
+            // Reap it; SIGKILL cannot be ignored, so this returns at once.
+            let _ = crate::reaper::wait_child(&mut child, spawned_at).await;
             false
         }
     }

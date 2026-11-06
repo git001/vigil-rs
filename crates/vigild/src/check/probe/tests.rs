@@ -276,6 +276,40 @@ async fn exec_check_timeout_returns_false() {
 }
 
 #[tokio::test]
+async fn timed_out_exec_check_is_killed_with_its_children() {
+    let dir = tempfile::tempdir().unwrap();
+    let pids = dir.path().join("pids");
+    // A pipeline: the shell plus two children, none of which ends.
+    let cmd = format!(
+        "echo $$ > {p}; sleep 30 | sleep 31 & echo $! >> {p}; wait",
+        p = pids.display()
+    );
+    let started = std::time::Instant::now();
+    let ok = probe_exec(
+        &exec(&cmd),
+        Duration::from_millis(300),
+        &empty_svc_configs(),
+    )
+    .await;
+    assert!(!ok);
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "returned at once"
+    );
+
+    let pids: Vec<i32> = std::fs::read_to_string(&pids)
+        .unwrap()
+        .lines()
+        .map(|l| l.trim().parse().unwrap())
+        .collect();
+    assert_eq!(pids.len(), 2, "{pids:?}");
+    for pid in pids {
+        let alive = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok();
+        assert!(!alive, "process {pid} of the timed-out check still runs");
+    }
+}
+
+#[tokio::test]
 async fn exec_check_env_var_inherited() {
     let mut e = exec("test \"$VIGIL_TEST_VAR\" = hello");
     e.environment
