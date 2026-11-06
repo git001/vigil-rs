@@ -15,7 +15,7 @@ use std::sync::{
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::body::Incoming;
@@ -64,12 +64,20 @@ fn now_secs() -> u64 {
 // HTTP server
 // ---------------------------------------------------------------------------
 
-/// Serve `GET /healthz` on `addr` (e.g. `127.0.0.1:9091`).
-/// Returns 200 while liveness is fresh, 503 when stale.
-pub async fn serve(addr: String, liveness: Arc<Liveness>) -> Result<()> {
-    let listener = TcpListener::bind(&addr).await?;
-    info!(addr = %addr, "healthcheck listening on GET /healthz");
+/// Bind the healthcheck address (e.g. `127.0.0.1:9091`) at startup, so a
+/// bind error is fatal. Port `0` lets the kernel pick a free port; the log
+/// line shows the one actually bound.
+pub async fn bind(addr: &str) -> Result<TcpListener> {
+    let listener = TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("binding healthcheck address {addr}"))?;
+    info!(addr = %listener.local_addr()?, "healthcheck listening on GET /healthz");
+    Ok(listener)
+}
 
+/// Serve `GET /healthz` on a listener from [`bind`].
+/// Returns 200 while liveness is fresh, 503 when stale.
+pub async fn serve(listener: TcpListener, liveness: Arc<Liveness>) -> Result<()> {
     loop {
         let (stream, _) = listener.accept().await?;
         let liveness = Arc::clone(&liveness);

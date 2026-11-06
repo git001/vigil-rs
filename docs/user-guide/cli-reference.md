@@ -494,8 +494,8 @@ separately by the kube library).
 
 | Flag | Default | Description |
 |---|---|---|
-| `--healthcheck HOST:PORT` | `127.0.0.1:9091` | Listen address for `GET /healthz` |
-| `--healthcheck-max-age SECS` | `90` | Seconds without a tick before `/healthz` returns `503 stale` |
+| `--healthcheck HOST:PORT` | `127.0.0.1:9091` | Listen address for `GET /healthz`; port `0` picks a free port (logged at startup). The relay does not start if the address cannot be bound |
+| `--healthcheck-max-age SECS` | `30` | Seconds without a tick before `/healthz` returns `503 stale` |
 
 ### Other
 

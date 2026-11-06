@@ -65,7 +65,7 @@ org.opencontainers.image.licenses = AGPL-3.0-only
 |------|---------|---------|-------------|
 | `--layers-dir <PATH>` | `VIGIL_LAYERS` | `/etc/vigil/layers` | Directory containing layer YAML files |
 | `--socket <PATH>` | `VIGIL_SOCKET` | `/run/vigil/vigild.sock` | Unix socket for the HTTP API |
-| `--tls-addr <ADDR>` | `VIGIL_TLS_ADDR` | *(disabled)* | `host:port` for the HTTPS API |
+| `--tls-addr <ADDR>` | `VIGIL_TLS_ADDR` | *(disabled)* | `host:port` for the HTTPS API; port `0` picks a free port (shown in the log and as `https-address` in `vigil system-info`). vigild does not start if the address cannot be bound |
 | `--cert <PATH>` | `VIGIL_CERT` | *(auto-generated)* | PEM certificate for TLS |
 | `--key <PATH>` | `VIGIL_KEY` | *(auto-generated)* | PEM private key for TLS |
 | `--reaper` | `VIGIL_REAPER` | *(auto when PID 1)* | Enable zombie-reaping (init mode) |

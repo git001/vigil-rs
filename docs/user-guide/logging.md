@@ -473,7 +473,7 @@ Key parameters:
 --reconnect-max MS         Backoff ceiling in ms (default: 30000)
 --reconnect-retries N      Max failures before exit, 0 = unlimited (default: 0)
 --healthcheck HOST:PORT    Address for GET /healthz endpoint (default: 127.0.0.1:9091)
---healthcheck-max-age SECS Seconds without tick before /healthz returns 503 (default: 90)
+--healthcheck-max-age SECS Seconds without tick before /healthz returns 503 (default: 30)
 --include REGEX            Forward a line only if it matches this regex (repeatable)
 --exclude REGEX            Drop a line if it matches this regex (applied after --include, repeatable)
 ```

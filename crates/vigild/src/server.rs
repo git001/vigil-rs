@@ -169,12 +169,25 @@ pub async fn serve_unix(listener: UnixListener, router: Router) -> anyhow::Resul
 // HTTPS server
 // ---------------------------------------------------------------------------
 
-pub async fn serve_tls(addr: &str, acceptor: TlsAcceptor, router: Router) -> anyhow::Result<()> {
-    let listener = TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("binding TLS address {addr}"))?;
-    info!("TLS API listening on {addr}");
+/// Bind the TLS API address (`--tls-addr`) before any service starts, so a
+/// bind error is fatal at startup. Port `0` lets the kernel pick a free
+/// port; the log line and `/v1/system-info` (`https-address`) show the one
+/// actually bound.
+pub fn bind_tls(addr: &str) -> anyhow::Result<TcpListener> {
+    let listener =
+        std::net::TcpListener::bind(addr).with_context(|| format!("binding TLS address {addr}"))?;
+    listener.set_nonblocking(true)?;
+    let listener = TcpListener::from_std(listener)?;
+    info!("TLS API listening on {}", listener.local_addr()?);
+    Ok(listener)
+}
 
+/// Serve the API over TLS on an already bound listener (see [`bind_tls`]).
+pub async fn serve_tls(
+    listener: TcpListener,
+    acceptor: TlsAcceptor,
+    router: Router,
+) -> anyhow::Result<()> {
     loop {
         let (stream, peer) = listener.accept().await?;
         let acceptor = acceptor.clone();

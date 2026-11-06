@@ -120,10 +120,8 @@ async fn main() -> Result<()> {
 
     // Healthcheck HTTP server
     let liveness = Liveness::new(cli.healthcheck_max_age);
-    tokio::spawn(healthcheck::serve(
-        cli.healthcheck.clone(),
-        liveness.clone(),
-    ));
+    let health_listener = healthcheck::bind(&cli.healthcheck).await?;
+    tokio::spawn(healthcheck::serve(health_listener, liveness.clone()));
 
     // Connection + reconnect config for HTTP source modes
     let source_conn = SourceConnConfig {

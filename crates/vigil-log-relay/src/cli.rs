@@ -456,7 +456,8 @@ pub struct Cli {
     pub dest_reconnect_max: u64,
 
     // ---- Health Check -----------------------------------------------------
-    /// Address serving GET /healthz → 200 ok / 503 stale.
+    /// Address serving GET /healthz → 200 ok / 503 stale. Port 0 picks a
+    /// free port (logged at startup).
     #[arg(
         long,
         env = "HEALTHCHECK",
