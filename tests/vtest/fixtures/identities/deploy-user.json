@@ -1,0 +1,10 @@
+{
+  "identities": {
+    "deploy": {
+      "access": "write",
+      "basic": {
+        "password-hash": "$6$testsalt$51yaaBMXXXt5vK522YOlIMZ267vqHtMIzc2klcsu3EEv/bkRDU9g3UmkypXf.NvlpPpIPK1nX5zdbCeJBiQbB/"
+      }
+    }
+  }
+}

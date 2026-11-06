@@ -97,12 +97,7 @@ client c1 -connect ${tmpdir}/vigild.sock {
 
 # Step 2: add the TLS identity (Unix socket still works via local-admin)
 shell {
-	python3 -c "
-import json
-ca = open('${tmpdir}/certs/ca.crt').read()
-p = {'identities': {'ops': {'access': 'read', 'tls': {'ca-cert': ca}}}}
-open('${tmpdir}/identity_payload.json', 'w').write(json.dumps(p))
-"
+	${vtestdir}/helpers/tls_identity.py ops read ${tmpdir}/certs/ca.crt ${tmpdir}/identity_payload.json
 	curl -sf \
 		--unix-socket ${tmpdir}/vigild.sock \
 		-X POST http://localhost/v1/identities \

@@ -90,7 +90,9 @@ on its own:
   (`${vtestdir}/fixtures/identities/admin-user.json`); see
   [fixtures/README.md](fixtures/README.md) for the test users.
 - `helpers/`: small standalone scripts, e.g. `helpers/http_capture.py` (an
-  HTTP server that records POST bodies and reports its port in a file).
+  HTTP server that records POST bodies and reports its port in a file) or
+  `helpers/tls_identity.py` (request body for a TLS identity whose CA the
+  test creates at runtime).
 
 Prefer a static file over building configs, bodies or scripts inside a
 `.vtc` (heredocs, inline JSON, `python3 -c`).

@@ -86,30 +86,20 @@ shell {
 		identities add-local local-admin --access admin
 }
 
-# 2. basic identity (deploy / secret) — must use REST API, no vigil sub-command yet
+# 2. basic identity (deploy / secret, access write) from a static request
+#    body: fixtures/identities/deploy-user.json (hash and how it was made are
+#    in fixtures/README.md).
 shell {
-	openssl passwd -6 -salt testsalt secret > ${tmpdir}/hash.txt
-	python3 -c "
-import json
-h = open('${tmpdir}/hash.txt').read().strip()
-p = {'identities': {'deploy': {'access': 'write', 'basic': {'password-hash': h}}}}
-open('${tmpdir}/basic_payload.json', 'w').write(json.dumps(p))
-"
 	curl -sf \
 		--unix-socket ${tmpdir}/vigild.sock \
 		-X POST http://localhost/v1/identities \
 		-H "Content-Type: application/json" \
-		-d @${tmpdir}/basic_payload.json > /dev/null
+		-d @${vtestdir}/fixtures/identities/deploy-user.json > /dev/null
 }
 
 # 3. TLS identity (ops) — any cert signed by our CA gets read access
 shell {
-	python3 -c "
-import json
-ca = open('${tmpdir}/certs/ca.crt').read()
-p = {'identities': {'ops': {'access': 'read', 'tls': {'ca-cert': ca}}}}
-open('${tmpdir}/tls_payload.json', 'w').write(json.dumps(p))
-"
+	${vtestdir}/helpers/tls_identity.py ops read ${tmpdir}/certs/ca.crt ${tmpdir}/tls_payload.json
 	curl -sf \
 		--unix-socket ${tmpdir}/vigild.sock \
 		-X POST http://localhost/v1/identities \

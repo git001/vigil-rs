@@ -28,6 +28,7 @@ Request bodies for `POST /v1/identities` with test-only basic-auth users:
 |---|---|---|---|---|
 | `admin-user.json` | `admin-user` | `admpass` | admin | `openssl passwd -6 -salt testhttps admpass` |
 | `extra-user.json` | `extra-user` | `extrapass` | read | `openssl passwd -6 -salt testextra extrapass` |
+| `deploy-user.json` | `deploy` | `secret` | write | `openssl passwd -6 -salt testsalt secret` |
 
 Use them as an example of how to create an identity over the Unix socket:
 

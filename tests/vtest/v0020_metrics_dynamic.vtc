@@ -84,17 +84,13 @@ shell {
 	grep -qF 'vigil_check_failure_count_total{check="dummy-check"}' ${tmpdir}/metrics2.txt
 }
 
+# The counter is at least 1 (the line ends with its value).
 shell {
-	python3 -c "
-import re, sys
-txt = open('${tmpdir}/metrics2.txt').read()
-m = re.search(r'vigil_alert_fire_count_total\{alert=\"test-alert\"\} (\d+)', txt)
-if not m:
-    sys.exit('vigil_alert_fire_count_total not found in: ' + txt[:500])
-v = int(m.group(1))
-assert v >= 1, f'expected >= 1, got {v}'
-print(f'alert_fire_count = {v}  OK')
-"
+	v=$(grep -F 'vigil_alert_fire_count_total{alert="test-alert"}' ${tmpdir}/metrics2.txt | awk '{print $NF}')
+	if [ -z "$v" ] || [ "$v" -lt 1 ]; then
+		echo "expected vigil_alert_fire_count_total >= 1, got '$v'"
+		exit 1
+	fi
 }
 
 # ---------------------------------------------------------------------------
