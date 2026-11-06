@@ -259,9 +259,7 @@ impl Actor {
     }
 
     pub(super) async fn handle_update_config(&mut self, config: vigil_types::plan::ServiceConfig) {
-        let old = serde_json::to_string(&self.config).unwrap_or_default();
-        let new = serde_json::to_string(&config).unwrap_or_default();
-        if old == new {
+        if self.config == config {
             return;
         }
         info!(service = %self.name, "config changed, applies from the next start");

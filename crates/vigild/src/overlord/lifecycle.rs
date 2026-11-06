@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
+use indexmap::IndexMap;
 use tokio::sync::oneshot;
 use tracing::{error, info, warn};
 use vigil_types::api::CheckStatus;
@@ -89,7 +90,7 @@ impl Overlord {
             // Restart the check actor if its config or its service context
             // changed since the last (re)plan.
             if let Some(entry) = self.checks.get(name) {
-                if same_json(&entry.config, config) && same_json(&entry.context, &context) {
+                if entry.config == *config && entry.context == context {
                     continue;
                 }
                 info!(check = %name, "check config changed, restarting check actor");
@@ -246,39 +247,9 @@ impl Overlord {
     async fn apply_plan(&mut self, plan: vigil_types::plan::Plan) {
         let old_plan = std::mem::replace(&mut self.plan, plan);
 
-        let services_changed = self
-            .plan
-            .services
-            .iter()
-            .filter(|(n, c)| {
-                old_plan.services.get(*n).is_some_and(|o| {
-                    serde_json::to_string(o).unwrap_or_default()
-                        != serde_json::to_string(*c).unwrap_or_default()
-                })
-            })
-            .count();
-        let checks_changed = self
-            .plan
-            .checks
-            .iter()
-            .filter(|(n, c)| {
-                old_plan.checks.get(*n).is_some_and(|o| {
-                    serde_json::to_string(o).unwrap_or_default()
-                        != serde_json::to_string(*c).unwrap_or_default()
-                })
-            })
-            .count();
-        let alerts_changed = self
-            .plan
-            .alerts
-            .iter()
-            .filter(|(n, c)| {
-                old_plan.alerts.get(*n).is_some_and(|o| {
-                    serde_json::to_string(o).unwrap_or_default()
-                        != serde_json::to_string(*c).unwrap_or_default()
-                })
-            })
-            .count();
+        let services_changed = count_changed(&old_plan.services, &self.plan.services);
+        let checks_changed = count_changed(&old_plan.checks, &self.plan.checks);
+        let alerts_changed = count_changed(&old_plan.alerts, &self.plan.alerts);
         info!(
             services = self.plan.services.len(),
             checks = self.plan.checks.len(),
@@ -373,7 +344,9 @@ impl Overlord {
     }
 }
 
-/// Whether two configs are equal (compared as JSON).
-fn same_json<T: serde::Serialize>(a: &T, b: &T) -> bool {
-    serde_json::to_string(a).ok() == serde_json::to_string(b).ok()
+/// Entries present in both maps whose config differs (for the replan log).
+fn count_changed<V: PartialEq>(old: &IndexMap<String, V>, new: &IndexMap<String, V>) -> usize {
+    new.iter()
+        .filter(|(name, cfg)| old.get(*name).is_some_and(|o| o != *cfg))
+        .count()
 }

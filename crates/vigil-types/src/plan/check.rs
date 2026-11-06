@@ -19,7 +19,7 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct HttpCheck {
     pub url: String,
@@ -59,14 +59,14 @@ impl Default for HttpCheck {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TcpCheck {
     pub host: Option<String>,
     pub port: u16,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ExecCheck {
     pub command: String,
@@ -96,7 +96,7 @@ pub struct ExecCheck {
     pub working_dir: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct CheckConfig {
     /// `override: merge|replace` in the layer file.
@@ -149,25 +149,13 @@ impl CheckConfig {
 }
 
 pub(super) fn merge_check(base: &mut CheckConfig, overlay: &CheckConfig) {
-    macro_rules! opt {
-        ($f:ident) => {
-            if overlay.$f.is_some() {
-                base.$f = overlay.$f.clone();
-            }
-        };
-    }
-
-    opt!(level);
-    opt!(startup);
-
-    opt!(delay);
-    opt!(period);
-    opt!(timeout);
-    opt!(threshold);
-    opt!(service);
-    opt!(http);
-    opt!(tcp);
-    opt!(exec);
+    merge_opt!(
+        base,
+        overlay,
+        [
+            level, startup, delay, period, timeout, threshold, service, http, tcp, exec
+        ]
+    );
 }
 
 // ---------------------------------------------------------------------------

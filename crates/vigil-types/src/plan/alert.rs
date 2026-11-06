@@ -5,7 +5,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use super::Override;
+use super::{Override, append_unique};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -21,7 +21,7 @@ pub enum AlertFormat {
     OtlpLogs,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct AlertConfig {
     /// `override: merge|replace` in the layer file.
@@ -165,47 +165,31 @@ pub struct AlertsBlock {
 }
 
 pub(super) fn merge_alert(base: &mut AlertConfig, overlay: &AlertConfig) {
-    macro_rules! opt {
-        ($f:ident) => {
-            if overlay.$f.is_some() {
-                base.$f = overlay.$f.clone();
-            }
-        };
-    }
-
     if !overlay.url.is_empty() {
         base.url = overlay.url.clone();
     }
-    opt!(format);
-    opt!(tls_insecure);
-    opt!(tls_ca);
-    opt!(proxy);
-    opt!(proxy_ca);
-    opt!(no_proxy);
-    opt!(retry_attempts);
-    opt!(body_template);
+    merge_opt!(
+        base,
+        overlay,
+        [
+            format,
+            tls_insecure,
+            tls_ca,
+            proxy,
+            proxy_ca,
+            no_proxy,
+            retry_attempts,
+            body_template
+        ]
+    );
     if !overlay.retry_backoff.is_empty() {
         base.retry_backoff = overlay.retry_backoff.clone();
     }
-    base.headers
-        .extend(overlay.headers.iter().map(|(k, v)| (k.clone(), v.clone())));
-    base.labels
-        .extend(overlay.labels.iter().map(|(k, v)| (k.clone(), v.clone())));
-    base.send_info_fields.extend(
-        overlay
-            .send_info_fields
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone())),
-    );
-    for (base, overlay) in [
-        (&mut base.on_check, &overlay.on_check),
-        (&mut base.on_service, &overlay.on_service),
-        (&mut base.on_vigild, &overlay.on_vigild),
-    ] {
-        for c in overlay {
-            if !base.contains(c) {
-                base.push(c.clone());
-            }
-        }
-    }
+    base.headers.extend(overlay.headers.clone());
+    base.labels.extend(overlay.labels.clone());
+    base.send_info_fields
+        .extend(overlay.send_info_fields.clone());
+    append_unique(&mut base.on_check, &overlay.on_check);
+    append_unique(&mut base.on_service, &overlay.on_service);
+    append_unique(&mut base.on_vigild, &overlay.on_vigild);
 }

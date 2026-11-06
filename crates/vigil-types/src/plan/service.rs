@@ -5,7 +5,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use super::Override;
+use super::{Override, append_unique};
 use crate::signal::StopSignal;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
@@ -148,7 +148,7 @@ pub enum OnExit {
     Ignore,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ServiceConfig {
     /// `override: merge|replace` in the layer file.
@@ -282,101 +282,57 @@ impl ServiceConfig {
 }
 
 pub(super) fn merge_service(base: &mut ServiceConfig, overlay: &ServiceConfig) {
-    macro_rules! opt {
-        ($f:ident) => {
-            if overlay.$f.is_some() {
-                base.$f = overlay.$f.clone();
-            }
-        };
-    }
-
-    opt!(summary);
-    opt!(description);
-    opt!(command);
-    opt!(service_type);
-    opt!(schedule);
-    opt!(schedule_tz);
-    opt!(startup);
-    for v in &overlay.after {
-        if !base.after.contains(v) {
-            base.after.push(v.clone());
-        }
-    }
-    for v in &overlay.before {
-        if !base.before.contains(v) {
-            base.before.push(v.clone());
-        }
-    }
-    for v in &overlay.requires {
-        if !base.requires.contains(v) {
-            base.requires.push(v.clone());
-        }
-    }
-    base.environment.extend(
-        overlay
-            .environment
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone())),
+    merge_opt!(
+        base,
+        overlay,
+        [
+            summary,
+            description,
+            command,
+            service_type,
+            schedule,
+            schedule_tz,
+            startup,
+            pass_env,
+            user,
+            user_id,
+            group,
+            group_id,
+            working_dir,
+            stop_signal,
+            kill_delay,
+            ready,
+            ready_check,
+            ready_timeout,
+            healthy_time,
+            on_success,
+            on_failure,
+            backoff_delay,
+            backoff_factor,
+            backoff_limit,
+            logs_forward,
+            logs_push_socket,
+            logs_push_addr,
+            logs_push_format,
+        ]
     );
-    for v in &overlay.env_file {
-        if !base.env_file.contains(v) {
-            base.env_file.push(v.clone());
-        }
-    }
-    opt!(pass_env);
-    for v in &overlay.pass_env_glob {
-        if !base.pass_env_glob.contains(v) {
-            base.pass_env_glob.push(v.clone());
-        }
-    }
-    for v in &overlay.pass_env_regex {
-        if !base.pass_env_regex.contains(v) {
-            base.pass_env_regex.push(v.clone());
-        }
-    }
-    opt!(user);
-    opt!(user_id);
-    opt!(group);
-    opt!(group_id);
-    opt!(working_dir);
-    opt!(stop_signal);
-    opt!(kill_delay);
-    opt!(ready);
-    opt!(ready_check);
-    opt!(ready_timeout);
-    opt!(healthy_time);
-    if let Some(o) = &overlay.watch_files {
-        let w = base.watch_files.get_or_insert_with(WatchFiles::default);
-        if o.on_change.is_some() {
-            w.on_change = o.on_change;
-        }
-        if o.interval.is_some() {
-            w.interval = o.interval.clone();
-        }
-        if o.paths.is_some() {
-            w.paths = o.paths.clone();
-        }
-    }
+    append_unique(&mut base.after, &overlay.after);
+    append_unique(&mut base.before, &overlay.before);
+    append_unique(&mut base.requires, &overlay.requires);
+    append_unique(&mut base.env_file, &overlay.env_file);
+    append_unique(&mut base.pass_env_glob, &overlay.pass_env_glob);
+    append_unique(&mut base.pass_env_regex, &overlay.pass_env_regex);
+    base.environment.extend(overlay.environment.clone());
+    base.exit_code_map.extend(overlay.exit_code_map.clone());
+    base.on_check_failure
+        .extend(overlay.on_check_failure.clone());
     if !overlay.success_exit_codes.is_empty() {
         base.success_exit_codes = overlay.success_exit_codes.clone();
     }
-    base.exit_code_map
-        .extend(overlay.exit_code_map.iter().map(|(k, v)| (*k, *v)));
-    opt!(on_success);
-    opt!(on_failure);
-    base.on_check_failure.extend(
-        overlay
-            .on_check_failure
-            .iter()
-            .map(|(k, v)| (k.clone(), *v)),
-    );
-    opt!(backoff_delay);
-    opt!(backoff_factor);
-    opt!(backoff_limit);
-    opt!(logs_forward);
-    opt!(logs_push_socket);
-    opt!(logs_push_addr);
-    opt!(logs_push_format);
+    if let Some(o) = &overlay.watch_files {
+        let w = base.watch_files.get_or_insert_with(WatchFiles::default);
+        merge_opt!(w, o, [on_change, interval, paths]);
+    }
 }
 
 #[cfg(test)]

@@ -459,3 +459,26 @@ fn unknown_fields_are_rejected_with_the_field_name() {
         );
     }
 }
+
+#[test]
+fn service_merge_rules() {
+    let base: Layer = serde_yaml::from_str(
+        "services:\n  app:\n    command: /usr/bin/app\n    after: [db]\n    environment:\n      MODE: prod\n      LOG: info\n    success-exit-codes: [0, 3]\n    exit-code-map: {143: 0}\n    on-check-failure: {alive: restart}\n    user: app\n",
+    )
+    .unwrap();
+    let overlay: Layer = serde_yaml::from_str(
+        "services:\n  app:\n    after: [db, cache]\n    environment:\n      LOG: debug\n    success-exit-codes: [0]\n    exit-code-map: {137: 1}\n    on-check-failure: {ready: ignore}\n    kill-delay: 10s\n",
+    )
+    .unwrap();
+    let plan = Plan::from_layers(vec![base, overlay]);
+    let app = &plan.services["app"];
+    assert_eq!(app.command.as_deref(), Some("/usr/bin/app"), "unset: kept");
+    assert_eq!(app.user.as_deref(), Some("app"));
+    assert_eq!(app.kill_delay.as_deref(), Some("10s"), "set: taken");
+    assert_eq!(app.after, ["db", "cache"], "lists: appended, no duplicates");
+    assert_eq!(app.environment["MODE"], "prod", "maps: extended");
+    assert_eq!(app.environment["LOG"], "debug", "maps: overlay wins");
+    assert_eq!(app.success_exit_codes, [0], "success-exit-codes: replaced");
+    assert_eq!(app.exit_code_map.len(), 2);
+    assert_eq!(app.on_check_failure.len(), 2);
+}
