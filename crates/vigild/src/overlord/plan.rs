@@ -4,7 +4,9 @@
 use std::path::Path;
 
 use anyhow::Context;
-use vigil_types::plan::{Layer, Plan};
+use vigil_types::plan::{AlertConfig, CheckConfig, Layer, Plan, ServiceConfig};
+
+use crate::process_util::{EnvPolicy, REDUNDANT_LISTS, redundant_lists};
 
 /// Whether a directory entry is a layer file: `*.yaml` or `*.yml`, but not
 /// the kubelet's own entries of a ConfigMap volume (`..data`,
@@ -51,52 +53,63 @@ pub fn load_plan(dir: &Path) -> anyhow::Result<Plan> {
 /// Checks that need more than deserialization. Runs on startup and on every
 /// replan, so a bad layer is rejected before anything is (re)started.
 fn validate(plan: &Plan) -> anyhow::Result<()> {
-    use crate::process_util::{EnvPolicy, REDUNDANT_LISTS, redundant_lists};
-
     for (name, svc) in &plan.services {
-        EnvPolicy::for_service(svc).with_context(|| format!("service {name:?}"))?;
-        if redundant_lists(svc.pass_env, &svc.pass_env_glob, &svc.pass_env_regex) {
-            tracing::warn!(service = %name, "{REDUNDANT_LISTS}");
-        }
-        validate_ready(plan, svc).with_context(|| format!("service {name:?}"))?;
-        validate_oneshot(svc).with_context(|| format!("service {name:?}"))?;
-        crate::template::check_service(svc).with_context(|| format!("service {name:?}"))?;
-        validate_watch_files(svc).with_context(|| format!("service {name:?}"))?;
-        validate_healthy_time(svc).with_context(|| format!("service {name:?}"))?;
+        validate_service(plan, name, svc).with_context(|| format!("service {name:?}"))?;
     }
     for (name, check) in &plan.checks {
-        crate::check::validate_period(check).with_context(|| format!("check {name:?}"))?;
-        if let Some(s) = &check.service {
-            anyhow::ensure!(
-                plan.services.contains_key(s),
-                "check {name:?}: service {s:?} is not defined"
-            );
-        }
-        if let Some(exec) = &check.exec {
-            let ctx = exec
-                .service_context
-                .as_deref()
-                .and_then(|s| plan.services.get(s));
-            EnvPolicy::for_exec_check(exec, ctx).with_context(|| format!("check {name:?}"))?;
-            // Only the check's own lists: a service context still needs its
-            // lists for the service itself.
-            let pass_env = exec.pass_env.or_else(|| ctx.and_then(|s| s.pass_env));
-            if redundant_lists(pass_env, &exec.pass_env_glob, &exec.pass_env_regex) {
-                tracing::warn!(check = %name, "{REDUNDANT_LISTS}");
-            }
-            crate::template::check_exec_environment(&exec.environment)
-                .with_context(|| format!("check {name:?}"))?;
-        }
+        validate_check(plan, name, check).with_context(|| format!("check {name:?}"))?;
     }
     crate::alert::validate_queue_limits(plan)?;
     for (name, alert) in &plan.alerts {
-        for v in &alert.on_vigild {
-            anyhow::ensure!(
-                VIGILD_ALERT_EVENTS.contains(&v.as_str()) || v == "*",
-                "alert {name:?}: unknown on-vigild entry {v:?} (expected {})",
-                VIGILD_ALERT_EVENTS.join(", ")
-            );
+        validate_alert(alert).with_context(|| format!("alert {name:?}"))?;
+    }
+    Ok(())
+}
+
+fn validate_service(plan: &Plan, name: &str, svc: &ServiceConfig) -> anyhow::Result<()> {
+    EnvPolicy::for_service(svc)?;
+    if redundant_lists(svc.pass_env, &svc.pass_env_glob, &svc.pass_env_regex) {
+        tracing::warn!(service = %name, "{REDUNDANT_LISTS}");
+    }
+    validate_ready(plan, svc)?;
+    validate_oneshot(svc)?;
+    crate::template::check_service(svc)?;
+    validate_watch_files(svc)?;
+    validate_healthy_time(svc)
+}
+
+fn validate_check(plan: &Plan, name: &str, check: &CheckConfig) -> anyhow::Result<()> {
+    crate::check::validate_period(check)?;
+    if let Some(s) = &check.service {
+        anyhow::ensure!(
+            plan.services.contains_key(s),
+            "service {s:?} is not defined"
+        );
+    }
+    if let Some(exec) = &check.exec {
+        let ctx = exec
+            .service_context
+            .as_deref()
+            .and_then(|s| plan.services.get(s));
+        EnvPolicy::for_exec_check(exec, ctx)?;
+        // Only the check's own lists: a service context still needs its
+        // lists for the service itself.
+        let pass_env = exec.pass_env.or_else(|| ctx.and_then(|s| s.pass_env));
+        if redundant_lists(pass_env, &exec.pass_env_glob, &exec.pass_env_regex) {
+            tracing::warn!(check = %name, "{REDUNDANT_LISTS}");
         }
+        crate::template::check_exec_environment(&exec.environment)?;
+    }
+    Ok(())
+}
+
+fn validate_alert(alert: &AlertConfig) -> anyhow::Result<()> {
+    for v in &alert.on_vigild {
+        anyhow::ensure!(
+            VIGILD_ALERT_EVENTS.contains(&v.as_str()) || v == "*",
+            "unknown on-vigild entry {v:?} (expected {})",
+            VIGILD_ALERT_EVENTS.join(", ")
+        );
     }
     Ok(())
 }
@@ -104,7 +117,7 @@ fn validate(plan: &Plan) -> anyhow::Result<()> {
 /// Names `on-vigild` accepts (besides `"*"`).
 const VIGILD_ALERT_EVENTS: &[&str] = &["layers"];
 
-fn validate_healthy_time(svc: &vigil_types::plan::ServiceConfig) -> anyhow::Result<()> {
+fn validate_healthy_time(svc: &ServiceConfig) -> anyhow::Result<()> {
     use crate::service::{MAX_HEALTHY_TIME, MIN_HEALTHY_TIME};
     if let Some(s) = &svc.healthy_time {
         let d = crate::duration::parse_duration(s)
@@ -117,7 +130,7 @@ fn validate_healthy_time(svc: &vigil_types::plan::ServiceConfig) -> anyhow::Resu
     Ok(())
 }
 
-fn validate_watch_files(svc: &vigil_types::plan::ServiceConfig) -> anyhow::Result<()> {
+fn validate_watch_files(svc: &ServiceConfig) -> anyhow::Result<()> {
     let Some(w) = &svc.watch_files else {
         return Ok(());
     };
@@ -138,7 +151,7 @@ fn validate_watch_files(svc: &vigil_types::plan::ServiceConfig) -> anyhow::Resul
     Ok(())
 }
 
-fn validate_oneshot(svc: &vigil_types::plan::ServiceConfig) -> anyhow::Result<()> {
+fn validate_oneshot(svc: &ServiceConfig) -> anyhow::Result<()> {
     use vigil_types::plan::{OnExit, ServiceType};
 
     let oneshot = svc.service_type == Some(ServiceType::Oneshot);
@@ -166,7 +179,7 @@ fn validate_oneshot(svc: &vigil_types::plan::ServiceConfig) -> anyhow::Result<()
     Ok(())
 }
 
-fn validate_ready(plan: &Plan, svc: &vigil_types::plan::ServiceConfig) -> anyhow::Result<()> {
+fn validate_ready(plan: &Plan, svc: &ServiceConfig) -> anyhow::Result<()> {
     use vigil_types::plan::{ReadyMode, Startup};
 
     if let Some(t) = &svc.ready_timeout {
