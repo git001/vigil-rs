@@ -18,6 +18,12 @@ struct ServiceLabel {
     service: String,
 }
 
+fn svc(service: &str) -> ServiceLabel {
+    ServiceLabel {
+        service: service.to_owned(),
+    }
+}
+
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
 struct RunLabel {
     service: String,
@@ -44,6 +50,16 @@ struct AlertLabel {
 // ---------------------------------------------------------------------------
 // MetricsStore
 // ---------------------------------------------------------------------------
+
+/// Create a metric, register it under `name` and return the handle.
+fn reg<M>(registry: &mut Registry, name: &str, help: &str) -> M
+where
+    M: Default + Clone + prometheus_client::registry::Metric,
+{
+    let metric = M::default();
+    registry.register(name, help, metric.clone());
+    metric
+}
 
 /// Prometheus/OpenMetrics metrics store.
 ///
@@ -86,125 +102,89 @@ pub struct MetricsStore {
 
 impl MetricsStore {
     pub fn new() -> Arc<Self> {
-        let mut registry = Registry::default();
-
-        let service_start_count = Family::<ServiceLabel, Counter>::default();
-        let service_active = Family::<ServiceLabel, Gauge>::default();
-        let service_info = Family::<ServiceLabel, Gauge>::default();
-        let services_count: Gauge = Gauge::default();
-        let check_up = Family::<CheckLabel, Gauge>::default();
-        let check_success_count = Family::<CheckLabel, Counter>::default();
-        let check_failure_count = Family::<CheckLabel, Counter>::default();
-        let alert_fire_count = Family::<AlertLabel, Counter>::default();
-        let service_last_exit_code = Family::<ServiceLabel, Gauge>::default();
-        let service_last_run_timestamp = Family::<ServiceLabel, Gauge>::default();
-        let service_last_run_success = Family::<ServiceLabel, Gauge>::default();
-        let service_running = Family::<ServiceLabel, Gauge>::default();
-        let service_runs = Family::<RunLabel, Counter>::default();
-        let service_file_reloads = Family::<ServiceLabel, Counter>::default();
-        let layers_reloads = Family::<ResultLabel, Counter>::default();
-        let layers_last_reload: Gauge = Gauge::default();
-
-        registry.register(
-            "vigil_service_start_count",
-            "Number of times the service has started",
-            service_start_count.clone(),
-        );
-        registry.register(
-            "vigil_service_active",
-            "Whether the service is currently active (1) or not (0)",
-            service_active.clone(),
-        );
-        registry.register(
-            "vigil_service_info",
-            "Service metadata — label enumerates all configured service names",
-            service_info.clone(),
-        );
-        registry.register(
-            "vigil_services_count",
-            "Total number of configured services",
-            services_count.clone(),
-        );
-        registry.register(
-            "vigil_check_up",
-            "Whether the health check is up (1) or not (0)",
-            check_up.clone(),
-        );
-        registry.register(
-            "vigil_check_success_count",
-            "Number of times the check has succeeded",
-            check_success_count.clone(),
-        );
-        registry.register(
-            "vigil_check_failure_count",
-            "Number of times the check has failed",
-            check_failure_count.clone(),
-        );
-        registry.register(
-            "vigil_alert_fire_count",
-            "Number of times the alert has fired (state transition detected)",
-            alert_fire_count.clone(),
-        );
-
-        registry.register(
-            "vigil_service_last_exit_code",
-            "Exit code of the service's last process (128+signal if killed by a signal, -1 if unknown)",
-            service_last_exit_code.clone(),
-        );
-        registry.register(
-            "vigil_service_last_run_timestamp_seconds",
-            "Unix time when the last run of a oneshot service ended",
-            service_last_run_timestamp.clone(),
-        );
-        registry.register(
-            "vigil_service_last_run_success",
-            "Whether the last run of a oneshot service succeeded (1) or not (0)",
-            service_last_run_success.clone(),
-        );
-        registry.register(
-            "vigil_service_running",
-            "Whether a process of the service is alive (starting, active or stopping)",
-            service_running.clone(),
-        );
-        registry.register(
-            "vigil_service_runs",
-            "Finished runs of a oneshot service, by result (success or failure)",
-            service_runs.clone(),
-        );
-        registry.register(
-            "vigil_service_file_reloads",
-            "Reactions (restart or signal) to changes of watched files",
-            service_file_reloads.clone(),
-        );
-        registry.register(
-            "vigil_layers_reloads",
-            "Layer reloads (vigil replan or --watch-layers), by result (ok or invalid)",
-            layers_reloads.clone(),
-        );
-        registry.register(
-            "vigil_layers_last_reload_timestamp_seconds",
-            "Unix time of the last successful layer reload (0 = none since start)",
-            layers_last_reload.clone(),
-        );
-
+        let mut r = Registry::default();
         Arc::new(Self {
-            registry,
-            service_start_count,
-            service_active,
-            service_info,
-            services_count,
-            check_up,
-            check_success_count,
-            check_failure_count,
-            alert_fire_count,
-            service_last_exit_code,
-            service_last_run_timestamp,
-            service_last_run_success,
-            service_running,
-            service_runs,
-            service_file_reloads,
-            layers_reloads,
-            layers_last_reload,
+            service_start_count: reg(
+                &mut r,
+                "vigil_service_start_count",
+                "Number of times the service has started",
+            ),
+            service_active: reg(
+                &mut r,
+                "vigil_service_active",
+                "Whether the service is currently active (1) or not (0)",
+            ),
+            service_info: reg(
+                &mut r,
+                "vigil_service_info",
+                "Service metadata — label enumerates all configured service names",
+            ),
+            services_count: reg(
+                &mut r,
+                "vigil_services_count",
+                "Total number of configured services",
+            ),
+            check_up: reg(
+                &mut r,
+                "vigil_check_up",
+                "Whether the health check is up (1) or not (0)",
+            ),
+            check_success_count: reg(
+                &mut r,
+                "vigil_check_success_count",
+                "Number of times the check has succeeded",
+            ),
+            check_failure_count: reg(
+                &mut r,
+                "vigil_check_failure_count",
+                "Number of times the check has failed",
+            ),
+            alert_fire_count: reg(
+                &mut r,
+                "vigil_alert_fire_count",
+                "Number of times the alert has fired (state transition detected)",
+            ),
+            service_last_exit_code: reg(
+                &mut r,
+                "vigil_service_last_exit_code",
+                "Exit code of the service's last process (128+signal if killed by a signal, -1 if unknown)",
+            ),
+            service_last_run_timestamp: reg(
+                &mut r,
+                "vigil_service_last_run_timestamp_seconds",
+                "Unix time when the last run of a oneshot service ended",
+            ),
+            service_last_run_success: reg(
+                &mut r,
+                "vigil_service_last_run_success",
+                "Whether the last run of a oneshot service succeeded (1) or not (0)",
+            ),
+            service_running: reg(
+                &mut r,
+                "vigil_service_running",
+                "Whether a process of the service is alive (starting, active or stopping)",
+            ),
+            service_runs: reg(
+                &mut r,
+                "vigil_service_runs",
+                "Finished runs of a oneshot service, by result (success or failure)",
+            ),
+            service_file_reloads: reg(
+                &mut r,
+                "vigil_service_file_reloads",
+                "Reactions (restart or signal) to changes of watched files",
+            ),
+            layers_reloads: reg(
+                &mut r,
+                "vigil_layers_reloads",
+                "Layer reloads (vigil replan or --watch-layers), by result (ok or invalid)",
+            ),
+            layers_last_reload: reg(
+                &mut r,
+                "vigil_layers_last_reload_timestamp_seconds",
+                "Unix time of the last successful layer reload (0 = none since start)",
+            ),
+            registry: r,
         })
     }
 
@@ -213,28 +193,18 @@ impl MetricsStore {
     pub fn set_services(&self, names: &[&str]) {
         self.service_info.clear();
         for name in names {
-            self.service_info
-                .get_or_create(&ServiceLabel {
-                    service: name.to_string(),
-                })
-                .set(1);
+            self.service_info.get_or_create(&svc(name)).set(1);
         }
         self.services_count.set(names.len() as i64);
     }
 
     pub fn record_service_start(&self, service: &str) {
-        self.service_start_count
-            .get_or_create(&ServiceLabel {
-                service: service.to_owned(),
-            })
-            .inc();
+        self.service_start_count.get_or_create(&svc(service)).inc();
     }
 
     pub fn set_service_active(&self, service: &str, active: bool) {
         self.service_active
-            .get_or_create(&ServiceLabel {
-                service: service.to_owned(),
-            })
+            .get_or_create(&svc(service))
             .set(if active { 1 } else { 0 });
     }
 
@@ -251,35 +221,25 @@ impl MetricsStore {
     }
 
     pub fn record_file_reload(&self, service: &str) {
-        self.service_file_reloads
-            .get_or_create(&ServiceLabel {
-                service: service.to_owned(),
-            })
-            .inc();
+        self.service_file_reloads.get_or_create(&svc(service)).inc();
     }
 
     pub fn set_service_running(&self, service: &str, running: bool) {
         self.service_running
-            .get_or_create(&ServiceLabel {
-                service: service.to_owned(),
-            })
+            .get_or_create(&svc(service))
             .set(i64::from(running));
     }
 
     /// Record how the service's last process ended (`None`: unknown → -1).
     pub fn set_service_last_exit_code(&self, service: &str, code: Option<i32>) {
         self.service_last_exit_code
-            .get_or_create(&ServiceLabel {
-                service: service.to_owned(),
-            })
+            .get_or_create(&svc(service))
             .set(code.map(i64::from).unwrap_or(-1));
     }
 
     /// Record the end of a oneshot run.
     pub fn record_oneshot_run(&self, service: &str, success: bool) {
-        let label = ServiceLabel {
-            service: service.to_owned(),
-        };
+        let label = svc(service);
         self.service_last_run_timestamp
             .get_or_create(&label)
             .set(jiff::Timestamp::now().as_second());
