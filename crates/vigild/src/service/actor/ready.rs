@@ -4,19 +4,17 @@
 //! Readiness — `ready: process | notify | check`, sd_notify messages and
 //! the ready timeout.
 
-use std::pin::Pin;
 use std::time::Duration;
 
-use tokio::time::Sleep;
 use tracing::{debug, info, warn};
 use vigil_types::plan::ReadyMode;
 
-use crate::duration::parse_duration;
+use super::dur;
 use crate::service::DEFAULT_READY_TIMEOUT;
 use crate::service::notify::NotifyMsg;
 use crate::state::ServiceState;
 
-use super::{Actor, Event, EventKind};
+use super::{Actor, EventKind};
 
 impl Actor {
     pub(super) fn ready_mode(&self) -> ReadyMode {
@@ -25,12 +23,7 @@ impl Actor {
 
     /// `None` = wait forever (`ready-timeout: 0s`).
     pub(super) fn ready_timeout(&self) -> Option<Duration> {
-        let d = self
-            .config
-            .ready_timeout
-            .as_deref()
-            .and_then(|s| parse_duration(s).ok())
-            .unwrap_or(DEFAULT_READY_TIMEOUT);
+        let d = dur(&self.config.ready_timeout, DEFAULT_READY_TIMEOUT);
         (!d.is_zero()).then_some(d)
     }
 
@@ -114,23 +107,15 @@ impl Actor {
     }
 
     async fn send_status_message(&self) {
-        let _ = self
-            .event_tx
-            .send(Event {
-                service: self.name.clone(),
-                kind: EventKind::StatusMessage {
-                    message: self.status_message.clone(),
-                },
-            })
-            .await;
+        self.send_event(EventKind::StatusMessage {
+            message: self.status_message.clone(),
+        })
+        .await;
     }
 
     /// Readiness was not reached in time: stop the process; its exit counts
     /// as a failure (`on-failure` applies).
-    pub(super) async fn handle_ready_timeout(
-        &mut self,
-        stop_deadline: &mut Option<Pin<Box<Sleep>>>,
-    ) {
+    pub(super) async fn handle_ready_timeout(&mut self) {
         self.ready_deadline = None;
         if self.state != ServiceState::Starting || self.child.is_none() {
             return;
@@ -141,7 +126,6 @@ impl Actor {
             "service did not become ready in time, stopping it"
         );
         self.ready_failed = true;
-        self.send_stop_signal();
-        *stop_deadline = Some(Box::pin(tokio::time::sleep(self.kill_delay())));
+        self.begin_stop();
     }
 }

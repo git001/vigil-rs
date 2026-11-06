@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
-use tracing::{debug, warn};
+use tracing::warn;
 
-use crate::duration::parse_duration;
+use super::dur;
 
 use super::super::DEFAULT_KILL_DELAY;
 use super::Actor;
@@ -24,50 +24,31 @@ impl Actor {
     }
 
     pub(super) fn kill_delay(&self) -> Duration {
-        self.config
-            .kill_delay
-            .as_deref()
-            .and_then(|s| parse_duration(s).ok())
-            .unwrap_or(DEFAULT_KILL_DELAY)
+        dur(&self.config.kill_delay, DEFAULT_KILL_DELAY)
     }
 
     pub(super) fn send_stop_signal(&self) {
-        if let Some(child) = &self.child
-            && let Some(pid) = child.id()
-        {
-            let pgid = Pid::from_raw(-(pid as i32));
-            let sig = self.stop_signal();
-            if let Err(e) = kill(pgid, sig) {
-                warn!(service = %self.name, error = %e, "kill(pgid) failed, retrying with pid");
-                let _ = kill(Pid::from_raw(pid as i32), sig);
-            }
-        }
-    }
-
-    pub(super) fn send_signal(&self, signal: Signal) {
-        if let Some(child) = &self.child
-            && let Some(pid) = child.id()
-        {
-            let pgid = Pid::from_raw(-(pid as i32));
-            if let Err(e) = kill(pgid, signal) {
-                debug!(service = %self.name, error = %e, ?signal, "forward to pgid failed");
-                let _ = kill(Pid::from_raw(pid as i32), signal);
-            }
-        }
+        self.send_signal(self.stop_signal());
     }
 
     pub(super) fn send_sigkill(&self) {
-        if let Some(child) = &self.child
-            && let Some(pid) = child.id()
-        {
-            let pgid = Pid::from_raw(-(pid as i32));
-            if let Err(e) = kill(pgid, Signal::SIGKILL) {
-                // ESRCH = process already exited — expected on clean shutdown
-                if e != nix::errno::Errno::ESRCH {
-                    warn!(service = %self.name, error = %e, "SIGKILL pgid failed");
-                    let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
-                }
+        self.send_signal(Signal::SIGKILL);
+    }
+
+    /// Send `signal` to the service's process group (the child leads it,
+    /// see `process_group(0)`); if that fails, to the child alone.
+    pub(super) fn send_signal(&self, signal: Signal) {
+        let Some(pid) = self.child.as_ref().and_then(|c| c.id()) else {
+            return;
+        };
+        let pid = pid as i32;
+        if let Err(e) = kill(Pid::from_raw(-pid), signal) {
+            // ESRCH: no such group (already gone, or the child is not a
+            // group leader); the fallback below covers the latter.
+            if e != nix::errno::Errno::ESRCH {
+                warn!(service = %self.name, error = %e, ?signal, "signal to process group failed, sending to the process");
             }
+            let _ = kill(Pid::from_raw(pid), signal);
         }
     }
 }

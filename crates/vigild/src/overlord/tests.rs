@@ -56,7 +56,6 @@ pub(super) fn make_overlord(
             state,
             since: Utc::now(),
             startup: Startup::Enabled,
-            pid: None,
             last_exit: None,
             status_message: None,
             next_run: None,

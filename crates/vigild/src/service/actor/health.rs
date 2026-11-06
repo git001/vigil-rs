@@ -10,21 +10,17 @@ use tokio::time::Instant;
 use tracing::error;
 use vigil_types::api::ExitInfo;
 
-use crate::duration::parse_duration;
+use super::dur;
 use crate::state::ServiceState;
 
-use super::super::{DEFAULT_HEALTHY_TIME, Event, EventKind, MAX_HEALTHY_TIME, MIN_HEALTHY_TIME};
+use super::super::{DEFAULT_HEALTHY_TIME, EventKind, MAX_HEALTHY_TIME, MIN_HEALTHY_TIME};
 use super::Actor;
 
 impl Actor {
     /// Effective `healthy-time`, kept within its bounds (the plan is
     /// validated, this only guards against a bypassed validation).
     pub(super) fn healthy_time(&self) -> Duration {
-        self.config
-            .healthy_time
-            .as_deref()
-            .and_then(|s| parse_duration(s).ok())
-            .unwrap_or(DEFAULT_HEALTHY_TIME)
+        dur(&self.config.healthy_time, DEFAULT_HEALTHY_TIME)
             .clamp(MIN_HEALTHY_TIME, MAX_HEALTHY_TIME)
     }
 
@@ -57,16 +53,6 @@ impl Actor {
         error!(service = %self.name, error = %e, "{what}");
         self.transition(ServiceState::Error).await;
         self.report_unhealthy("error", format!("{what}: {e:#}"))
-            .await;
-    }
-
-    async fn send_event(&self, kind: EventKind) {
-        let _ = self
-            .event_tx
-            .send(Event {
-                service: self.name.clone(),
-                kind,
-            })
             .await;
     }
 }

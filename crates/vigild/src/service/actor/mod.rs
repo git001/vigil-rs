@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 vigil-rs contributors
 
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use tokio::process::Child;
 use tokio::sync::mpsc;
-use tokio::time::Sleep;
 use tracing::debug;
 use vigil_types::plan::ServiceConfig;
 
@@ -17,7 +15,7 @@ use crate::metrics::MetricsStore;
 use crate::state::ServiceState;
 
 use super::notify::{NotifyMsg, NotifySocket};
-use super::{Cmd, Context, DEFAULT_BACKOFF_DELAY, Event, EventKind, ExitCodeMode, Snapshot};
+use super::{Cmd, Context, DEFAULT_BACKOFF_DELAY, Event, EventKind, ExitCodeMode};
 
 mod backoff;
 mod handlers;
@@ -82,6 +80,22 @@ pub(super) struct Actor {
     watch_deadline: Option<tokio::time::Instant>,
     /// When the current `active` period counts as healthy (`healthy-time`).
     healthy_deadline: Option<tokio::time::Instant>,
+    /// SIGKILL after the stop signal (`kill-delay`).
+    stop_deadline: Option<tokio::time::Instant>,
+    /// Next restart after a failure (backoff).
+    backoff_deadline: Option<tokio::time::Instant>,
+    /// Start again once the stopping process is gone (`restart`).
+    pending_restart: bool,
+}
+
+/// An optional duration field of the config, or `default` when unset. The
+/// plan check rejects invalid values; one that slipped through also gets the
+/// default.
+fn dur(value: &Option<String>, default: Duration) -> Duration {
+    value
+        .as_deref()
+        .and_then(|s| crate::duration::parse_duration(s).ok())
+        .unwrap_or(default)
 }
 
 impl Actor {
@@ -118,6 +132,9 @@ impl Actor {
             watch: None,
             watch_deadline: None,
             healthy_deadline: None,
+            stop_deadline: None,
+            backoff_deadline: None,
+            pending_restart: false,
             ready_failed: false,
             status_message: None,
             schedule: None,
@@ -125,19 +142,30 @@ impl Actor {
         }
     }
 
-    pub(super) fn snapshot(&self) -> Snapshot {
-        Snapshot {
+    #[cfg(test)]
+    pub(super) fn snapshot(&self) -> super::Snapshot {
+        super::Snapshot {
             name: self.name.clone(),
             state: self.state,
             since: self.since,
             startup: self.config.startup(),
-            pid: self.child.as_ref().and_then(|c| c.id()),
             last_exit: self.last_exit,
             status_message: self.status_message.clone(),
             next_run: self
                 .next_run
                 .and_then(|t| DateTime::from_timestamp(t.as_second(), 0)),
         }
+    }
+
+    /// Report `kind` to the overlord.
+    pub(super) async fn send_event(&self, kind: EventKind) {
+        let _ = self
+            .event_tx
+            .send(Event {
+                service: self.name.clone(),
+                kind,
+            })
+            .await;
     }
 
     pub(super) async fn transition(&mut self, new_state: ServiceState) {
@@ -154,13 +182,7 @@ impl Actor {
                 ServiceState::Starting | ServiceState::Active | ServiceState::Stopping
             ),
         );
-        let _ = self
-            .event_tx
-            .send(Event {
-                service: self.name.clone(),
-                kind: EventKind::StateChanged { new_state },
-            })
-            .await;
+        self.send_event(EventKind::StateChanged { new_state }).await;
     }
 }
 
@@ -178,9 +200,6 @@ pub(super) async fn run(
     let mut actor = Actor::new(name.clone(), config, ctx);
     let mut notify_rx = actor.notify_rx.take().expect("fresh actor");
     actor.arm_schedule().await;
-    let mut backoff_sleep: Option<Pin<Box<Sleep>>> = None;
-    let mut stop_deadline: Option<Pin<Box<Sleep>>> = None;
-    let mut pending_restart = false;
 
     // Spawn log-push tasks if the service config requests it.
     // Each task connects to the target with exponential-backoff retry and
@@ -203,6 +222,9 @@ pub(super) async fn run(
     }
 
     loop {
+        // Copies: the arms below borrow the actor mutably.
+        let stop_deadline = actor.stop_deadline;
+        let backoff_deadline = actor.backoff_deadline;
         let ready_deadline = actor.ready_deadline;
         let watch_deadline = actor.watch_deadline;
         let healthy_deadline = actor.healthy_deadline;
@@ -214,14 +236,16 @@ pub(super) async fn run(
                 match cmd {
                     None | Some(Cmd::Shutdown) => break,
                     Some(Cmd::Start(reply)) => {
-                        actor.handle_start(reply, &mut stop_deadline).await;
+                        let _ = reply.send(actor.try_start().await);
                     }
                     Some(Cmd::Stop(reply)) => {
-                        actor.handle_stop(reply, &mut stop_deadline, &mut backoff_sleep).await;
+                        actor.stop().await;
+                        let _ = reply.send(Ok(()));
                     }
                     Some(Cmd::Restart(reply)) => {
-                        actor.handle_restart(reply, &mut backoff_sleep, &mut stop_deadline, &mut pending_restart).await;
+                        let _ = reply.send(actor.restart().await);
                     }
+                    #[cfg(test)]
                     Some(Cmd::Status(reply)) => {
                         let _ = reply.send(actor.snapshot());
                     }
@@ -247,63 +271,33 @@ pub(super) async fn run(
                     None => std::future::pending().await,
                 }
             } => {
-                actor.handle_child_exit(status, &mut backoff_sleep, &mut stop_deadline, &mut pending_restart).await;
+                actor.handle_child_exit(status).await;
             }
 
-            _ = async {
-                match stop_deadline.as_mut() {
-                    Some(s) => s.await,
-                    None => std::future::pending().await,
-                }
-            }, if stop_deadline.is_some() => {
+            _ = sleep_opt(stop_deadline), if stop_deadline.is_some() => {
+                actor.stop_deadline = None;
                 actor.handle_kill_deadline().await;
-                stop_deadline = None;
             }
 
-            _ = async {
-                match backoff_sleep.as_mut() {
-                    Some(s) => s.await,
-                    None => std::future::pending().await,
-                }
-            }, if backoff_sleep.is_some() => {
-                actor.handle_backoff_expired(&mut stop_deadline).await;
-                backoff_sleep = None;
+            _ = sleep_opt(backoff_deadline), if backoff_deadline.is_some() => {
+                actor.backoff_deadline = None;
+                actor.handle_backoff_expired().await;
             }
 
-            _ = async {
-                match ready_deadline {
-                    Some(d) => tokio::time::sleep_until(d).await,
-                    None => std::future::pending().await,
-                }
-            }, if ready_deadline.is_some() => {
-                actor.handle_ready_timeout(&mut stop_deadline).await;
+            _ = sleep_opt(ready_deadline), if ready_deadline.is_some() => {
+                actor.handle_ready_timeout().await;
             }
 
-            _ = async {
-                match watch_deadline {
-                    Some(d) => tokio::time::sleep_until(d).await,
-                    None => std::future::pending().await,
-                }
-            }, if watch_deadline.is_some() => {
-                actor.handle_watch_tick(&mut backoff_sleep, &mut stop_deadline, &mut pending_restart).await;
+            _ = sleep_opt(watch_deadline), if watch_deadline.is_some() => {
+                actor.handle_watch_tick().await;
             }
 
-            _ = async {
-                match healthy_deadline {
-                    Some(d) => tokio::time::sleep_until(d).await,
-                    None => std::future::pending().await,
-                }
-            }, if healthy_deadline.is_some() => {
+            _ = sleep_opt(healthy_deadline), if healthy_deadline.is_some() => {
                 actor.report_healthy().await;
             }
 
-            _ = async {
-                match next_run {
-                    Some(d) => tokio::time::sleep_until(d).await,
-                    None => std::future::pending().await,
-                }
-            }, if next_run.is_some() => {
-                actor.handle_schedule_due(&mut stop_deadline).await;
+            _ = sleep_opt(next_run), if next_run.is_some() => {
+                actor.handle_schedule_due().await;
             }
         }
     }
@@ -313,4 +307,13 @@ pub(super) async fn run(
     }
     actor.cleanup().await;
     debug!(service = %name, "actor shut down");
+}
+
+/// Sleep until `deadline`; never returns without one (for `select!` arms
+/// guarded by `deadline.is_some()`).
+async fn sleep_opt(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(d) => tokio::time::sleep_until(d).await,
+        None => std::future::pending().await,
+    }
 }

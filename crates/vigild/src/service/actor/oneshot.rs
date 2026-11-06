@@ -3,18 +3,16 @@
 
 //! `type: oneshot` and `schedule` — arming the schedule and starting runs.
 
-use std::pin::Pin;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use tokio::time::Sleep;
 use tracing::{error, info, warn};
 use vigil_types::plan::{ServiceType, Startup};
 
 use crate::service::schedule::Schedule;
 use crate::state::ServiceState;
 
-use super::{Actor, Event, EventKind};
+use super::{Actor, EventKind};
 
 impl Actor {
     pub(super) fn is_oneshot(&self) -> bool {
@@ -52,15 +50,10 @@ impl Actor {
             if let Some(n) = next {
                 info!(service = %self.name, next_run = %n, "next scheduled run");
             }
-            let _ = self
-                .event_tx
-                .send(Event {
-                    service: self.name.clone(),
-                    kind: EventKind::NextRun {
-                        at: to_chrono(next),
-                    },
-                })
-                .await;
+            self.send_event(EventKind::NextRun {
+                at: to_chrono(next),
+            })
+            .await;
         }
     }
 
@@ -73,10 +66,7 @@ impl Actor {
         Some(tokio::time::Instant::now() + wait)
     }
 
-    pub(super) async fn handle_schedule_due(
-        &mut self,
-        stop_deadline: &mut Option<Pin<Box<Sleep>>>,
-    ) {
+    pub(super) async fn handle_schedule_due(&mut self) {
         let Some(due) = self.next_run else { return };
         if jiff::Timestamp::now() < due {
             return; // woke early (wall clock moved back); the loop re-arms
@@ -85,11 +75,7 @@ impl Actor {
             warn!(service = %self.name, "previous run still active, skipping scheduled run");
         } else {
             info!(service = %self.name, "scheduled run");
-            self.transition(ServiceState::Starting).await;
-            match self.do_start().await {
-                Ok(()) => *stop_deadline = None,
-                Err(e) => self.start_failed("scheduled run failed to start", &e).await,
-            }
+            let _ = self.start_now("scheduled run failed to start").await;
         }
         self.compute_next_run().await;
     }

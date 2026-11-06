@@ -134,7 +134,6 @@ fn snapshot_reflects_initial_state() {
     let snap = actor.snapshot();
     assert_eq!(snap.name, "test-svc");
     assert_eq!(snap.state, ServiceState::Inactive);
-    assert!(snap.pid.is_none());
 }
 
 // -----------------------------------------------------------------------
@@ -192,11 +191,7 @@ async fn start_nonexistent_command_returns_error() {
     let log_store = LogStore::new(100, 64);
     let metrics = MetricsStore::new();
     let mut actor = Actor::new("svc".into(), config, test_ctx(event_tx, log_store, metrics));
-
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    let mut stop_deadline = None;
-    actor.handle_start(reply_tx, &mut stop_deadline).await;
-    let result = reply_rx.await.unwrap();
+    let result = actor.try_start().await;
     assert!(result.is_err());
     assert_eq!(actor.state, ServiceState::Error);
 }
@@ -211,11 +206,7 @@ async fn start_empty_command_returns_error() {
     let log_store = LogStore::new(100, 64);
     let metrics = MetricsStore::new();
     let mut actor = Actor::new("svc".into(), config, test_ctx(event_tx, log_store, metrics));
-
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    let mut stop_deadline = None;
-    actor.handle_start(reply_tx, &mut stop_deadline).await;
-    let result = reply_rx.await.unwrap();
+    let result = actor.try_start().await;
     assert!(result.is_err());
 }
 
@@ -229,10 +220,7 @@ async fn start_no_command_returns_error() {
         ServiceConfig::default(),
         test_ctx(event_tx, log_store, metrics),
     );
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    let mut stop_deadline = None;
-    actor.handle_start(reply_tx, &mut stop_deadline).await;
-    let result = reply_rx.await.unwrap();
+    let result = actor.try_start().await;
     assert!(result.is_err());
     assert_eq!(actor.state, ServiceState::Error);
 }
@@ -241,13 +229,7 @@ async fn start_no_command_returns_error() {
 async fn stop_inactive_service_is_noop() {
     let (mut actor, _) = make_actor();
     assert_eq!(actor.state, ServiceState::Inactive);
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    let mut stop_deadline = None;
-    let mut backoff_sleep = None;
-    actor
-        .handle_stop(reply_tx, &mut stop_deadline, &mut backoff_sleep)
-        .await;
-    assert!(reply_rx.await.unwrap().is_ok());
+    actor.stop().await;
     assert_eq!(actor.state, ServiceState::Inactive);
 }
 
@@ -256,13 +238,7 @@ async fn stop_error_state_is_noop() {
     let (mut actor, _) = make_actor();
     // Force error state via manual transition
     actor.state = ServiceState::Error;
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    let mut stop_deadline = None;
-    let mut backoff_sleep = None;
-    actor
-        .handle_stop(reply_tx, &mut stop_deadline, &mut backoff_sleep)
-        .await;
-    assert!(reply_rx.await.unwrap().is_ok());
+    actor.stop().await;
     assert_eq!(actor.state, ServiceState::Error); // unchanged
 }
 
@@ -270,16 +246,10 @@ async fn stop_error_state_is_noop() {
 async fn stop_backoff_cancels_and_goes_inactive() {
     let (mut actor, _) = make_actor();
     actor.state = ServiceState::Backoff;
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    let mut stop_deadline = None;
-    let mut backoff_sleep: Option<std::pin::Pin<Box<tokio::time::Sleep>>> =
-        Some(Box::pin(tokio::time::sleep(Duration::from_secs(60))));
-    actor
-        .handle_stop(reply_tx, &mut stop_deadline, &mut backoff_sleep)
-        .await;
-    assert!(reply_rx.await.unwrap().is_ok());
+    actor.backoff_deadline = Some(tokio::time::Instant::now() + Duration::from_secs(60));
+    actor.stop().await;
     assert_eq!(actor.state, ServiceState::Inactive);
-    assert!(backoff_sleep.is_none());
+    assert!(actor.backoff_deadline.is_none());
 }
 
 #[tokio::test]
@@ -293,19 +263,12 @@ async fn start_when_already_running_is_noop() {
     let metrics = MetricsStore::new();
     let mut actor = Actor::new("svc".into(), config, test_ctx(event_tx, log_store, metrics));
 
-    // Start once
-    let (r1_tx, r1_rx) = tokio::sync::oneshot::channel();
-    let mut stop_deadline = None;
-    actor.handle_start(r1_tx, &mut stop_deadline).await;
-    let _ = r1_rx.await.unwrap(); // may succeed or fail
-
-    if actor.state.is_running() {
-        // Try starting again — should be a no-op
-        let (r2_tx, r2_rx) = tokio::sync::oneshot::channel();
-        actor.handle_start(r2_tx, &mut stop_deadline).await;
-        assert!(r2_rx.await.unwrap().is_ok()); // ok, already running
-        actor.cleanup().await;
-    }
+    actor.try_start().await.unwrap();
+    let pid = actor.child.as_ref().and_then(|c| c.id());
+    // Starting again is a no-op: same process.
+    actor.try_start().await.unwrap();
+    assert_eq!(actor.child.as_ref().and_then(|c| c.id()), pid);
+    actor.cleanup().await;
 }
 
 // -----------------------------------------------------------------------
@@ -321,24 +284,11 @@ async fn restart_on_inactive_does_not_set_pending_restart() {
     let (mut actor, _) = make_actor_with_config(config);
     assert_eq!(actor.state, ServiceState::Inactive);
 
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    let mut backoff_sleep = None;
-    let mut stop_deadline = None;
-    let mut pending_restart = false;
-
-    actor
-        .handle_restart(
-            reply_tx,
-            &mut backoff_sleep,
-            &mut stop_deadline,
-            &mut pending_restart,
-        )
-        .await;
-    let _ = reply_rx.await;
+    let _ = actor.restart().await;
 
     // Service started directly — pending_restart must remain false
     assert!(
-        !pending_restart,
+        !actor.pending_restart,
         "pending_restart must not be set when service starts directly via restart"
     );
     actor.cleanup().await;
@@ -352,34 +302,14 @@ async fn restart_on_running_sets_pending_restart() {
     };
     let (mut actor, _) = make_actor_with_config(config);
 
-    // Start the service first
-    let (start_tx, start_rx) = tokio::sync::oneshot::channel();
-    let mut stop_deadline = None;
-    actor.handle_start(start_tx, &mut stop_deadline).await;
-    let _ = start_rx.await;
-
-    if actor.state.is_running() {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let mut backoff_sleep = None;
-        let mut pending_restart = false;
-
-        actor
-            .handle_restart(
-                reply_tx,
-                &mut backoff_sleep,
-                &mut stop_deadline,
-                &mut pending_restart,
-            )
-            .await;
-        let _ = reply_rx.await;
-
-        // Now going through stop path — pending_restart must be true
-        assert!(
-            pending_restart,
-            "pending_restart must be set when stopping a running service for restart"
-        );
-        actor.cleanup().await;
-    }
+    actor.try_start().await.unwrap();
+    actor.restart().await.unwrap();
+    // Now going through stop path — pending_restart must be true
+    assert!(
+        actor.pending_restart,
+        "pending_restart must be set when stopping a running service for restart"
+    );
+    actor.cleanup().await;
 }
 
 // -----------------------------------------------------------------------
@@ -389,23 +319,13 @@ async fn restart_on_running_sets_pending_restart() {
 #[tokio::test]
 async fn shutdown_exit_code_success_gives_zero() {
     let (mut actor, mut event_rx) = make_actor();
-    let mut backoff_sleep = None;
-    let mut stop_deadline = None;
-    let mut pending_restart = false;
 
     actor.config.on_success = Some(vigil_types::plan::OnExit::Shutdown);
     let exit: std::io::Result<std::process::ExitStatus> = {
         use std::os::unix::process::ExitStatusExt;
         Ok(std::process::ExitStatus::from_raw(0))
     };
-    actor
-        .handle_child_exit(
-            exit,
-            &mut backoff_sleep,
-            &mut stop_deadline,
-            &mut pending_restart,
-        )
-        .await;
+    actor.handle_child_exit(exit).await;
 
     // Drain events to find DaemonShutdown
     let mut shutdown_code = None;
@@ -421,23 +341,13 @@ async fn shutdown_exit_code_success_gives_zero() {
 async fn shutdown_exit_code_failure_gives_ten() {
     let (mut actor, mut event_rx) = make_actor();
     actor.exit_code_mode = crate::service::ExitCodeMode::Fixed;
-    let mut backoff_sleep = None;
-    let mut stop_deadline = None;
-    let mut pending_restart = false;
 
     actor.config.on_failure = Some(vigil_types::plan::OnExit::Shutdown);
     let exit: std::io::Result<std::process::ExitStatus> = {
         use std::os::unix::process::ExitStatusExt;
         Ok(std::process::ExitStatus::from_raw(1 << 8)) // exit code 1
     };
-    actor
-        .handle_child_exit(
-            exit,
-            &mut backoff_sleep,
-            &mut stop_deadline,
-            &mut pending_restart,
-        )
-        .await;
+    actor.handle_child_exit(exit).await;
 
     let mut shutdown_code = None;
     while let Ok(ev) = event_rx.try_recv() {
@@ -455,9 +365,6 @@ async fn shutdown_exit_code_failure_gives_ten() {
 #[tokio::test]
 async fn failure_shutdown_always_exits_ten() {
     let (mut actor, mut event_rx) = make_actor();
-    let mut backoff_sleep = None;
-    let mut stop_deadline = None;
-    let mut pending_restart = false;
 
     // FailureShutdown on on_success — process exited with 0 but daemon should still exit 10
     actor.config.on_success = Some(vigil_types::plan::OnExit::FailureShutdown);
@@ -465,14 +372,7 @@ async fn failure_shutdown_always_exits_ten() {
         use std::os::unix::process::ExitStatusExt;
         Ok(std::process::ExitStatus::from_raw(0))
     };
-    actor
-        .handle_child_exit(
-            exit,
-            &mut backoff_sleep,
-            &mut stop_deadline,
-            &mut pending_restart,
-        )
-        .await;
+    actor.handle_child_exit(exit).await;
 
     let mut shutdown_code = None;
     while let Ok(ev) = event_rx.try_recv() {
@@ -490,9 +390,6 @@ async fn failure_shutdown_always_exits_ten() {
 #[tokio::test]
 async fn success_shutdown_always_exits_zero() {
     let (mut actor, mut event_rx) = make_actor();
-    let mut backoff_sleep = None;
-    let mut stop_deadline = None;
-    let mut pending_restart = false;
 
     // SuccessShutdown on on_failure — process exited with 1 but daemon should still exit 0
     actor.config.on_failure = Some(vigil_types::plan::OnExit::SuccessShutdown);
@@ -500,14 +397,7 @@ async fn success_shutdown_always_exits_zero() {
         use std::os::unix::process::ExitStatusExt;
         Ok(std::process::ExitStatus::from_raw(1 << 8)) // exit code 1
     };
-    actor
-        .handle_child_exit(
-            exit,
-            &mut backoff_sleep,
-            &mut stop_deadline,
-            &mut pending_restart,
-        )
-        .await;
+    actor.handle_child_exit(exit).await;
 
     let mut shutdown_code = None;
     while let Ok(ev) = event_rx.try_recv() {
@@ -533,11 +423,7 @@ async fn do_start_command_with_multiple_args() {
     let log_store = LogStore::new(100, 64);
     let metrics = MetricsStore::new();
     let mut actor = Actor::new("svc".into(), config, test_ctx(event_tx, log_store, metrics));
-
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    let mut stop_deadline = None;
-    actor.handle_start(reply_tx, &mut stop_deadline).await;
-    let result = reply_rx.await.unwrap();
+    let result = actor.try_start().await;
     assert!(
         result.is_ok(),
         "expected successful spawn with args: {result:?}"
@@ -559,11 +445,7 @@ async fn do_start_with_environment_vars() {
     let log_store = LogStore::new(100, 64);
     let metrics = MetricsStore::new();
     let mut actor = Actor::new("svc".into(), config, test_ctx(event_tx, log_store, metrics));
-
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    let mut stop_deadline = None;
-    actor.handle_start(reply_tx, &mut stop_deadline).await;
-    let result = reply_rx.await.unwrap();
+    let result = actor.try_start().await;
     assert!(result.is_ok(), "spawn with env failed: {result:?}");
     actor.cleanup().await;
 }
@@ -580,11 +462,7 @@ async fn do_start_with_working_dir() {
     let log_store = LogStore::new(100, 64);
     let metrics = MetricsStore::new();
     let mut actor = Actor::new("svc".into(), config, test_ctx(event_tx, log_store, metrics));
-
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    let mut stop_deadline = None;
-    actor.handle_start(reply_tx, &mut stop_deadline).await;
-    let result = reply_rx.await.unwrap();
+    let result = actor.try_start().await;
     assert!(result.is_ok(), "spawn with working_dir failed: {result:?}");
     actor.cleanup().await;
 }
@@ -601,11 +479,7 @@ async fn do_start_passthrough_log_mode() {
     let log_store = LogStore::new(100, 64);
     let metrics = MetricsStore::new();
     let mut actor = Actor::new("svc".into(), config, test_ctx(event_tx, log_store, metrics));
-
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    let mut stop_deadline = None;
-    actor.handle_start(reply_tx, &mut stop_deadline).await;
-    let result = reply_rx.await.unwrap();
+    let result = actor.try_start().await;
     assert!(result.is_ok(), "spawn passthrough failed: {result:?}");
     actor.cleanup().await;
 }
@@ -622,11 +496,7 @@ async fn do_start_disabled_log_mode() {
     let log_store = LogStore::new(100, 64);
     let metrics = MetricsStore::new();
     let mut actor = Actor::new("svc".into(), config, test_ctx(event_tx, log_store, metrics));
-
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    let mut stop_deadline = None;
-    actor.handle_start(reply_tx, &mut stop_deadline).await;
-    let result = reply_rx.await.unwrap();
+    let result = actor.try_start().await;
     assert!(result.is_ok(), "spawn disabled logs failed: {result:?}");
     actor.cleanup().await;
 }
@@ -636,11 +506,7 @@ async fn do_start_disabled_log_mode() {
 async fn start_when_stopping_returns_error() {
     let (mut actor, _) = make_actor();
     actor.state = ServiceState::Stopping;
-
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    let mut stop_deadline = None;
-    actor.handle_start(reply_tx, &mut stop_deadline).await;
-    let result = reply_rx.await.unwrap();
+    let result = actor.try_start().await;
     assert!(
         result.is_err(),
         "expected error when starting a Stopping service"
@@ -752,16 +618,8 @@ async fn exit_with(
     raw: i32,
 ) -> (Option<i32>, Option<bool>) {
     use std::os::unix::process::ExitStatusExt;
-    let mut backoff_sleep = None;
-    let mut stop_deadline = None;
-    let mut pending_restart = false;
     actor
-        .handle_child_exit(
-            Ok(std::process::ExitStatus::from_raw(raw)),
-            &mut backoff_sleep,
-            &mut stop_deadline,
-            &mut pending_restart,
-        )
+        .handle_child_exit(Ok(std::process::ExitStatus::from_raw(raw)))
         .await;
     let (mut code, mut success) = (None, None);
     while let Ok(ev) = rx.try_recv() {
@@ -898,8 +756,7 @@ async fn ready_process_goes_active_immediately() {
         ..Default::default()
     })
     .0;
-    let (reply_tx, _r) = tokio::sync::oneshot::channel();
-    actor.handle_start(reply_tx, &mut None).await;
+    let _ = actor.try_start().await;
     assert_eq!(actor.state, ServiceState::Active);
     assert!(actor.ready_deadline.is_none());
     actor.cleanup().await;
@@ -914,8 +771,7 @@ async fn ready_check_waits_for_a_pass_after_spawn() {
         ready_check: Some("c".into()),
         ..Default::default()
     });
-    let (reply_tx, _r) = tokio::sync::oneshot::channel();
-    actor.handle_start(reply_tx, &mut None).await;
+    let _ = actor.try_start().await;
     assert_eq!(actor.state, ServiceState::Starting);
     assert!(actor.ready_deadline.is_some(), "default timeout applies");
 
@@ -946,8 +802,7 @@ async fn ready_notify_rejects_foreign_senders_and_accepts_the_service() {
         ..Default::default()
     });
     actor.notify_dir = dir.path().to_owned();
-    let (reply_tx, _r) = tokio::sync::oneshot::channel();
-    actor.handle_start(reply_tx, &mut None).await;
+    let _ = actor.try_start().await;
     assert_eq!(actor.state, ServiceState::Starting);
     assert!(
         actor.ready_deadline.is_none(),
@@ -1087,8 +942,7 @@ async fn notify_socket_is_not_inherited_without_ready_notify() {
         ..Default::default()
     })
     .0;
-    let (reply_tx, _r) = tokio::sync::oneshot::channel();
-    actor.handle_start(reply_tx, &mut None).await;
+    let _ = actor.try_start().await;
     let _ = actor.child.as_mut().unwrap().wait().await;
     assert_eq!(std::fs::read_to_string(&out).unwrap().trim(), "unset");
 }
@@ -1658,15 +1512,13 @@ async fn stale_backoff_timer_does_not_start_a_second_process() {
     });
     // The service waits in backoff; a manual start comes first.
     actor.state = ServiceState::Backoff;
-    let mut stop_deadline = None;
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    actor.handle_start(tx, &mut stop_deadline).await;
-    rx.await.unwrap().unwrap();
+    let tx_res = actor.try_start().await;
+    tx_res.unwrap();
     let pid = actor.child.as_ref().and_then(|c| c.id());
     assert!(pid.is_some());
 
     // Now the old backoff timer fires: it must not start another process.
-    actor.handle_backoff_expired(&mut stop_deadline).await;
+    actor.handle_backoff_expired().await;
     assert_eq!(actor.child.as_ref().and_then(|c| c.id()), pid);
     actor.cleanup().await;
 }
@@ -1678,22 +1530,11 @@ async fn restart_while_stopping_keeps_the_kill_deadline() {
         ..Default::default()
     });
     actor.state = ServiceState::Stopping;
-    let mut stop_deadline = None;
-    let mut backoff_sleep = None;
-    let mut pending_restart = false;
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    actor
-        .handle_restart(
-            tx,
-            &mut backoff_sleep,
-            &mut stop_deadline,
-            &mut pending_restart,
-        )
-        .await;
-    rx.await.unwrap().unwrap();
-    assert!(pending_restart, "starts again once stopped");
+    let tx_res = actor.restart().await;
+    tx_res.unwrap();
+    assert!(actor.pending_restart, "starts again once stopped");
     assert!(
-        stop_deadline.is_none(),
+        actor.stop_deadline.is_none(),
         "the running deadline is not replaced"
     );
     assert_eq!(actor.state, ServiceState::Stopping);

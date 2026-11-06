@@ -51,7 +51,6 @@ impl Overlord {
                 state: ServiceState::Inactive,
                 since: Utc::now(),
                 startup: config.startup(),
-                pid: None,
                 last_exit: None,
                 status_message: None,
                 next_run: None,

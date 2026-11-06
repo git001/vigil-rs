@@ -26,7 +26,9 @@ pub enum Cmd {
     Start(oneshot::Sender<anyhow::Result<()>>),
     Stop(oneshot::Sender<anyhow::Result<()>>),
     Restart(oneshot::Sender<anyhow::Result<()>>),
-    #[allow(dead_code)] // available for direct status queries
+    /// The actor's own view of its state (tests; the overlord builds its
+    /// snapshot from events).
+    #[cfg(test)]
     Status(oneshot::Sender<Snapshot>),
     /// Forward a signal to the service's process group (if running).
     ForwardSignal(nix::sys::signal::Signal),
@@ -50,8 +52,6 @@ pub struct Snapshot {
     pub state: crate::state::ServiceState,
     pub since: DateTime<Utc>,
     pub startup: Startup,
-    #[allow(dead_code)] // exposed in API responses (future)
-    pub pid: Option<u32>,
     /// How the last process ended (raw, before `exit-code-map`).
     pub last_exit: Option<ExitInfo>,
     /// Last `STATUS=` text received via sd_notify.

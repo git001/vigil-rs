@@ -3,118 +3,97 @@
 
 //! Command handlers — Start, Stop, Restart, child exit, kill deadline, backoff.
 
-use std::pin::Pin;
 use std::time::Duration;
 
-use tokio::time::Sleep;
+use tokio::time::Instant;
 use tracing::{error, info, warn};
 use vigil_types::plan::OnExit;
 
 use crate::state::ServiceState;
 
 use super::super::{effective_on_failure, effective_on_success, shutdown_code};
-use super::{Actor, Event, EventKind};
+use super::{Actor, EventKind};
 
 impl Actor {
     // -----------------------------------------------------------------------
     // Command handlers
     // -----------------------------------------------------------------------
 
-    pub(super) async fn handle_start(
-        &mut self,
-        reply: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
-        stop_deadline: &mut Option<Pin<Box<Sleep>>>,
-    ) {
+    /// `vigil start`: start unless it already runs. Errors while stopping.
+    pub(super) async fn try_start(&mut self) -> anyhow::Result<()> {
         if self.state.is_running() {
-            let _ = reply.send(Ok(()));
-            return;
+            return Ok(());
         }
-        if self.state == ServiceState::Stopping {
-            let _ = reply.send(Err(anyhow::anyhow!(
-                "service '{}' is stopping, wait before starting",
-                self.name
-            )));
-            return;
-        }
-
-        self.transition(ServiceState::Starting).await;
-        match self.do_start().await {
-            Ok(()) => {
-                self.reset_backoff();
-                *stop_deadline = None;
-                let _ = reply.send(Ok(()));
-            }
-            Err(e) => {
-                self.start_failed("failed to start", &e).await;
-                let _ = reply.send(Err(e));
-            }
-        }
+        anyhow::ensure!(
+            self.state != ServiceState::Stopping,
+            "service '{}' is stopping, wait before starting",
+            self.name
+        );
+        self.start_now("failed to start").await?;
+        self.reset_backoff();
+        Ok(())
     }
 
-    pub(super) async fn handle_stop(
-        &mut self,
-        reply: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
-        stop_deadline: &mut Option<Pin<Box<Sleep>>>,
-        backoff_sleep: &mut Option<Pin<Box<Sleep>>>,
-    ) {
+    /// `vigil stop`.
+    pub(super) async fn stop(&mut self) {
         match self.state {
             ServiceState::Inactive
             | ServiceState::Error
             | ServiceState::Stopping
-            | ServiceState::Done => {
-                let _ = reply.send(Ok(()));
-                return;
-            }
+            | ServiceState::Done => {}
             ServiceState::Backoff => {
-                *backoff_sleep = None;
+                self.backoff_deadline = None;
                 self.transition(ServiceState::Inactive).await;
-                let _ = reply.send(Ok(()));
-                return;
             }
-            ServiceState::Starting | ServiceState::Active => {}
+            ServiceState::Starting | ServiceState::Active => {
+                self.begin_stop();
+                self.transition(ServiceState::Stopping).await;
+            }
         }
-
-        self.send_stop_signal();
-        self.transition(ServiceState::Stopping).await;
-        *stop_deadline = Some(Box::pin(tokio::time::sleep(self.kill_delay())));
-        let _ = reply.send(Ok(()));
     }
 
-    pub(super) async fn handle_restart(
-        &mut self,
-        reply: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
-        backoff_sleep: &mut Option<Pin<Box<Sleep>>>,
-        stop_deadline: &mut Option<Pin<Box<Sleep>>>,
-        pending_restart: &mut bool,
-    ) {
+    /// `vigil restart` (also `watch-files`): stop, then start again once the
+    /// process is gone; start directly if it does not run.
+    pub(super) async fn restart(&mut self) -> anyhow::Result<()> {
         if self.state == ServiceState::Stopping {
             // Already stopping: start again once it is gone. Neither signal
             // again nor re-arm the deadline, or repeated restarts would push
             // the SIGKILL further and further out.
-            *pending_restart = true;
-            let _ = reply.send(Ok(()));
+            self.pending_restart = true;
         } else if self.state.is_running() {
-            self.send_stop_signal();
+            self.begin_stop();
             self.transition(ServiceState::Stopping).await;
-            *stop_deadline = Some(Box::pin(tokio::time::sleep(self.kill_delay())));
-            *backoff_sleep = None;
-            *pending_restart = true;
-            let _ = reply.send(Ok(()));
+            self.backoff_deadline = None;
+            self.pending_restart = true;
         } else {
-            // Service is not running — start directly; no deferred restart needed.
-            let (tx2, rx2) = tokio::sync::oneshot::channel();
-            self.handle_start(tx2, stop_deadline).await;
-            let res = rx2.await.unwrap_or(Ok(()));
-            let _ = reply.send(res);
+            self.try_start().await?;
         }
+        Ok(())
+    }
+
+    /// Start the process now (a start, restart or scheduled run). A failed
+    /// start puts the service into `error` and reports it; `what` names the
+    /// occasion in the log and the alert.
+    pub(super) async fn start_now(&mut self, what: &str) -> anyhow::Result<()> {
+        self.backoff_deadline = None;
+        self.transition(ServiceState::Starting).await;
+        let res = self.do_start().await;
+        if let Err(e) = &res {
+            self.start_failed(what, e).await;
+        }
+        res
+    }
+
+    /// Send the stop signal and give the process `kill-delay` before
+    /// SIGKILL.
+    pub(super) fn begin_stop(&mut self) {
+        self.send_stop_signal();
+        self.stop_deadline = Some(Instant::now() + self.kill_delay());
     }
 
     pub(super) async fn handle_child_exit(
         &mut self,
         exit: std::io::Result<std::process::ExitStatus>,
-        backoff_sleep: &mut Option<Pin<Box<Sleep>>>,
-        stop_deadline: &mut Option<Pin<Box<Sleep>>>,
-        pending_restart: &mut bool,
     ) {
         use std::os::unix::process::ExitStatusExt;
 
@@ -152,16 +131,11 @@ impl Actor {
         self.metrics
             .set_service_last_exit_code(&self.name, raw_code);
 
-        let _ = self
-            .event_tx
-            .send(Event {
-                service: self.name.clone(),
-                kind: EventKind::ProcessExited {
-                    success,
-                    exit: exit_info,
-                },
-            })
-            .await;
+        self.send_event(EventKind::ProcessExited {
+            success,
+            exit: exit_info,
+        })
+        .await;
 
         info!(
             service = %self.name,
@@ -172,17 +146,14 @@ impl Actor {
             "process exited"
         );
         self.child = None;
-        *stop_deadline = None;
+        self.stop_deadline = None;
 
         if self.state == ServiceState::Stopping {
             self.transition(ServiceState::Inactive).await;
-            if *pending_restart {
-                *pending_restart = false;
-                self.transition(ServiceState::Starting).await;
-                match self.do_start().await {
-                    Ok(()) => self.reset_backoff(),
-                    Err(e) => self.start_failed("restart failed", &e).await,
-                }
+            if std::mem::take(&mut self.pending_restart)
+                && self.start_now("restart failed").await.is_ok()
+            {
+                self.reset_backoff();
             }
             return;
         }
@@ -224,12 +195,7 @@ impl Actor {
                     self.report_unhealthy("failed", format!("{reason}, shutting down vigild"))
                         .await;
                 }
-                let _ = self
-                    .event_tx
-                    .send(Event {
-                        service: self.name.clone(),
-                        kind: EventKind::DaemonShutdown { exit_code },
-                    })
+                self.send_event(EventKind::DaemonShutdown { exit_code })
                     .await;
             }
             Some(OnExit::Restart) => {
@@ -245,7 +211,7 @@ impl Actor {
                     let delay = self.next_backoff();
                     info!(service = %self.name, ?delay, "scheduling restart (backoff)");
                     self.transition(ServiceState::Backoff).await;
-                    *backoff_sleep = Some(Box::pin(tokio::time::sleep(delay)));
+                    self.backoff_deadline = Some(Instant::now() + delay);
                     if !success {
                         self.report_unhealthy(
                             "backoff",
@@ -274,10 +240,7 @@ impl Actor {
         }
     }
 
-    pub(super) async fn handle_backoff_expired(
-        &mut self,
-        stop_deadline: &mut Option<Pin<Box<Sleep>>>,
-    ) {
+    pub(super) async fn handle_backoff_expired(&mut self) {
         // A timer from an earlier backoff that a start or stop made
         // obsolete: the service is not waiting any more. Starting now would
         // replace the running child and leave it unsupervised.
@@ -285,12 +248,7 @@ impl Actor {
             return;
         }
         info!(service = %self.name, "backoff elapsed, restarting");
-        self.transition(ServiceState::Starting).await;
-        match self.do_start().await {
-            Ok(()) => {}
-            Err(e) => self.start_failed("restart after backoff failed", &e).await,
-        }
-        *stop_deadline = None;
+        let _ = self.start_now("restart after backoff failed").await;
     }
 
     pub(super) async fn cleanup(&mut self) {
