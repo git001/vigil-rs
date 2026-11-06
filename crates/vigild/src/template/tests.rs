@@ -195,26 +195,6 @@ fn check_service_reports_syntax_errors_only() {
     assert!(format!("{err:#}").contains("environment \"B\""), "{err:#}");
 }
 
-#[tokio::test]
-async fn off_runtime_gives_up_on_a_hanging_read() {
-    let (_keep, rx) = std::sync::mpsc::channel::<()>();
-    let started = std::time::Instant::now();
-    let err = off_runtime_within(
-        std::time::Duration::from_millis(100),
-        "templates",
-        move || {
-            let _ = rx.recv_timeout(std::time::Duration::from_secs(5)); // "dead NFS"
-            Ok(())
-        },
-    )
-    .await
-    .unwrap_err();
-    assert!(started.elapsed() < std::time::Duration::from_secs(2));
-    assert!(err.to_string().contains("hanging file system"), "{err}");
-    // the runtime is still usable
-    assert_eq!(off_runtime("x", || Ok(42)).await.unwrap(), 42);
-}
-
 #[test]
 fn empty_file_is_an_error_unless_a_default_is_given() {
     let dir = tempfile::tempdir().unwrap();

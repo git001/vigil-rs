@@ -19,17 +19,16 @@
 //! at most one blocking thread per service is tied up and the actor keeps
 //! working.
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use vigil_types::plan::{FileChangeAction, WatchFiles};
 
-use crate::duration::{MAX_INTERVAL, MIN_INTERVAL, parse_duration};
-use tokio::task::JoinHandle;
+use crate::duration::{clamp_interval, parse_duration};
 use tracing::warn;
 
-use crate::template::{ContentHasher, FILE_IO_TIMEOUT, FileRead};
+use crate::file_io::{ContentHasher, FILE_IO_TIMEOUT, PeriodicRead, ReadOutcome, hash_into};
+use crate::template::FileRead;
 
 pub const DEFAULT_WATCH_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -62,14 +61,9 @@ fn probe(path: &Path) -> State {
         return State::Unreadable;
     }
     let mut h = ContentHasher::default();
-    let mut buf = vec![0u8; 64 * 1024];
-    loop {
-        match f.read(&mut buf) {
-            Ok(0) => return State::Content(h.finish()),
-            Ok(n) => h.update(&buf[..n]),
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(_) => return State::Unreadable,
-        }
+    match hash_into(&mut h, &mut f) {
+        Ok(()) => State::Content(h.finish()),
+        Err(_) => State::Unreadable,
     }
 }
 
@@ -82,12 +76,7 @@ pub struct FileWatch {
     paths: Vec<PathBuf>,
     baseline: Vec<State>,
     pending: Option<Vec<State>>,
-    /// A read that has not returned yet (hanging file system).
-    inflight: Option<JoinHandle<Vec<State>>>,
-}
-
-fn probe_all(paths: Vec<PathBuf>) -> JoinHandle<Vec<State>> {
-    tokio::task::spawn_blocking(move || paths.iter().map(|p| probe(p)).collect())
+    reader: PeriodicRead<Vec<State>>,
 }
 
 impl FileWatch {
@@ -108,10 +97,8 @@ impl FileWatch {
             .interval
             .as_deref()
             .and_then(|s| parse_duration(s).ok())
-            .unwrap_or(DEFAULT_WATCH_INTERVAL)
-            // The plan check rejects values outside the range; clamp anyway
-            // so an unchecked config can never poll in a tight loop.
-            .clamp(MIN_INTERVAL, MAX_INTERVAL);
+            .map(clamp_interval)
+            .unwrap_or(DEFAULT_WATCH_INTERVAL);
         let mut watch = match &cfg.paths {
             // Explicit paths: only these; the application reads them itself,
             // so their state is taken now.
@@ -153,23 +140,20 @@ impl FileWatch {
             paths,
             baseline,
             pending: None,
-            inflight: None,
+            reader: PeriodicRead::default(),
         }
     }
 
     /// Current states, or `None` if the files could not be read in time.
     async fn read(&mut self) -> Option<Vec<State>> {
-        let mut handle = match self.inflight.take() {
-            Some(h) if !h.is_finished() => {
-                // Still hanging: do not pile up more blocked threads.
-                self.inflight = Some(h);
-                return None;
-            }
-            _ => probe_all(self.paths.clone()),
-        };
-        match tokio::time::timeout(FILE_IO_TIMEOUT, &mut handle).await {
-            Ok(res) => res.ok(),
-            Err(_) => {
+        let paths = self.paths.clone();
+        match self
+            .reader
+            .run(move || paths.iter().map(|p| probe(p)).collect())
+            .await
+        {
+            ReadOutcome::Done(states) => Some(states),
+            ReadOutcome::TimedOut => {
                 warn!(
                     service = %self.service,
                     files = ?self.paths,
@@ -177,9 +161,9 @@ impl FileWatch {
                      not checking them until the read returns",
                     FILE_IO_TIMEOUT.as_secs()
                 );
-                self.inflight = Some(handle);
                 None
             }
+            ReadOutcome::StillHanging | ReadOutcome::Failed => None,
         }
     }
 
@@ -228,7 +212,8 @@ impl FileWatch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::template::content_hash;
+    use crate::duration::{MAX_INTERVAL, MIN_INTERVAL};
+    use crate::file_io::content_hash;
 
     fn read(path: &Path, content: Option<&str>) -> FileRead {
         FileRead {
@@ -289,21 +274,21 @@ mod tests {
             vec![State::Content(1)],
         );
         let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-        w.inflight = Some(tokio::task::spawn_blocking(move || {
+        w.reader.inflight = Some(tokio::task::spawn_blocking(move || {
             let _ = release_rx.recv(); // "hangs" until released
             vec![State::Content(2)]
         }));
         // still hanging: returns at once, keeps the handle
         assert_eq!(w.poll().await, None);
-        assert!(w.inflight.is_some());
+        assert!(w.reader.inflight.is_some());
         release_tx.send(()).unwrap();
         // let the blocking task finish
-        while !w.inflight.as_ref().unwrap().is_finished() {
+        while !w.reader.inflight.as_ref().unwrap().is_finished() {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         // finished: a fresh read of the real path (missing → change pending)
         assert_eq!(w.poll().await, None);
-        assert!(w.inflight.is_none());
+        assert!(w.reader.inflight.is_none());
         assert_eq!(w.poll().await, Some(vec!["/a".into()]));
     }
 

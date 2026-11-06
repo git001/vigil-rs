@@ -15,7 +15,6 @@
 //! `vigild`/`layers`/`invalid`. A failed replan is not retried; only the
 //! next change of the files triggers a new one.
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -25,8 +24,8 @@ use tracing::{info, warn};
 
 use super::Cmd;
 use super::plan::is_layer_file;
-use crate::duration::{MAX_INTERVAL, MIN_INTERVAL};
-use crate::template::{ContentHasher, FILE_IO_TIMEOUT};
+use crate::duration::clamp_interval;
+use crate::file_io::{ContentHasher, FILE_IO_TIMEOUT, PeriodicRead, ReadOutcome, hash_into};
 
 /// Hash over the names and contents of the layer files in `dir`, in the
 /// order `load_plan` reads them. A missing directory has its own hash (it
@@ -48,19 +47,11 @@ fn layers_hash(dir: &Path) -> Option<u64> {
         .filter(|n| is_layer_file(n))
         .collect();
     names.sort();
-    let mut buf = vec![0u8; 64 * 1024];
     for name in names {
         h.update(name.as_bytes());
         h.update(b"\0");
         let mut f = std::fs::File::open(dir.join(&name)).ok()?;
-        loop {
-            match f.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => h.update(&buf[..n]),
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(_) => return None,
-            }
-        }
+        hash_into(&mut h, &mut f).ok()?;
         // Separates this file's content from the next file's name.
         h.update(b"\0");
     }
@@ -100,41 +91,29 @@ impl Detector {
 /// Poll `dir` every `interval` and send a replan to the overlord when the
 /// layers changed. Runs until the overlord is gone.
 pub fn spawn(dir: PathBuf, interval: Duration, tx: mpsc::Sender<Cmd>) -> JoinHandle<()> {
-    // Validated by the option parser (`parse_interval`); clamp anyway so an
-    // unchecked value can never poll in a tight loop.
-    let interval = interval.clamp(MIN_INTERVAL, MAX_INTERVAL);
+    let interval = clamp_interval(interval);
     tokio::spawn(async move {
         info!(dir = %dir.display(), ?interval, "watching layers");
         let mut detector = Detector::default();
-        let mut inflight: Option<JoinHandle<Option<u64>>> = None;
+        let mut reader = PeriodicRead::default();
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             ticker.tick().await;
-            let mut handle = match inflight.take() {
-                // A read is still hanging: do not pile up blocked threads.
-                Some(h) if !h.is_finished() => {
-                    inflight = Some(h);
-                    continue;
-                }
-                _ => {
-                    let dir = dir.clone();
-                    tokio::task::spawn_blocking(move || layers_hash(&dir))
-                }
-            };
-            let hash = match tokio::time::timeout(FILE_IO_TIMEOUT, &mut handle).await {
-                Ok(Ok(Some(h))) => h,
-                Ok(_) => continue, // unreadable this round
-                Err(_) => {
+            let d = dir.clone();
+            let hash = match reader.run(move || layers_hash(&d)).await {
+                ReadOutcome::Done(Some(h)) => h,
+                ReadOutcome::TimedOut => {
                     warn!(
                         dir = %dir.display(),
                         "layers could not be read within {}s (hanging file system?); \
                          not checking them until the read returns",
                         FILE_IO_TIMEOUT.as_secs()
                     );
-                    inflight = Some(handle);
                     continue;
                 }
+                // Unreadable this round, or the last read still hangs.
+                _ => continue,
             };
             if !detector.update(hash) {
                 continue;

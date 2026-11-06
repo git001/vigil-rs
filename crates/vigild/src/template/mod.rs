@@ -24,7 +24,6 @@ mod resources;
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::hash::Hasher;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -37,35 +36,7 @@ pub fn is_template(s: &str) -> bool {
     s.contains("{{") || s.contains("{%")
 }
 
-/// Longest time vigild waits for file reads (templates, env files, watched
-/// files). A read on a dead NFS hard mount never returns and cannot be
-/// cancelled; with this limit it only ties up one blocking-pool thread, never
-/// the async runtime or the service's actor.
-pub const FILE_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
-/// Run `f` (which may read files) on the blocking pool, giving up after
-/// [`FILE_IO_TIMEOUT`].
-pub async fn off_runtime<T: Send + 'static>(
-    what: &str,
-    f: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
-) -> anyhow::Result<T> {
-    off_runtime_within(FILE_IO_TIMEOUT, what, f).await
-}
-
-async fn off_runtime_within<T: Send + 'static>(
-    limit: std::time::Duration,
-    what: &str,
-    f: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
-) -> anyhow::Result<T> {
-    match tokio::time::timeout(limit, tokio::task::spawn_blocking(f)).await {
-        Ok(Ok(res)) => res,
-        Ok(Err(e)) => Err(anyhow::anyhow!("{what}: {e}")),
-        Err(_) => Err(anyhow::anyhow!(
-            "{what}: reading files did not finish within {:?} (hanging file system, e.g. a dead NFS mount?)",
-            limit
-        )),
-    }
-}
+pub use crate::file_io::{FILE_IO_TIMEOUT, off_runtime};
 
 /// A file read while building a service's start: its path and a hash of
 /// the content that was used (`None`: it did not exist). `watch-files`
@@ -76,26 +47,7 @@ pub struct FileRead {
     pub hash: Option<u64>,
 }
 
-/// Hash used to detect content changes (not cryptographic; only compared
-/// with earlier hashes of the same file within one vigild process).
-#[derive(Default)]
-pub struct ContentHasher(std::collections::hash_map::DefaultHasher);
-
-impl ContentHasher {
-    pub fn update(&mut self, bytes: &[u8]) {
-        self.0.write(bytes);
-    }
-
-    pub fn finish(&self) -> u64 {
-        self.0.finish()
-    }
-}
-
-pub fn content_hash(bytes: &[u8]) -> u64 {
-    let mut h = ContentHasher::default();
-    h.update(bytes);
-    h.finish()
-}
+use crate::file_io::content_hash;
 
 /// Collects the files a [`Renderer`] reads.
 #[derive(Clone, Default)]

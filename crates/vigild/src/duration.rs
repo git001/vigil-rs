@@ -8,6 +8,12 @@ pub const MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 /// Longest allowed polling interval (see [`MIN_INTERVAL`]).
 pub const MAX_INTERVAL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
+/// Keep an already validated interval within the bounds anyway, so a value
+/// that bypassed validation can never poll in a tight loop.
+pub fn clamp_interval(d: std::time::Duration) -> std::time::Duration {
+    d.clamp(MIN_INTERVAL, MAX_INTERVAL)
+}
+
 /// Parse a polling interval and require it to be within [`MIN_INTERVAL`]
 /// and [`MAX_INTERVAL`]. The error names the value, the caller adds the
 /// field.
