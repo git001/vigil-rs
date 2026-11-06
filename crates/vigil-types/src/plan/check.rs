@@ -20,7 +20,7 @@ fn default_true() -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct HttpCheck {
     pub url: String,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
@@ -60,13 +60,14 @@ impl Default for HttpCheck {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TcpCheck {
     pub host: Option<String>,
     pub port: u16,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ExecCheck {
     pub command: String,
     /// Inherit env/user/group/working-dir from this service; check settings override.
@@ -96,9 +97,10 @@ pub struct ExecCheck {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct CheckConfig {
-    #[serde(default)]
+    /// `override: merge|replace` in the layer file.
+    #[serde(default, rename = "override")]
     pub override_mode: Override,
     /// `None`: not set in this layer (a merge keeps the earlier value);
     /// read it with [`CheckConfig::level`].

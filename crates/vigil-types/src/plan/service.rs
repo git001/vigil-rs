@@ -149,9 +149,10 @@ pub enum OnExit {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ServiceConfig {
-    #[serde(default)]
+    /// `override: merge|replace` in the layer file.
+    #[serde(default, rename = "override")]
     pub override_mode: Override,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,

@@ -33,11 +33,23 @@ checks:
 alerts:
   <alert-name>:
     ...
-
-identities:
-  <identity-name>:
-    ...
 ```
+
+vigild reads layer files strictly: a key it does not know (a typo such as
+`comand`, `retry_attempts` instead of `retry-attempts`, or a key in the wrong
+block) or a value that is not allowed is an error that names the key and
+lists the valid ones. At startup vigild then does not start; on `vigil
+replan` or `--watch-layers` the running plan stays. Nothing is silently
+ignored.
+
+```
+Error: parsing "/etc/vigil/layers/001-base.yaml"
+
+Caused by:
+    services.app: unknown field `comand`, expected one of `override`, `summary`, `description`, `command`, … at line 3 column 5
+```
+
+Identities are not part of layer files; see [Identities](#identities).
 
 ---
 
@@ -1067,27 +1079,27 @@ alerts:
     # Placement depends on format (annotations in Alertmanager, attributes
     # in OTLP, info object in webhook/CloudEvents).
     # Values prefixed with "env:" are resolved from the process environment.
-    send_info_fields:
+    send-info-fields:
       k8s_namespace: "env:KUBERNETES_NAMESPACE"
       k8s_service:   "env:KUBERNETES_SERVICE_NAME"
       runbook: "https://wiki.example.com/runbooks/website-down"
 
     # --- TLS ---
-    tls_insecure: false              # skip cert verification (self-signed)
-    tls_ca: /etc/vigil/certs/ca.pem # PEM CA cert or chain file
+    tls-insecure: false              # skip cert verification (self-signed)
+    tls-ca: /etc/vigil/certs/ca.pem # PEM CA cert or chain file
 
     # --- Proxy ---
     # If omitted, HTTPS_PROXY / ALL_PROXY / HTTP_PROXY env vars are used
     # automatically (same precedence as the vigil CLI).
     proxy:    "env:HTTPS_PROXY"      # explicit proxy URL (overrides env vars)
-    proxy_ca: /etc/vigil/certs/proxy-ca.pem  # CA cert to verify proxy TLS
-    no_proxy: "env:NO_PROXY"         # comma-separated bypass list
+    proxy-ca: /etc/vigil/certs/proxy-ca.pem  # CA cert to verify proxy TLS
+    no-proxy: "env:NO_PROXY"         # comma-separated bypass list
 
     # --- Retry ---
-    retry_attempts: 3                # total attempts including first (default: 3)
-    retry_backoff: ["1s", "2s"]      # delays between attempts (default: ["1s", "2s"])
+    retry-attempts: 3                # total attempts including first (default: 3)
+    retry-backoff: ["1s", "2s"]      # delays between attempts (default: ["1s", "2s"])
                                      # last entry is reused if list is shorter than
-                                     # retry_attempts - 1
+                                     # retry-attempts - 1
 
     # --- Custom body template (webhook format only) ---
     # Jinja2-style template rendered instead of the default webhook payload.
@@ -1141,7 +1153,7 @@ List of [vigild events](#vigild-events) that trigger this alert: `layers` or
 
 Any string field that accepts `"env:VAR"` resolves the named environment
 variable at send time. This applies to: `url`, `headers` values, `labels`
-values, `send_info_fields` values, `proxy`, `no_proxy`.
+values, `send-info-fields` values, `proxy`, `no-proxy`.
 
 vigild logs a **WARNING** at startup and after every `replan` for each
 `env:VAR` reference where the variable is unset or empty — so misconfiguration
@@ -1155,12 +1167,12 @@ WARN vigild::alert: alert config references unset env var — field will be empt
 For `url` specifically an empty resolved value causes the alert to be dropped
 with an ERROR rather than silently sending to a blank URL.
 
-#### `labels` / `send_info_fields`
+#### `labels` / `send-info-fields`
 
 Both accept a key/value map with optional `env:` resolution.
 They differ in placement within the payload:
 
-| Format | `labels` | `send_info_fields` |
+| Format | `labels` | `send-info-fields` |
 |---|---|---|
 | `webhook` | `labels` object | `info` object |
 | `alertmanager` | Alertmanager `labels` map (+ `alertname`, `source` and, for checks, `check` added automatically) | `annotations` map (+ `event`, `message`) |
@@ -1189,7 +1201,7 @@ default webhook payload — the alert is never silently dropped.
 | `check` | string | Name of the check for check events; undefined (renders empty) otherwise |
 | `timestamp` | string | RFC 3339 timestamp of the event |
 | `labels` | object | Resolved `labels` map |
-| `info` | object | Resolved `send_info_fields` map |
+| `info` | object | Resolved `send-info-fields` map |
 
 **Ignored** for `alertmanager`, `cloud-events`, and `otlp-logs` formats.
 
@@ -1212,28 +1224,28 @@ body-template: |
   }
 ```
 
-#### `tls_insecure` / `tls_ca`
+#### `tls-insecure` / `tls-ca`
 
-Same semantics as the [HTTP check TLS options](#http-check). `tls_ca` supports
+Same semantics as the [HTTP check TLS options](#http-check). `tls-ca` supports
 chain files (multiple concatenated PEM blocks).
 
-#### `proxy` / `proxy_ca` / `no_proxy`
+#### `proxy` / `proxy-ca` / `no-proxy`
 
 | Field | Description |
 |---|---|
 | `proxy` | Explicit proxy URL. Overrides `HTTPS_PROXY` / `ALL_PROXY` / `HTTP_PROXY` env vars. Supports `env:`. |
-| `proxy_ca` | PEM CA cert (or chain) to verify the proxy's TLS connection. |
-| `no_proxy` | Comma-separated bypass list. Supports hostnames, domain suffixes, IPv4 CIDRs (`192.168.0.0/16`), and IPv6 CIDRs (`fd00::/8`). Supports `env:`. |
+| `proxy-ca` | PEM CA cert (or chain) to verify the proxy's TLS connection. |
+| `no-proxy` | Comma-separated bypass list. Supports hostnames, domain suffixes, IPv4 CIDRs (`192.168.0.0/16`), and IPv6 CIDRs (`fd00::/8`). Supports `env:`. |
 
 If `proxy` is omitted, vigild automatically reads `HTTPS_PROXY`, `ALL_PROXY`,
 and `HTTP_PROXY` env vars (in that order) — the same behaviour as the vigil CLI.
 
-#### `retry_attempts` / `retry_backoff`
+#### `retry-attempts` / `retry-backoff`
 
 | Field | Default | Description |
 |---|---|---|
-| `retry_attempts` | `3` | Total number of send attempts (1 = no retry) |
-| `retry_backoff` | `["1s", "2s"]` | Delays between attempts as duration strings. If shorter than `retry_attempts - 1`, the last entry is reused. |
+| `retry-attempts` | `3` | Total number of send attempts (1 = no retry) |
+| `retry-backoff` | `["1s", "2s"]` | Delays between attempts as duration strings. If shorter than `retry-attempts - 1`, the last entry is reused. |
 
 Retries are performed on connection errors and `5xx` responses. Client errors
 (`4xx`) are not retried.
@@ -1329,7 +1341,7 @@ Compatible with `POST /v1/logs` on any OpenTelemetry Collector.
 `severityNumber` is `17` (ERROR) on Down and `9` (INFO) on Up. The body is
 the message. Attributes: `vigil.source`, `vigil.name`, `vigil.event`, for
 check events also `check.name` and `check.status`, plus `labels` and
-`send_info_fields`.
+`send-info-fields`.
 
 ### Example
 
@@ -1346,10 +1358,10 @@ alerts:
     labels:
       severity: critical
       cluster:  "env:CLUSTER_NAME"
-    send_info_fields:
+    send-info-fields:
       runbook: "https://wiki.example.com/runbooks/website-down"
-    retry_attempts: 5
-    retry_backoff: ["1s", "2s", "5s", "10s"]
+    retry-attempts: 5
+    retry-backoff: ["1s", "2s", "5s", "10s"]
 
   # OTLP — via corporate proxy
   otlp-prod:
@@ -1357,7 +1369,7 @@ alerts:
     format: otlp-logs
     on-check: [website-alive]
     proxy:    "http://corp-proxy:3128"
-    no_proxy: "localhost, .internal, 10.0.0.0/8"
+    no-proxy: "localhost, .internal, 10.0.0.0/8"
     labels:
       service.name:            vigild
       service.namespace:       "env:KUBERNETES_NAMESPACE"
@@ -1380,7 +1392,7 @@ alerts:
     on-check: [website-alive]
     labels:
       cluster: "env:CLUSTER_NAME"
-    send_info_fields:
+    send-info-fields:
       runbook: "https://wiki.example.com/runbooks/website-down"
     body-template: |
       {
@@ -1402,7 +1414,7 @@ alerts:
 ## Duration format
 
 All duration fields (e.g. `kill-delay`, `period`, `timeout`, `backoff-delay`,
-`backoff-limit`, `delay`, `retry_backoff` entries) accept strings like:
+`backoff-limit`, `delay`, `retry-backoff` entries) accept strings like:
 
 | Example | Meaning |
 |---|---|
@@ -1486,7 +1498,7 @@ alerts:
       severity: critical
       env:      production
       cluster:  "env:CLUSTER_NAME"
-    send_info_fields:
+    send-info-fields:
       k8s_namespace: "env:KUBERNETES_NAMESPACE"
 ```
 
@@ -1497,6 +1509,11 @@ alerts:
 Identities control who may call the vigild REST API and what they are allowed
 to do. They are optional — if no identities are configured the daemon applies
 default access rules based on connection type (see below).
+
+Identities are managed over the API, not in layer files: `vigil identities
+add-local`, or `POST /v1/identities` with a body like the examples below (as
+JSON). vigild keeps them in memory, so they are gone after a restart and must
+be added again.
 
 ### Access levels
 

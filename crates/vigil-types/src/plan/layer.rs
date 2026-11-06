@@ -10,7 +10,7 @@ use super::check::{CheckConfig, merge_check};
 use super::service::{ServiceConfig, merge_service};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Layer {
     #[serde(skip)]
     pub order: u32,

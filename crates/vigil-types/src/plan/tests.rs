@@ -418,3 +418,44 @@ fn alert_max_queue_time_last_layer_wins() {
     let plan = Plan::from_layers(vec![l1, l2]);
     assert_eq!(plan.alert_max_queue_time.as_deref(), Some("2m"));
 }
+
+/// `override: replace` is read from YAML under the documented key (it was
+/// silently ignored as an unknown field before v4).
+#[test]
+fn override_replace_is_read_from_yaml() {
+    let l1: Layer = serde_yaml::from_str(
+        "services:\n  app:\n    command: /usr/bin/app --old\n    environment:\n      MODE: old\n",
+    )
+    .unwrap();
+    let l2: Layer = serde_yaml::from_str(
+        "services:\n  app:\n    override: replace\n    command: /usr/bin/app --new\n",
+    )
+    .unwrap();
+    let plan = Plan::from_layers(vec![l1, l2]);
+    let app = &plan.services["app"];
+    assert_eq!(app.command.as_deref(), Some("/usr/bin/app --new"));
+    assert!(
+        app.environment.is_empty(),
+        "replace drops the old environment"
+    );
+}
+
+#[test]
+fn unknown_fields_are_rejected_with_the_field_name() {
+    for (yaml, field) in [
+        ("services:\n  app:\n    comand: /bin/true\n", "comand"),
+        ("checks:\n  c:\n    perod: 5s\n", "perod"),
+        ("checks:\n  c:\n    http:\n      ulr: http://x/\n", "ulr"),
+        (
+            "alerts:\n  a:\n    url: http://x/\n    retry_attempts: 5\n",
+            "retry_attempts",
+        ),
+        ("servics: {}\n", "servics"),
+    ] {
+        let err = serde_yaml::from_str::<Layer>(yaml).unwrap_err().to_string();
+        assert!(
+            err.contains(&format!("unknown field `{field}`")),
+            "{yaml}: {err}"
+        );
+    }
+}

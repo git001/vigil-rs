@@ -22,9 +22,10 @@ pub enum AlertFormat {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct AlertConfig {
-    #[serde(default)]
+    /// `override: merge|replace` in the layer file.
+    #[serde(default, rename = "override")]
     pub override_mode: Override,
     /// HTTP(S) endpoint to POST alerts to.
     pub url: String,
@@ -110,7 +111,7 @@ pub struct AlertConfig {
     ///
     /// Example (Slack incoming webhook):
     /// ```yaml
-    /// body_template: '{"text": "Check *{{ check }}* is {{ status }}"}'
+    /// body-template: '{"text": "Check *{{ check }}* is {{ status }}"}'
     /// ```
     ///
     /// Ignored for formats other than `webhook`.

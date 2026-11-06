@@ -4,11 +4,11 @@ checks:
   dummy-check:
     override: merge
     startup: enabled
+    period: 1s
+    timeout: 1s
+    delay: 0s
     http:
       url: "http://127.0.0.1:1/probe"
-      timeout: 100ms
-    period: 1s
-    delay: 0s
 
 alerts:
   test-alert:

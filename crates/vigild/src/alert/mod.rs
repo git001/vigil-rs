@@ -7,7 +7,7 @@
 //! Supported formats: webhook (generic JSON), Alertmanager, CloudEvents 1.0,
 //! OTLP HTTP/JSON logs.
 //!
-//! Values in `labels` and `send_info_fields` that start with `"env:"` are
+//! Values in `labels` and `send-info-fields` that start with `"env:"` are
 //! resolved from the process environment at send time, so you can inject
 //! runtime context without rebuilding the image:
 //!
@@ -20,7 +20,7 @@
 //!     on-service: ["*"]
 //!     labels:
 //!       cluster: "env:CLUSTER_NAME"
-//!     send_info_fields:
+//!     send-info-fields:
 //!       k8s_service: "env:KUBERNETES_SERVICE_NAME"
 //! ```
 

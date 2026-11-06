@@ -593,6 +593,16 @@ invalid layers keep the plan and alert once, recovery. VTest `v0024`: a new
 layer is applied without replan, a broken one sends `invalid` and keeps the
 running service, removing it sends `recovered`.
 
+### Phase 4d: identities in layer files (before the release)
+
+**Goal:** identities only existed in memory (added over the API) and were
+lost on every restart; `identities:` in a layer file was silently ignored.
+Decided by the user (2026-11-06): layer files may define identities, so they
+survive a restart and can come from a ConfigMap (e.g. the read identity of
+vigil-log-relay). Design details (merge with identities added over the API,
+replan, secrets such as password hashes from files) are open and decided
+before the implementation.
+
 ## Releases
 
 ```

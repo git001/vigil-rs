@@ -9,7 +9,7 @@ summary: Webhook alert examples — Slack, Microsoft Teams, generic
 #   {{ status }}    — "up" or "down" (string)
 #   {{ timestamp }} — RFC 3339 timestamp (string)
 #   {{ labels }}    — resolved labels map
-#   {{ info }}      — resolved send_info_fields map
+#   {{ info }}      — resolved send-info-fields map
 #
 # body-template is only used with format: webhook.
 # All other formats (alertmanager, cloud-events, otlp-logs) ignore it.
@@ -89,7 +89,7 @@ alerts:
     on-check: [website-alive]
     labels:
       cluster: "env:CLUSTER_NAME"
-    send_info_fields:
+    send-info-fields:
       runbook: "https://wiki.example.com/runbooks/website-down"
     retry-attempts: 3
     retry-backoff: ["1s", "5s"]
@@ -125,7 +125,7 @@ alerts:
     labels:
       cluster: "env:CLUSTER_NAME"
       env:     production
-    send_info_fields:
+    send-info-fields:
       runbook: "https://wiki.example.com/runbooks/website-down"
     # No body-template → default payload:
     # {
