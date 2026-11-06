@@ -87,7 +87,13 @@ impl Actor {
         stop_deadline: &mut Option<Pin<Box<Sleep>>>,
         pending_restart: &mut bool,
     ) {
-        if self.state.is_running() || self.state == ServiceState::Stopping {
+        if self.state == ServiceState::Stopping {
+            // Already stopping: start again once it is gone. Neither signal
+            // again nor re-arm the deadline, or repeated restarts would push
+            // the SIGKILL further and further out.
+            *pending_restart = true;
+            let _ = reply.send(Ok(()));
+        } else if self.state.is_running() {
             self.send_stop_signal();
             self.transition(ServiceState::Stopping).await;
             *stop_deadline = Some(Box::pin(tokio::time::sleep(self.kill_delay())));
@@ -274,6 +280,12 @@ impl Actor {
         &mut self,
         stop_deadline: &mut Option<Pin<Box<Sleep>>>,
     ) {
+        // A timer from an earlier backoff that a start or stop made
+        // obsolete: the service is not waiting any more. Starting now would
+        // replace the running child and leave it unsupervised.
+        if self.state != ServiceState::Backoff {
+            return;
+        }
         info!(service = %self.name, "backoff elapsed, restarting");
         self.transition(ServiceState::Starting).await;
         match self.do_start().await {

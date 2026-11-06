@@ -1645,3 +1645,48 @@ async fn failed_start_reports_error() {
     assert_unhealthy(&ev, "error", "failed to start: ");
     tx.send(Cmd::Shutdown).await.unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// Backoff timer and repeated restarts
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn stale_backoff_timer_does_not_start_a_second_process() {
+    let (mut actor, _rx) = make_actor_with_config(ServiceConfig {
+        command: Some("sleep 30".into()),
+        ..Default::default()
+    });
+    // The service waits in backoff; a manual start comes first.
+    actor.state = ServiceState::Backoff;
+    let mut stop_deadline = None;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    actor.handle_start(tx, &mut stop_deadline).await;
+    rx.await.unwrap().unwrap();
+    let pid = actor.child.as_ref().and_then(|c| c.id());
+    assert!(pid.is_some());
+
+    // Now the old backoff timer fires: it must not start another process.
+    actor.handle_backoff_expired(&mut stop_deadline).await;
+    assert_eq!(actor.child.as_ref().and_then(|c| c.id()), pid);
+    actor.cleanup().await;
+}
+
+#[tokio::test]
+async fn restart_while_stopping_keeps_the_kill_deadline() {
+    let (mut actor, _rx) = make_actor_with_config(ServiceConfig {
+        command: Some("sleep 30".into()),
+        ..Default::default()
+    });
+    actor.state = ServiceState::Stopping;
+    let mut stop_deadline = None;
+    let mut backoff_sleep = None;
+    let mut pending_restart = false;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    actor
+        .handle_restart(tx, &mut backoff_sleep, &mut stop_deadline, &mut pending_restart)
+        .await;
+    rx.await.unwrap().unwrap();
+    assert!(pending_restart, "starts again once stopped");
+    assert!(stop_deadline.is_none(), "the running deadline is not replaced");
+    assert_eq!(actor.state, ServiceState::Stopping);
+}
