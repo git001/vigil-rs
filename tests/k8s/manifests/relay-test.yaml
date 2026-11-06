@@ -1,0 +1,118 @@
+# Test pods for tests/k8s/relay.sh (vigil-log-relay --kubernetes).
+#
+# All pods run like on OpenShift: a non-root UID, no capabilities and a
+# read-only root file system. Each one writes a numbered line per second.
+#
+# logger-a       matches the selector; its default container is streamed.
+# logger-multi   matches the selector; two containers, the sidecar writes
+#                to stderr (checks --container all and the stream field).
+# excluded-pod   matches the selector but is dropped by --exclude-pod.
+# other-app      does not match the selector.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vigil-relay-test
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: logger-a
+  namespace: vigil-relay-test
+  labels:
+    app: vigil-relay-test
+spec:
+  terminationGracePeriodSeconds: 1
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000710000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: app
+      image: docker.io/library/busybox:1.36
+      command: ["sh", "-c", "i=0; while :; do i=$((i+1)); echo \"logger-a line $i\"; sleep 1; done"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: logger-multi
+  namespace: vigil-relay-test
+  labels:
+    app: vigil-relay-test
+spec:
+  terminationGracePeriodSeconds: 1
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000710000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: app
+      image: docker.io/library/busybox:1.36
+      command: ["sh", "-c", "i=0; while :; do i=$((i+1)); echo \"multi-app line $i\"; sleep 1; done"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+    - name: sidecar
+      image: docker.io/library/busybox:1.36
+      command: ["sh", "-c", "i=0; while :; do i=$((i+1)); echo \"multi-sidecar line $i\" >&2; sleep 1; done"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: excluded-pod
+  namespace: vigil-relay-test
+  labels:
+    app: vigil-relay-test
+spec:
+  terminationGracePeriodSeconds: 1
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000710000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: app
+      image: docker.io/library/busybox:1.36
+      command: ["sh", "-c", "i=0; while :; do i=$((i+1)); echo \"excluded line $i\"; sleep 1; done"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: other-app
+  namespace: vigil-relay-test
+  labels:
+    app: other
+spec:
+  terminationGracePeriodSeconds: 1
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000710000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: app
+      image: docker.io/library/busybox:1.36
+      command: ["sh", "-c", "i=0; while :; do i=$((i+1)); echo \"other line $i\"; sleep 1; done"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]

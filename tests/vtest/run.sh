@@ -18,6 +18,8 @@
 #               split on whitespace. Example for an unprivileged sandbox
 #               whose /etc/passwd lacks root:
 #               CARGO_TEST_ARGS="-- --skip resolve_uid_name_and --skip resolve_gid_name_and"
+#   K8S_TEST    Set to 1 in --coverage mode to also run tests/k8s/relay.sh
+#               (vigil-log-relay --kubernetes) against the cluster in KUBECONFIG.
 
 set -euo pipefail
 
@@ -136,6 +138,11 @@ export LLVM_PROFILE_FILE="${LLVM_PROFILE_FILE}"
     -Dvtestdir="${REPO_ROOT}/tests/vtest" \
     "${VTEST_OPTS[@]}" \
     "${VTC_FILES[@]}"
+
+if [[ "${K8S_TEST:-0}" == 1 ]]; then
+    echo "==> Running the Kubernetes relay test…"
+    RELAY_BIN="${VIGIL_LOG_RELAY_BIN}" "${REPO_ROOT}/tests/k8s/relay.sh"
+fi
 
 echo ""
 echo "==> Coverage report (unit + integration + VTest2)…"

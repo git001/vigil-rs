@@ -388,9 +388,10 @@ test starts a real `vigild` process (and sometimes `vigil-log-relay`) with a
 temporary layers directory and Unix socket, drives it through the HTTP API and
 the `vigil` CLI, and asserts on the responses.
 
-22 test files cover: system info, service/check/alert/identity CRUD, log
+25 test files cover: system info, service/check/alert/identity CRUD, log
 streaming, TLS listener, reaper, mTLS, alert body templates, log-relay socket
-and URL sources, TCP reconnect, JSON log format, HTTPS transport, and more.
+and URL sources, TCP reconnect, JSON log format, HTTPS transport, service
+alerts, layer watching, shutdown exit codes, and more.
 
 ```sh
 # Run all VTest2 tests (requires VTest2 binary)
@@ -402,6 +403,13 @@ tests/vtest/run.sh -v tests/vtest/v0001_system_info.vtc
 # Combined coverage report (unit + integration + VTest2)
 tests/vtest/run.sh --coverage          # text summary
 tests/vtest/run.sh --coverage --html   # HTML report
+
+# vigil-log-relay --kubernetes against a real cluster (creates and removes
+# the namespace vigil-relay-test)
+KUBECONFIG=~/.kube/test-cluster.yml tests/k8s/relay.sh
+
+# Coverage including the cluster test
+K8S_TEST=1 KUBECONFIG=~/.kube/test-cluster.yml tests/vtest/run.sh --coverage
 ```
 
 See [`tests/vtest/README.md`](tests/vtest/README.md) for prerequisites,
@@ -409,10 +417,10 @@ patterns, and gotchas.
 
 ### Coverage
 
-Line coverage across all crates: **~91 %** (measured with
-`llvm-cov` via `tests/vtest/run.sh --coverage`).
-The `source_k8s` module (live Kubernetes streams) is excluded from automated
-coverage — it requires a real cluster.
+Line coverage across all crates: **~96 %** (measured with
+`llvm-cov` via `K8S_TEST=1 tests/vtest/run.sh --coverage`).
+Without a cluster (`K8S_TEST` unset) the `source_k8s` module of
+vigil-log-relay stays uncovered and the total is about 93.5 %.
 
 ---
 
