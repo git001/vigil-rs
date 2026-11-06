@@ -154,14 +154,7 @@ pub fn spawn(
     let metrics = MetricsStore::new();
     let plan_val = plan::load_plan(&layers_dir)?;
 
-    let queue_depth = plan_val
-        .alert_queue_depth
-        .unwrap_or(crate::alert::DEFAULT_DELIVERY_QUEUE);
-    let max_age = plan_val
-        .alert_max_queue_time
-        .as_deref()
-        .and_then(|s| crate::duration::parse_duration(s).ok())
-        .unwrap_or(crate::alert::DEFAULT_DELIVERY_AGE);
+    let (queue_depth, max_age) = crate::alert::queue_limits(&plan_val);
     let mut alert_sender = AlertSender::with_queue_limits(queue_depth, max_age);
     alert_sender.update_alerts(plan_val.alerts.clone());
     alert_sender.spawn_worker();

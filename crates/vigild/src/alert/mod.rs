@@ -86,6 +86,37 @@ pub struct AlertSender {
     pub(crate) queue_depth: usize,
 }
 
+/// Delivery queue limits of a plan (`alerts.max-queue-depth`,
+/// `alerts.max-queue-time`), defaults where unset. The plan check rejects
+/// invalid values ([`validate_queue_limits`]).
+pub fn queue_limits(plan: &vigil_types::plan::Plan) -> (usize, Duration) {
+    let depth = plan.alert_queue_depth.unwrap_or(DEFAULT_DELIVERY_QUEUE);
+    let age = plan
+        .alert_max_queue_time
+        .as_deref()
+        .and_then(|s| crate::duration::parse_duration(s).ok())
+        .unwrap_or(DEFAULT_DELIVERY_AGE);
+    (depth, age)
+}
+
+/// `max-queue-depth` must be at least 1 (a channel of 0 cannot exist) and
+/// `max-queue-time` a duration of at least 1s (jobs are aged in whole
+/// seconds; less would discard every alert).
+pub fn validate_queue_limits(plan: &vigil_types::plan::Plan) -> anyhow::Result<()> {
+    if let Some(d) = plan.alert_queue_depth {
+        anyhow::ensure!(d >= 1, "alerts: max-queue-depth must be at least 1");
+    }
+    if let Some(t) = &plan.alert_max_queue_time {
+        let d = crate::duration::parse_duration(t)
+            .map_err(|e| anyhow::anyhow!("alerts: max-queue-time {t:?} is not a duration: {e}"))?;
+        anyhow::ensure!(
+            d >= Duration::from_secs(1),
+            "alerts: max-queue-time {t:?} must be at least 1s"
+        );
+    }
+    Ok(())
+}
+
 impl Default for AlertSender {
     fn default() -> Self {
         Self::new()

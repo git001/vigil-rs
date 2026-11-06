@@ -289,16 +289,7 @@ impl Overlord {
             "plan reloaded"
         );
         self.alert_sender.update_alerts(self.plan.alerts.clone());
-        let queue_depth = self
-            .plan
-            .alert_queue_depth
-            .unwrap_or(crate::alert::DEFAULT_DELIVERY_QUEUE);
-        let max_age = self
-            .plan
-            .alert_max_queue_time
-            .as_deref()
-            .and_then(|s| crate::duration::parse_duration(s).ok())
-            .unwrap_or(crate::alert::DEFAULT_DELIVERY_AGE);
+        let (queue_depth, max_age) = crate::alert::queue_limits(&self.plan);
         self.alert_sender.update_queue_limits(queue_depth, max_age);
         self.sync_actors();
         self.pending_autostart.clear();

@@ -1032,12 +1032,12 @@ alerts:
   # --- Global queue settings (apply to ALL alerts in this block) ---
   # Maximum number of delivery jobs that may be pending at once.
   # New jobs are dropped (with a warning) when the queue is full.
-  # Default: 256
+  # Default: 256, at least 1
   max-queue-depth: 256
 
   # Maximum time a delivery job may wait before being silently discarded.
   # Prevents a flood of stale alerts when an endpoint comes back online
-  # after a long outage. Default: 60s
+  # after a long outage. Default: 60s, at least 1s
   max-queue-time: 60s
 
   my-alert:
