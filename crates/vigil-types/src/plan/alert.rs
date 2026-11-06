@@ -5,7 +5,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use super::{Override, append_unique};
+use super::{Override, ProxyConfig, TlsConfig, append_unique};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -59,28 +59,15 @@ pub struct AlertConfig {
     /// with `--watch-layers`) or `"*"`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub on_vigild: Vec<String>,
-    /// Skip TLS certificate verification (useful for self-signed certs).
-    /// `None`: not set in this layer; read it with
-    /// [`AlertConfig::tls_insecure`].
+    /// CAs, client certificate and `insecure` for HTTPS.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tls_insecure: Option<bool>,
-    /// PEM file with a CA certificate (or chain) to verify the server's TLS.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tls_ca: Option<std::path::PathBuf>,
-
-    /// Explicit HTTP/HTTPS proxy URL for alert requests.
-    /// If absent, `HTTPS_PROXY`, `ALL_PROXY`, and `HTTP_PROXY` env vars are
-    /// consulted in that order (same behaviour as the vigil CLI).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub proxy: Option<String>,
-    /// PEM CA certificate (or chain) to verify the proxy's TLS connection.
-    /// Useful for corporate MITM proxies with a custom root CA.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub proxy_ca: Option<std::path::PathBuf>,
-    /// Comma-separated list of hosts that bypass the proxy.
-    /// Example: `"internal.corp, .dev.local"`
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub no_proxy: Option<String>,
+    pub tls: Option<TlsConfig>,
+    /// The proxy to use. `url` and `no-proxy` may be `env:VAR`. Without it,
+    /// the first of `HTTPS_PROXY`, `https_proxy`, `ALL_PROXY`, `all_proxy`,
+    /// `HTTP_PROXY`, `http_proxy` and the first of `NO_PROXY`, `no_proxy`
+    /// that the alert's `pass-env*` rules pass; none: a direct connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<ProxyConfig>,
 
     /// Maximum number of send attempts (1 = no retry). Default: 3.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -139,11 +126,6 @@ impl AlertConfig {
     pub fn format(&self) -> AlertFormat {
         self.format.unwrap_or_default()
     }
-
-    /// Effective `tls-insecure` (default `false`).
-    pub fn tls_insecure(&self) -> bool {
-        self.tls_insecure.unwrap_or(false)
-    }
 }
 
 /// The `alerts:` block in a layer file.
@@ -186,17 +168,7 @@ pub(super) fn merge_alert(base: &mut AlertConfig, overlay: &AlertConfig) {
     merge_opt!(
         base,
         overlay,
-        [
-            format,
-            tls_insecure,
-            tls_ca,
-            proxy,
-            proxy_ca,
-            no_proxy,
-            retry_attempts,
-            body_template,
-            pass_env
-        ]
+        [format, tls, proxy, retry_attempts, body_template, pass_env]
     );
     if !overlay.retry_backoff.is_empty() {
         base.retry_backoff = overlay.retry_backoff.clone();

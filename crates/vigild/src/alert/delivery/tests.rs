@@ -6,11 +6,18 @@ use std::time::Duration;
 
 use indexmap::IndexMap;
 use tokio::sync::mpsc;
-use vigil_types::plan::{AlertConfig, AlertFormat};
+use vigil_types::plan::{AlertConfig, AlertFormat, ProxyConfig, TlsConfig};
 
 use super::prepare;
 use super::send::http_send;
 use super::worker::{DeliveryJob, delivery_worker};
+
+fn proxy(url: &str, no_proxy: Option<&str>) -> Option<ProxyConfig> {
+    Some(ProxyConfig {
+        url: url.into(),
+        no_proxy: no_proxy.map(Into::into),
+    })
+}
 
 fn empty_cfg() -> AlertConfig {
     AlertConfig {
@@ -22,11 +29,8 @@ fn empty_cfg() -> AlertConfig {
         headers: IndexMap::new(),
         labels: IndexMap::new(),
         send_info_fields: IndexMap::new(),
-        tls_insecure: None,
-        tls_ca: None,
+        tls: None,
         proxy: None,
-        proxy_ca: None,
-        no_proxy: None,
         retry_attempts: None,
         retry_backoff: vec![],
         override_mode: Default::default(),
@@ -225,8 +229,7 @@ fn prepare_resolves_every_env_field() {
     cfg.labels.insert("env".into(), "production".into());
     cfg.send_info_fields
         .insert("k8s_namespace".into(), "env:KUBERNETES_NAMESPACE".into());
-    cfg.proxy = Some("env:HTTPS_PROXY".into());
-    cfg.no_proxy = Some("env:NO_PROXY".into());
+    cfg.proxy = proxy("env:HTTPS_PROXY", Some("env:NO_PROXY"));
     cfg.pass_env_glob = vec!["ALERTMANAGER_*".into(), "*_PROXY".into()];
     cfg.pass_env_regex = vec!["CLUSTER_NAME|KUBERNETES_.*".into()];
     let env = env_of(&[
@@ -243,8 +246,10 @@ fn prepare_resolves_every_env_field() {
     assert_eq!(out.labels["cluster"], "prod-eu-1");
     assert_eq!(out.labels["env"], "production", "literal values stay");
     assert_eq!(out.send_info_fields["k8s_namespace"], "shop");
-    assert_eq!(out.proxy.as_deref(), Some("http://proxy.corp:3128"));
-    assert_eq!(out.no_proxy.as_deref(), Some("alertmanager,.svc"));
+    assert_eq!(
+        out.proxy,
+        proxy("http://proxy.corp:3128", Some("alertmanager,.svc"))
+    );
 }
 
 #[test]
@@ -274,12 +279,14 @@ fn prepare_rejects_unset_or_empty_variables_naming_the_field() {
             "send-info-fields.team: environment variable TEAM",
         ),
         (
-            |c: &mut AlertConfig| c.proxy = Some("env:HTTPS_PROXY".into()),
-            "proxy: environment variable HTTPS_PROXY",
+            |c: &mut AlertConfig| c.proxy = proxy("env:HTTPS_PROXY", None),
+            "proxy.url: environment variable HTTPS_PROXY",
         ),
         (
-            |c: &mut AlertConfig| c.no_proxy = Some("env:NO_PROXY".into()),
-            "no-proxy: environment variable NO_PROXY",
+            |c: &mut AlertConfig| {
+                c.proxy = proxy("http://proxy.corp:3128", Some("env:NO_PROXY"));
+            },
+            "proxy.no-proxy: environment variable NO_PROXY",
         ),
     ] {
         let mut cfg = empty_cfg();
@@ -353,33 +360,37 @@ fn proxy_variables_are_used_only_when_passed() {
     let cfg = empty_cfg();
     let (out, _) = prepare(&cfg, &env).unwrap();
     assert_eq!(out.proxy, None, "not passed: no proxy");
-    assert_eq!(out.no_proxy, None);
 
     let mut cfg = empty_cfg();
     cfg.pass_env_glob = vec!["*_PROXY".into()];
     let (out, _) = prepare(&cfg, &env).unwrap();
     assert_eq!(
-        out.proxy.as_deref(),
-        Some("http://proxy.corp:3128"),
-        "HTTPS_PROXY first"
+        out.proxy,
+        proxy("http://proxy.corp:3128", Some("alertmanager,.svc")),
+        "HTTPS_PROXY first, with NO_PROXY"
     );
-    assert_eq!(out.no_proxy.as_deref(), Some("alertmanager,.svc"));
 
-    // An explicit proxy wins over the variables.
-    cfg.proxy = Some("http://explicit.corp:8080".into());
+    // A proxy: block wins over the variables, NO_PROXY included.
+    cfg.proxy = proxy("http://explicit.corp:8080", None);
     let (out, _) = prepare(&cfg, &env).unwrap();
-    assert_eq!(out.proxy.as_deref(), Some("http://explicit.corp:8080"));
+    assert_eq!(out.proxy, proxy("http://explicit.corp:8080", None));
 }
 
 #[test]
 fn prepare_rejects_a_bad_proxy_or_tls_ca() {
     let mut cfg = empty_cfg();
-    cfg.proxy = Some("http://[::1".into());
+    cfg.proxy = proxy("http://[::1", None);
     let err = format!("{:#}", prepare(&cfg, &env_of(&[])).unwrap_err());
-    assert!(err.contains("invalid proxy URL"), "{err}");
+    assert!(err.contains("proxy.url \"http://[::1\""), "{err}");
 
     let mut cfg = empty_cfg();
-    cfg.tls_ca = Some("/nonexistent/vigil-alert-ca.pem".into());
+    cfg.tls = Some(TlsConfig {
+        ca: vec!["/nonexistent/vigil-alert-ca.pem".into()],
+        ..Default::default()
+    });
     let err = format!("{:#}", prepare(&cfg, &env_of(&[])).unwrap_err());
-    assert!(err.contains("HTTP client"), "{err}");
+    assert!(
+        err.contains("HTTP client") && err.contains("tls.ca"),
+        "{err}"
+    );
 }

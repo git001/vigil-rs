@@ -106,31 +106,37 @@ alerts:
     pass-env-glob: [CLUSTER_NAME]
     format: alertmanager
     on-check: [website-alive]
-    tls-ca: /etc/vigil/certs/internal-ca.pem
-    # tls-insecure: true   # alternatively: skip cert verification entirely
+    tls:
+      ca: /etc/vigil/certs/internal-ca.pem
+      # Alternatively, insecure: true skips the certificate check entirely.
     labels:
       cluster: "env:CLUSTER_NAME"
 
   # ---- Via HTTP proxy -------------------------------------------------------
-  # Without proxy:, the alert uses HTTPS_PROXY / ALL_PROXY / HTTP_PROXY and
-  # NO_PROXY from vigild's environment when its pass-env-glob allows them
-  # (same precedence as the vigil CLI). The explicit config below wins.
+  # Without a proxy: block, the alert uses HTTPS_PROXY, ALL_PROXY or
+  # HTTP_PROXY and NO_PROXY from vigild's environment when its pass-env-glob
+  # allows them (same precedence as the vigil CLI). A proxy: block wins, and
+  # then only its own no-proxy list applies.
+  # A proxy with a certificate from its own CA needs that CA in tls.ca: the
+  # HTTP client has no separate TLS settings for the proxy.
   alertmanager-via-proxy:
     url: http://alertmanager.internal:9093/api/v2/alerts
     pass-env-glob: [CLUSTER_NAME]
     format: alertmanager
     on-check: [website-alive]
-    proxy: "http://corp-proxy.example.com:3128"
-    proxy-ca: /etc/vigil/certs/proxy-ca.pem   # optional: CA for the proxy's TLS
-    no-proxy: "localhost, .internal, 10.0.0.0/8"
+    proxy:
+      url: "http://corp-proxy.example.com:3128"
+      no-proxy: "localhost, .internal, 10.0.0.0/8"
+    tls:
+      ca: /etc/vigil/certs/proxy-ca.pem
     labels:
       cluster: "env:CLUSTER_NAME"
 
   # ---- All new parameters combined -----------------------------------------
   # url        from the environment; an unset variable makes the layer invalid
   # retry-attempts / retry-backoff — override the defaults (3 / ["1s", "2s"])
-  # proxy, no-proxy — from env:VAR here; without them, from HTTPS_PROXY etc.
-  #                   when pass-env-glob allows those variables
+  # proxy      url and no-proxy from env:VAR here; without a proxy: block,
+  #            from HTTPS_PROXY etc. when pass-env-glob allows them
   full-example:
     url: "env:ALERTMANAGER_URL"           # e.g. http://alertmanager:9093/api/v2/alerts
     pass-env-glob: [ALERTMANAGER_*, CLUSTER_NAME, KUBERNETES_NAMESPACE, HTTPS_PROXY, NO_PROXY]
@@ -146,6 +152,8 @@ alerts:
       runbook: "https://wiki.example.com/runbooks/website-down"
     retry-attempts: 5
     retry-backoff: ["1s", "2s", "5s", "10s"]
-    proxy: "env:HTTPS_PROXY"
-    no-proxy: "env:NO_PROXY"
-    tls-ca: /etc/vigil/certs/internal-ca.pem
+    proxy:
+      url: "env:HTTPS_PROXY"
+      no-proxy: "env:NO_PROXY"
+    tls:
+      ca: /etc/vigil/certs/internal-ca.pem

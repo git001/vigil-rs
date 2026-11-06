@@ -834,9 +834,10 @@ checks:
         Authorization: "Bearer secret"
         Content-Type: "application/json"
       no-follow-redirects: true              # do not follow HTTP redirects (default: true)
-      insecure: false                        # skip TLS verification (default: false)
-      insecure-proxy: false                  # skip TLS verification for HTTPS proxy (default: false)
-      ca: /etc/vigil/certs/internal-ca.pem  # custom CA for TLS verification (optional)
+      tls:                                   # optional, see "TLS and proxy"
+        ca: /etc/vigil/certs/internal-ca.pem
+      # proxy:                               # optional, see "TLS and proxy"
+      #   url: http://proxy.example.com:3128
       # success-statuses: [200, 204, 301]   # default: any 2xx
 
     # tcp:
@@ -909,9 +910,11 @@ http:
     Authorization: "Bearer secret"
     Content-Type: "application/json"
   no-follow-redirects: true               # do not follow HTTP redirects (default: true)
-  insecure: true                          # skip TLS certificate verification
-  insecure-proxy: true                    # skip TLS verification for HTTPS proxy
-  ca: /etc/vigil/certs/internal-ca.pem   # PEM CA cert (or chain) to verify the server
+  tls:
+    ca: /etc/vigil/certs/internal-ca.pem
+  proxy:
+    url: http://proxy.example.com:3128
+    no-proxy: "localhost, .svc.cluster.local"
   success-statuses: [200, 204, 301]       # optional; default: any 2xx
 ```
 
@@ -924,19 +927,58 @@ codes listed in `success-statuses`. The `url` field supports `http://` and
 | `url` | — | HTTP or HTTPS URL to request |
 | `headers` | `{}` | Extra request headers (repeatable key/value map) |
 | `no-follow-redirects` | `true` | Do not follow HTTP redirects. When `true`, the probe sees the raw redirect response (e.g. 301, 302, 303) instead of the final destination. |
-| `insecure` | `false` | Skip TLS certificate verification (self-signed certs) |
-| `insecure-proxy` | `false` | Skip TLS certificate verification for the HTTPS proxy itself. See note below. |
-| `ca` | — | PEM file with CA certificate(s) to verify the server's TLS. Supports chain files with multiple concatenated PEM blocks. |
+| `tls` | — | CAs, client certificate and `insecure`, see [TLS and proxy](#tls-and-proxy). |
+| `proxy` | — | The proxy, see [TLS and proxy](#tls-and-proxy). Without it the check connects directly: `HTTPS_PROXY` and similar variables in vigild's environment are not used. |
 | `success-statuses` | `[]` | Explicit list of status codes that count as success. Empty = any 2xx. Example: `[200, 204, 301]` |
 
-`insecure` and `ca` are mutually exclusive in intent — `ca` verifies with a
-custom root, `insecure` skips verification entirely.
+The HTTP client of a check is built when the layers are loaded: a `tls.ca`
+that cannot be read or a `proxy.url` that is not a URL makes the layer
+invalid. Every replan builds the client again, so a changed file behind
+`tls:` takes effect with the next replan (`vigil replan`, or any change in
+the layer directory with `--watch-layers`); a running check keeps its status
+and failure count.
 
-> **Note on `insecure-proxy`:** The HTTP client library (reqwest) does not
-> support separate TLS configurations for proxy and target connections.
-> Setting `insecure-proxy: true` therefore disables TLS certificate
-> verification for **all** connections in that check client (proxy and target
-> server). Use only when the proxy uses a self-signed or untrusted certificate.
+#### TLS and proxy
+
+HTTP checks and alerts set up their outgoing HTTPS connections with the same
+two blocks:
+
+```yaml
+tls:
+  ca: /etc/vigil/certs/internal-ca.pem    # one path or a list of paths
+  cert: /run/secrets/vigil/client.crt     # client certificate (mTLS)
+  key: /run/secrets/vigil/client.key
+  insecure: false                         # true: no certificate check at all
+proxy:
+  url: http://proxy.example.com:3128
+  no-proxy: "localhost, .svc.cluster.local, 10.0.0.0/8"
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `tls.ca` | — | PEM files with CA certificates trusted in addition to the system CAs: one path or a list. A file may hold several certificates. |
+| `tls.cert` | — | PEM file with the client certificate (and its chain), for servers that require one. Needs `tls.key`. |
+| `tls.key` | — | PEM file with the private key of `tls.cert` (PKCS#8, PKCS#1 or SEC1). |
+| `tls.insecure` | `false` | Do not verify certificates at all. Only for self-signed test servers. |
+| `proxy.url` | — | Proxy URL; required in a `proxy:` block. |
+| `proxy.no-proxy` | — | Comma-separated hosts reached without the proxy. An entry matches the host and its subdomains (a leading `.` is ignored); CIDR ranges such as `10.0.0.0/8` match IP addresses. |
+
+All paths must be absolute. The files are read when the layers are loaded;
+an error names the setting and the path, never the file content. A later
+layer replaces a whole `tls:` or `proxy:` block, never single keys of it.
+Unknown keys in either block make the layer invalid.
+
+**A proxy with a certificate from its own CA:** the HTTP client has no
+separate TLS settings for the proxy. `tls.ca` and `tls.insecure` apply to the
+connection to the proxy and to the server alike, so the proxy's CA goes into
+`tls.ca`, next to the server's CA:
+
+```yaml
+tls:
+  ca: [/etc/vigil/certs/internal-ca.pem, /etc/vigil/certs/proxy-ca.pem]
+proxy:
+  url: https://proxy.example.com:3129
+```
 
 #### TCP check
 
@@ -1113,16 +1155,16 @@ alerts:
       k8s_service:   "env:KUBERNETES_SERVICE_NAME"
       runbook: "https://wiki.example.com/runbooks/website-down"
 
-    # --- TLS ---
-    tls-insecure: false              # skip cert verification (self-signed)
-    tls-ca: /etc/vigil/certs/ca.pem # PEM CA cert or chain file
+    # --- TLS (see "TLS and proxy") ---
+    tls:
+      ca: /etc/vigil/certs/ca.pem
 
     # --- Proxy ---
     # If omitted, HTTPS_PROXY / ALL_PROXY / HTTP_PROXY (and NO_PROXY) are used
     # when pass-env-glob allows them (same precedence as the vigil CLI).
-    proxy:    "env:HTTPS_PROXY"      # explicit proxy URL (wins over the variables)
-    proxy-ca: /etc/vigil/certs/proxy-ca.pem  # CA cert to verify proxy TLS
-    no-proxy: "env:NO_PROXY"         # comma-separated bypass list
+    proxy:
+      url: "env:HTTPS_PROXY"
+      no-proxy: "env:NO_PROXY"
 
     # --- Retry ---
     retry-attempts: 3                # total attempts including first (default: 3)
@@ -1181,7 +1223,7 @@ List of [vigild events](#vigild-events) that trigger this alert: `layers` or
 
 A value of the form `"env:VAR"` is replaced by the environment variable `VAR`
 of vigild. This applies to `url`, `headers` values, `labels` values,
-`send-info-fields` values, `proxy` and `no-proxy`. The prefix replaces the
+`send-info-fields` values, `proxy.url` and `proxy.no-proxy`. The prefix replaces the
 whole value: for a header such as `Authorization: Bearer …`, the variable
 holds the complete value including `Bearer `.
 
@@ -1212,9 +1254,9 @@ alert "ops": headers.Authorization: environment variable ALERTMANAGER_AUTH is no
 alert "ops": url: environment variable ALERTMANAGER_URL is not passed to the alert; allow it with pass-env-glob or pass-env-regex (from "env:ALERTMANAGER_URL")
 ```
 
-The same applies to the files an alert names: an unreadable `tls-ca` or
-`proxy-ca`, or a `proxy` that is not a valid URL, makes the layer invalid
-instead of sending without them.
+The same applies to the files an alert names: an unreadable `tls.ca`,
+`tls.cert` or `tls.key`, or a `proxy.url` that is not a valid URL, makes the
+layer invalid instead of sending without them.
 
 #### `labels` / `send-info-fields`
 
@@ -1275,24 +1317,16 @@ body-template: |
   }
 ```
 
-#### `tls-insecure` / `tls-ca`
+#### `tls` / `proxy`
 
-Same semantics as the [HTTP check TLS options](#http-check). `tls-ca` supports
-chain files (multiple concatenated PEM blocks).
+The same blocks as for HTTP checks, see [TLS and proxy](#tls-and-proxy).
+`proxy.url` and `proxy.no-proxy` may be `env:VAR`.
 
-#### `proxy` / `proxy-ca` / `no-proxy`
-
-| Field | Description |
-|---|---|
-| `proxy` | Explicit proxy URL. Wins over the proxy variables. Supports `env:`. |
-| `proxy-ca` | PEM CA cert (or chain) to verify the proxy's TLS connection. |
-| `no-proxy` | Comma-separated bypass list. Supports hostnames, domain suffixes, IPv4 CIDRs (`192.168.0.0/16`), and IPv6 CIDRs (`fd00::/8`). Supports `env:`. |
-
-If `proxy` is omitted, the alert uses the first of `HTTPS_PROXY`,
+Without a `proxy:` block, the alert uses the first of `HTTPS_PROXY`,
 `https_proxy`, `ALL_PROXY`, `all_proxy`, `HTTP_PROXY`, `http_proxy` from
 vigild's environment that its `pass-env-glob` / `pass-env-regex` allows (the
-same order as the vigil CLI); without `no-proxy`, likewise `NO_PROXY` /
-`no_proxy`. Proxy variables the alert does not allow are not used, so an
+same order as the vigil CLI), and likewise `NO_PROXY` / `no_proxy`. With a
+`proxy:` block, only its own `no-proxy` applies. Proxy variables the alert does not allow are not used, so an
 alert without `pass-env-glob: [HTTPS_PROXY, NO_PROXY]` (or similar) connects
 directly.
 
@@ -1426,8 +1460,9 @@ alerts:
     pass-env-glob: [KUBERNETES_NAMESPACE]
     format: otlp-logs
     on-check: [website-alive]
-    proxy:    "http://corp-proxy:3128"
-    no-proxy: "localhost, .internal, 10.0.0.0/8"
+    proxy:
+      url: "http://corp-proxy:3128"
+      no-proxy: "localhost, .internal, 10.0.0.0/8"
     labels:
       service.name:            vigild
       service.namespace:       "env:KUBERNETES_NAMESPACE"

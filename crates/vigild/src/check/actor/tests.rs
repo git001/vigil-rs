@@ -44,7 +44,13 @@ fn spawn_actor(
     let metrics = MetricsStore::new();
     tokio::spawn(run(
         "test-check".to_string(),
-        config,
+        Setup {
+            http: config
+                .http
+                .as_ref()
+                .map(|h| crate::check::probe::http::client(h).unwrap()),
+            config,
+        },
         Arc::new(IndexMap::new()),
         cmd_rx,
         event_tx,
@@ -100,7 +106,7 @@ async fn shutdown_during_delay_exits_cleanly() {
     let metrics = MetricsStore::new();
     let join = tokio::spawn(run(
         "test-check".to_string(),
-        config,
+        Setup { config, http: None },
         Arc::new(IndexMap::new()),
         cmd_rx,
         event_tx,
@@ -186,5 +192,92 @@ async fn get_status_in_main_loop_reports_current_state() {
     let info = get_status(&tx).await;
     assert!(info.failures >= 1, "expected at least one failure recorded");
     assert_eq!(info.status, CheckStatus::Up);
+    let _ = tx.send(Cmd::Shutdown).await;
+}
+
+// ------------------------------------------------------------------
+// SetHttpClient: a replan hands over a new client
+// ------------------------------------------------------------------
+
+async fn spawn_ok_server() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let app = axum::Router::new().route("/", axum::routing::get(|| async { "ok" }));
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://127.0.0.1:{port}/")
+}
+
+fn http_cfg(url: String, delay: &str) -> CheckConfig {
+    CheckConfig {
+        delay: Some(delay.to_string()),
+        period: Some("30ms".to_string()),
+        timeout: Some("2s".to_string()),
+        threshold: Some(100),
+        http: Some(vigil_types::plan::HttpCheck {
+            url,
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// Spawn an HTTP check actor that starts without a client (every probe
+/// fails until SetHttpClient arrives).
+fn spawn_without_client(config: CheckConfig) -> (mpsc::Sender<Cmd>, mpsc::Receiver<CheckEvent>) {
+    let (cmd_tx, cmd_rx) = mpsc::channel(8);
+    let (event_tx, event_rx) = mpsc::channel(16);
+    tokio::spawn(run(
+        "test-check".to_string(),
+        Setup { config, http: None },
+        Arc::new(IndexMap::new()),
+        cmd_rx,
+        event_tx,
+        MetricsStore::new(),
+        CheckStatus::Up,
+    ));
+    (cmd_tx, event_rx)
+}
+
+async fn next_event(rx: &mut mpsc::Receiver<CheckEvent>) -> CheckEvent {
+    tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("no check event")
+        .expect("event channel closed")
+}
+
+#[tokio::test]
+async fn set_http_client_in_the_main_loop_keeps_the_failure_count_until_a_pass() {
+    let config = http_cfg(spawn_ok_server().await, "10ms");
+    let client = crate::check::probe::http::client(config.http.as_ref().unwrap()).unwrap();
+    let (tx, mut rx) = spawn_without_client(config);
+
+    // First probe without a client fails and reports the initial status.
+    let ev = next_event(&mut rx).await;
+    assert!(ev.passed_at.is_none());
+    assert!(
+        get_status(&tx).await.failures >= 1,
+        "the failure count is kept"
+    );
+
+    tx.send(Cmd::SetHttpClient(client)).await.unwrap();
+    let ev = next_event(&mut rx).await;
+    assert_eq!(ev.status, CheckStatus::Up);
+    assert!(ev.passed_at.is_some(), "the new client is used");
+    assert_eq!(get_status(&tx).await.failures, 0);
+    let _ = tx.send(Cmd::Shutdown).await;
+}
+
+#[tokio::test]
+async fn set_http_client_during_the_delay_is_used_by_the_first_probe() {
+    let config = http_cfg(spawn_ok_server().await, "200ms");
+    let client = crate::check::probe::http::client(config.http.as_ref().unwrap()).unwrap();
+    let (tx, mut rx) = spawn_without_client(config);
+
+    tx.send(Cmd::SetHttpClient(client)).await.unwrap();
+    let ev = next_event(&mut rx).await;
+    assert!(
+        ev.passed_at.is_some(),
+        "the first probe uses the new client"
+    );
     let _ = tx.send(Cmd::Shutdown).await;
 }

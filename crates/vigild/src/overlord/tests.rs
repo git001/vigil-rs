@@ -78,6 +78,7 @@ pub(super) fn make_overlord(
         },
         services: svc_map,
         checks: IndexMap::new(),
+        check_clients: IndexMap::new(),
         alert_sender: crate::alert::AlertSender::new(),
         changes: Vec::new(),
         change_counter: 0,
@@ -1294,4 +1295,62 @@ async fn service_infos_show_done_for_oneshots() {
     })
     .await;
     assert_eq!(rx.await.unwrap()[0].on_success, "done");
+}
+
+// An unchanged HTTP check keeps its actor on replan but gets the client the
+// replan built (a rotated tls.ca takes effect); a check without HTTP gets
+// nothing.
+#[tokio::test]
+async fn sync_actors_hands_the_new_http_client_to_unchanged_checks() {
+    use super::CheckEntry;
+    use crate::check;
+    use vigil_types::plan::CheckConfig;
+    let mut ov = make_overlord(&[], &[]);
+    let web = CheckConfig {
+        startup: Some(vigil_types::plan::Startup::Enabled),
+        http: Some(vigil_types::plan::HttpCheck {
+            url: "http://127.0.0.1:9/".into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let exec = CheckConfig {
+        startup: Some(vigil_types::plan::Startup::Enabled),
+        exec: Some(vigil_types::plan::ExecCheck {
+            command: "true".into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    ov.plan.checks.insert("web".into(), web.clone());
+    ov.plan.checks.insert("cmd".into(), exec.clone());
+    ov.check_clients
+        .insert("web".into(), reqwest::Client::builder().build().unwrap());
+
+    let mut rxs = Vec::new();
+    for (name, config) in [("web", web), ("cmd", exec)] {
+        let (tx, rx) = mpsc::channel(1);
+        ov.checks.insert(
+            name.into(),
+            CheckEntry {
+                handle: check::Handle { tx },
+                config,
+                context: None,
+            },
+        );
+        rxs.push(rx);
+    }
+    ov.sync_actors();
+    assert!(matches!(
+        rxs[0].try_recv(),
+        Ok(check::Cmd::SetHttpClient(_))
+    ));
+    assert!(rxs[1].try_recv().is_err(), "exec check gets no client");
+
+    // A full channel only logs a warning; the actor is kept.
+    let (tx, _rx) = mpsc::channel(1);
+    tx.try_send(check::Cmd::Shutdown).unwrap();
+    ov.checks.get_mut("web").unwrap().handle = check::Handle { tx };
+    ov.sync_actors();
+    assert!(ov.checks.contains_key("web"));
 }

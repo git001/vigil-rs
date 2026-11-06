@@ -5,7 +5,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use super::Override;
+use super::{Override, ProxyConfig, TlsConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
@@ -29,16 +29,13 @@ pub struct HttpCheck {
     /// Set to false to follow redirects transparently.
     #[serde(default = "default_true", skip_serializing_if = "std::ops::Not::not")]
     pub no_follow_redirects: bool,
-    /// Skip TLS certificate verification (useful for self-signed certs).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub insecure: bool,
-    /// Skip TLS certificate verification for the HTTPS proxy itself.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub insecure_proxy: bool,
-    /// PEM file with a CA certificate (or chain) to verify the server's TLS.
-    /// Supports chain files with multiple concatenated PEM blocks.
+    /// CAs, client certificate and `insecure` for HTTPS.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ca: Option<std::path::PathBuf>,
+    pub tls: Option<TlsConfig>,
+    /// The proxy to use. Without it the check connects directly; vigild's
+    /// `HTTPS_PROXY` and similar variables are not used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<ProxyConfig>,
     /// HTTP status codes that count as success. Default (empty): 200–299.
     /// Example: [200, 204, 301]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -51,9 +48,8 @@ impl Default for HttpCheck {
             url: String::new(),
             headers: IndexMap::new(),
             no_follow_redirects: true,
-            insecure: false,
-            insecure_proxy: false,
-            ca: None,
+            tls: None,
+            proxy: None,
             success_statuses: vec![],
         }
     }

@@ -168,8 +168,10 @@ http:
   url: https://localhost:8080/healthz
   headers:                              # optional — arbitrary key/value map
     Authorization: "Bearer token"
-  # insecure: true                      # skip TLS verification (self-signed / dev)
-  # ca: /etc/vigil/internal-ca.pem      # custom CA chain for TLS verification
+  # tls:                                # optional: CAs, client certificate, insecure
+  #   ca: /etc/vigil/internal-ca.pem
+  # proxy:                              # optional; without it, a direct connection
+  #   url: http://proxy.example.com:3128
 
 # TCP check
 tcp:
@@ -217,7 +219,7 @@ See the [examples/](examples/) directory for complete, buildable examples.
 | Restart on failure | ❌ | ✅ with backoff |
 | Health checks | ❌ | ✅ HTTP / TCP / exec |
 | HTTP check headers | ❌ | ✅ arbitrary key/value map |
-| HTTP check TLS (`insecure` / `ca`) | ❌ | ✅ skip verification or custom CA |
+| HTTP check TLS and proxy (`tls:` / `proxy:`) | ❌ | ✅ custom CAs, client certificate, proxy |
 | Alerting (Alertmanager / CloudEvents / OTLP) | ❌ | ✅ |
 | Runtime API | ❌ | ✅ Unix-socket REST |
 | Configuration | None (CLI args) | YAML layers |
@@ -241,7 +243,7 @@ automatic restarts, and programmatic control.
 | Configuration | Directory-based (`/etc/s6-overlay/s6-rc.d/`) | YAML layers |
 | Health checks | ❌ (external tooling) | ✅ built-in |
 | HTTP check headers | ❌ | ✅ arbitrary key/value map |
-| HTTP check TLS (`insecure` / `ca`) | ❌ | ✅ skip verification or custom CA |
+| HTTP check TLS and proxy (`tls:` / `proxy:`) | ❌ | ✅ custom CAs, client certificate, proxy |
 | Alerting (Alertmanager / CloudEvents / OTLP) | ❌ | ✅ |
 | Runtime API | ❌ | ✅ REST over Unix socket |
 | Log routing | ✅ (dedicated log daemon) | stdout/stderr → log store |
@@ -267,7 +269,7 @@ from outside the container.
 | Configuration | INI file | YAML layers |
 | Health checks | ❌ | ✅ |
 | HTTP check headers | ❌ | ✅ arbitrary key/value map |
-| HTTP check TLS (`insecure` / `ca`) | ❌ | ✅ skip verification or custom CA |
+| HTTP check TLS and proxy (`tls:` / `proxy:`) | ❌ | ✅ custom CAs, client certificate, proxy |
 | Alerting (Alertmanager / CloudEvents / OTLP) | ❌ | ✅ |
 | REST API | XML-RPC | JSON over Unix socket |
 | Memory footprint | ~30 MB (Python) | ~10 MB |
@@ -288,7 +290,7 @@ vigil-rs is a Rust rewrite of Pebble with the following differences:
 | Custom stop signal | 🔶 [PR 720](https://github.com/canonical/pebble/pull/720) (unmerged) | ✅ |
 | Check `delay` field | ❌ | ✅ (vigil extension) |
 | HTTP check headers | ✅ | ✅ arbitrary key/value map |
-| HTTP check TLS (`insecure` / `ca`) | ❌ | ✅ skip verification or custom CA |
+| HTTP check TLS and proxy (`tls:` / `proxy:`) | ❌ | ✅ custom CAs, client certificate, proxy |
 | Alerting (Alertmanager / CloudEvents / OTLP) | ❌ | ✅ |
 | Memory footprint | ~20 MB | ~10 MB |
 | API compatibility | Pebble API | Pebble-compatible |

@@ -4,7 +4,7 @@
 //! Check probe implementations: HTTP, TCP, exec.
 
 mod exec;
-mod http;
+pub(super) mod http;
 mod tcp;
 
 #[cfg(test)]
@@ -19,11 +19,16 @@ use vigil_types::plan::{CheckConfig, ServiceConfig};
 pub(super) async fn perform(
     config: &CheckConfig,
     timeout_dur: Duration,
-    http: &HttpClient,
+    http: Option<&HttpClient>,
     service_configs: &IndexMap<String, ServiceConfig>,
 ) -> bool {
     if let Some(h) = &config.http {
-        return http::probe_http(http, h, timeout_dur).await;
+        let Some(client) = http else {
+            // `prepare_checks` builds one for every HTTP check.
+            tracing::error!(url = %h.url, "http check without a prepared client");
+            return false;
+        };
+        return http::probe_http(client, h, timeout_dur).await;
     }
     if let Some(t) = &config.tcp {
         let host = t.host.as_deref().unwrap_or("localhost");

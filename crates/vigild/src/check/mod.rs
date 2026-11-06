@@ -24,12 +24,35 @@ pub fn validate_period(cfg: &CheckConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The HTTP clients of the HTTP checks, by check name.
+pub type PreparedChecks = IndexMap<String, reqwest::Client>;
+
+/// Build the client of every HTTP check (its `tls:` and `proxy:`), once
+/// when the layers are loaded: an unreadable `tls.ca` or a bad proxy URL is
+/// reported there, never at probe time. Reads files: call it off the async
+/// runtime.
+pub fn prepare_checks(checks: &IndexMap<String, CheckConfig>) -> anyhow::Result<PreparedChecks> {
+    checks
+        .iter()
+        .filter_map(|(name, c)| c.http.as_ref().map(|h| (name, h)))
+        .map(|(name, h)| {
+            probe::http::client(h)
+                .map(|client| (name.clone(), client))
+                .map_err(|e| anyhow::anyhow!("check {name:?}: {e:#}"))
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Public interface
 // ---------------------------------------------------------------------------
 
 pub enum Cmd {
     GetStatus(oneshot::Sender<CheckInfo>),
+    /// The HTTP client built by a replan (it re-reads `tls.ca` and the
+    /// other files): replaces the actor's client and keeps its status
+    /// and failure count.
+    SetHttpClient(reqwest::Client),
     Shutdown,
 }
 
@@ -48,6 +71,7 @@ pub struct Handle {
 pub fn spawn(
     name: String,
     config: CheckConfig,
+    http: Option<reqwest::Client>,
     service_configs: Arc<IndexMap<String, ServiceConfig>>,
     event_tx: mpsc::Sender<CheckEvent>,
     metrics: Arc<MetricsStore>,
@@ -56,7 +80,7 @@ pub fn spawn(
     let (tx, rx) = mpsc::channel(16);
     tokio::spawn(actor::run(
         name,
-        config,
+        actor::Setup { config, http },
         service_configs,
         rx,
         event_tx,

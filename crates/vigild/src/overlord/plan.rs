@@ -18,14 +18,16 @@ pub(crate) fn is_layer_file(name: &str) -> bool {
     !name.starts_with("..") && (name.ends_with(".yaml") || name.ends_with(".yml"))
 }
 
-/// A validated plan and its alerts, ready to send.
+/// A validated plan, its alerts ready to send and the clients of its HTTP
+/// checks.
 pub struct Loaded {
     pub plan: Plan,
     pub alerts: crate::alert::PreparedAlerts,
+    pub checks: crate::check::PreparedChecks,
 }
 
-/// Read, merge and validate the layers in `dir` and prepare the alerts
-/// against vigild's environment. Reads files: call it off the async
+/// Read, merge and validate the layers in `dir`, prepare the alerts
+/// against vigild's environment and build the HTTP check clients. Reads files: call it off the async
 /// runtime (see `off_runtime`), except at startup.
 pub fn load(dir: &Path) -> anyhow::Result<Loaded> {
     load_with(dir, &crate::alert::LoadEnv::process())
@@ -35,7 +37,12 @@ fn load_with(dir: &Path, env: &crate::alert::LoadEnv) -> anyhow::Result<Loaded> 
     let plan = read_plan(dir)?;
     validate(&plan)?;
     let alerts = crate::alert::prepare_alerts(&plan.alerts, env)?;
-    Ok(Loaded { plan, alerts })
+    let checks = crate::check::prepare_checks(&plan.checks)?;
+    Ok(Loaded {
+        plan,
+        alerts,
+        checks,
+    })
 }
 
 fn read_plan(dir: &Path) -> anyhow::Result<Plan> {

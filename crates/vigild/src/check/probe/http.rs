@@ -5,52 +5,27 @@ use std::time::Duration;
 
 use reqwest::Client as HttpClient;
 use tokio::time::timeout;
-use tracing::{debug, warn};
+use tracing::debug;
 use vigil_types::plan::HttpCheck;
 
-use vigil_tls::{ClientTls, PemFile};
+/// The client of an HTTP check: its redirect policy, `tls:` and `proxy:`.
+/// Reads the `tls:` files: built once when the layers are loaded, off the
+/// async runtime.
+pub(crate) fn client(check: &HttpCheck) -> anyhow::Result<HttpClient> {
+    let builder = HttpClient::builder().redirect(if check.no_follow_redirects {
+        reqwest::redirect::Policy::none()
+    } else {
+        reqwest::redirect::Policy::default()
+    });
+    crate::tls::build_http_client(builder, check.tls.as_ref(), check.proxy.as_ref())
+}
 
 pub(super) async fn probe_http(
     client: &HttpClient,
     check: &HttpCheck,
     timeout_dur: Duration,
 ) -> bool {
-    // Build a per-check client only when TLS options require it; reuse the
-    // shared client for the common case (no insecure / no custom CA).
-    let owned;
-    let effective_client: &HttpClient = if check.insecure
-        || check.insecure_proxy
-        || check.ca.is_some()
-        || check.no_follow_redirects
-    {
-        // Note: reqwest has no per-proxy TLS config; danger_accept_invalid_certs
-        // disables verification for all TLS connections in this client (proxy + target).
-        let b = HttpClient::builder()
-            .timeout(timeout_dur)
-            .redirect(if check.no_follow_redirects {
-                reqwest::redirect::Policy::none()
-            } else {
-                reqwest::redirect::Policy::default()
-            });
-        let tls = ClientTls {
-            insecure: check.insecure || check.insecure_proxy,
-            ca: check.ca.iter().map(|p| PemFile::new("ca", p)).collect(),
-            ..Default::default()
-        };
-        let b = match tls.apply(b) {
-            Ok(b) => b,
-            Err(e) => {
-                warn!(error = %format!("{e:#}"), "http check: TLS settings");
-                return false;
-            }
-        };
-        owned = b.build().unwrap_or_default();
-        &owned
-    } else {
-        client
-    };
-
-    let mut req = effective_client.get(&check.url);
+    let mut req = client.get(&check.url);
     for (name, value) in &check.headers {
         req = req.header(name.as_str(), value.as_str());
     }

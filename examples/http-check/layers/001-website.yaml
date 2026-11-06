@@ -16,9 +16,19 @@ checks:
       #   Authorization: "Bearer mytoken"
       #   X-Tenant-ID: "prod"
       #
-      # TLS options — choose one or neither:
-      # insecure: true                       # skip certificate verification (self-signed / dev)
-      # ca: /etc/vigil/internal-ca.pem       # verify against a custom CA chain
+      # TLS: the CAs to trust in addition to the system CAs, and a client
+      # certificate for servers that require one. insecure: true instead
+      # skips the certificate check (only for self-signed test servers).
+      # tls:
+      #   ca: /etc/vigil/internal-ca.pem
+      #   cert: /run/secrets/vigil/client.crt
+      #   key: /run/secrets/vigil/client.key
+      #
+      # Without proxy: the check connects directly; HTTPS_PROXY and similar
+      # variables in vigild's environment are not used.
+      # proxy:
+      #   url: http://proxy.example.com:3128
+      #   no-proxy: "localhost, .svc.cluster.local, 10.0.0.0/8"
 
 alerts:
 

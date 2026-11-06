@@ -10,7 +10,7 @@ use hyper_util::rt::TokioIo;
 use indexmap::IndexMap;
 use reqwest::Client as HttpClient;
 use tower::Service;
-use vigil_types::plan::HttpCheck;
+use vigil_types::plan::{CheckConfig, HttpCheck, ProxyConfig, TlsConfig};
 
 use super::exec::probe_exec;
 use super::http::probe_http;
@@ -71,18 +71,15 @@ fn make_check(url: String) -> HttpCheck {
         url,
         headers: IndexMap::new(),
         no_follow_redirects: true,
-        insecure: false,
-        insecure_proxy: false,
-        ca: None,
+        tls: None,
+        proxy: None,
         success_statuses: vec![],
     }
 }
 
-fn shared_client() -> HttpClient {
-    HttpClient::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .unwrap()
+/// The client `prepare_checks` builds for `check`.
+fn client(check: &HttpCheck) -> HttpClient {
+    super::http::client(check).unwrap()
 }
 
 // ------------------------------------------------------------------
@@ -94,7 +91,7 @@ async fn http_2xx_passes() {
     let app = Router::new().route("/ok", get(|| async { StatusCode::OK }));
     let port = spawn_http_server(app).await;
     let check = make_check(format!("http://127.0.0.1:{port}/ok"));
-    assert!(probe_http(&shared_client(), &check, Duration::from_secs(5)).await);
+    assert!(probe_http(&client(&check), &check, Duration::from_secs(5)).await);
 }
 
 #[tokio::test]
@@ -102,7 +99,7 @@ async fn http_4xx_fails() {
     let app = Router::new().route("/nf", get(|| async { StatusCode::NOT_FOUND }));
     let port = spawn_http_server(app).await;
     let check = make_check(format!("http://127.0.0.1:{port}/nf"));
-    assert!(!probe_http(&shared_client(), &check, Duration::from_secs(5)).await);
+    assert!(!probe_http(&client(&check), &check, Duration::from_secs(5)).await);
 }
 
 #[tokio::test]
@@ -110,7 +107,7 @@ async fn http_5xx_fails() {
     let app = Router::new().route("/err", get(|| async { StatusCode::INTERNAL_SERVER_ERROR }));
     let port = spawn_http_server(app).await;
     let check = make_check(format!("http://127.0.0.1:{port}/err"));
-    assert!(!probe_http(&shared_client(), &check, Duration::from_secs(5)).await);
+    assert!(!probe_http(&client(&check), &check, Duration::from_secs(5)).await);
 }
 
 #[tokio::test]
@@ -123,12 +120,12 @@ async fn success_statuses_override_default() {
     // 301 passes when explicitly listed
     let mut check = make_check(format!("http://127.0.0.1:{port}/redir"));
     check.success_statuses = vec![301];
-    assert!(probe_http(&shared_client(), &check, Duration::from_secs(5)).await);
+    assert!(probe_http(&client(&check), &check, Duration::from_secs(5)).await);
 
     // 200 fails when not in the explicit list
     let mut check2 = make_check(format!("http://127.0.0.1:{port}/nf"));
     check2.success_statuses = vec![301];
-    assert!(!probe_http(&shared_client(), &check2, Duration::from_secs(5)).await);
+    assert!(!probe_http(&client(&check2), &check2, Duration::from_secs(5)).await);
 }
 
 #[tokio::test]
@@ -147,13 +144,13 @@ async fn custom_headers_are_forwarded() {
     let url = format!("http://127.0.0.1:{port}/hdr");
 
     let without = make_check(url.clone());
-    assert!(!probe_http(&shared_client(), &without, Duration::from_secs(5)).await);
+    assert!(!probe_http(&client(&without), &without, Duration::from_secs(5)).await);
 
     let mut with_hdr = make_check(url);
     with_hdr
         .headers
         .insert("x-vigil-test".to_string(), "yes".to_string());
-    assert!(probe_http(&shared_client(), &with_hdr, Duration::from_secs(5)).await);
+    assert!(probe_http(&client(&with_hdr), &with_hdr, Duration::from_secs(5)).await);
 }
 
 // ------------------------------------------------------------------
@@ -166,7 +163,7 @@ async fn self_signed_rejected_by_default() {
     let app = Router::new().route("/", get(|| async { StatusCode::OK }));
     let (port, _cert_der) = spawn_tls_server(app).await;
     let check = make_check(format!("https://localhost:{port}/"));
-    assert!(!probe_http(&shared_client(), &check, Duration::from_secs(5)).await);
+    assert!(!probe_http(&client(&check), &check, Duration::from_secs(5)).await);
 }
 
 #[tokio::test]
@@ -175,8 +172,11 @@ async fn insecure_accepts_self_signed() {
     let app = Router::new().route("/", get(|| async { StatusCode::OK }));
     let (port, _cert_der) = spawn_tls_server(app).await;
     let mut check = make_check(format!("https://localhost:{port}/"));
-    check.insecure = true;
-    assert!(probe_http(&shared_client(), &check, Duration::from_secs(5)).await);
+    check.tls = Some(TlsConfig {
+        insecure: true,
+        ..Default::default()
+    });
+    assert!(probe_http(&client(&check), &check, Duration::from_secs(5)).await);
 }
 
 #[tokio::test]
@@ -190,18 +190,84 @@ async fn ca_cert_accepts_self_signed() {
     std::fs::write(&tmp_path, &ca_pem).unwrap();
 
     let mut check = make_check(format!("https://localhost:{port}/"));
-    check.ca = Some(tmp_path.clone());
-    let result = probe_http(&shared_client(), &check, Duration::from_secs(5)).await;
+    check.tls = Some(TlsConfig {
+        ca: vec![tmp_path.clone()],
+        ..Default::default()
+    });
+    let result = probe_http(&client(&check), &check, Duration::from_secs(5)).await;
     let _ = std::fs::remove_file(&tmp_path);
     assert!(result);
 }
 
-#[tokio::test]
-async fn ca_nonexistent_file_returns_false() {
+#[test]
+fn bad_tls_or_proxy_settings_fail_when_loading() {
     init_crypto();
+    let mut checks = IndexMap::new();
     let mut check = make_check("https://localhost:1/".to_string());
-    check.ca = Some(std::path::PathBuf::from("/nonexistent/ca.pem"));
-    assert!(!probe_http(&shared_client(), &check, Duration::from_secs(1)).await);
+    check.tls = Some(TlsConfig {
+        ca: vec!["/nonexistent/ca.pem".into()],
+        ..Default::default()
+    });
+    checks.insert(
+        "web".to_string(),
+        CheckConfig {
+            http: Some(check),
+            ..Default::default()
+        },
+    );
+    let err = format!("{:#}", crate::check::prepare_checks(&checks).unwrap_err());
+    assert!(
+        err.starts_with("check \"web\": tls.ca \"/nonexistent/ca.pem\""),
+        "{err}"
+    );
+
+    let mut check = make_check("http://localhost:1/".to_string());
+    check.proxy = Some(ProxyConfig {
+        url: "not a url".into(),
+        no_proxy: None,
+    });
+    checks["web"].http = Some(check);
+    let err = format!("{:#}", crate::check::prepare_checks(&checks).unwrap_err());
+    assert!(err.starts_with("check \"web\": proxy.url"), "{err}");
+}
+
+// ------------------------------------------------------------------
+// Proxy
+// ------------------------------------------------------------------
+
+/// A plain HTTP proxy answers absolute-form requests (`GET http://…`);
+/// this one answers every request with 200.
+async fn spawn_proxy() -> u16 {
+    spawn_http_server(Router::new().fallback(|| async { StatusCode::OK })).await
+}
+
+#[tokio::test]
+async fn proxy_is_used_unless_no_proxy_matches() {
+    let proxy_port = spawn_proxy().await;
+    // Only reachable through the proxy.
+    let mut check = make_check("http://vigil-check.invalid/healthz".to_string());
+    assert!(!probe_http(&client(&check), &check, Duration::from_secs(5)).await);
+
+    check.proxy = Some(ProxyConfig {
+        url: format!("http://127.0.0.1:{proxy_port}"),
+        no_proxy: None,
+    });
+    assert!(probe_http(&client(&check), &check, Duration::from_secs(5)).await);
+
+    check.proxy = Some(ProxyConfig {
+        url: format!("http://127.0.0.1:{proxy_port}"),
+        no_proxy: Some(".invalid".into()),
+    });
+    assert!(!probe_http(&client(&check), &check, Duration::from_secs(5)).await);
+}
+
+#[tokio::test]
+async fn http_check_without_a_client_fails() {
+    let config = CheckConfig {
+        http: Some(make_check("http://127.0.0.1:1/".to_string())),
+        ..Default::default()
+    };
+    assert!(!perform(&config, Duration::from_secs(1), None, &empty_svc_configs()).await);
 }
 
 // ------------------------------------------------------------------
@@ -400,26 +466,13 @@ async fn exec_nonexistent_service_context_falls_back_gracefully() {
 // ------------------------------------------------------------------
 
 use super::perform;
-use vigil_types::plan::{CheckConfig, TcpCheck};
-
-fn make_http_client() -> HttpClient {
-    HttpClient::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .unwrap()
-}
+use vigil_types::plan::TcpCheck;
 
 #[tokio::test]
 async fn no_check_configured_returns_true() {
     // When all of http/tcp/exec are None the dispatcher should return true.
     let config = CheckConfig::default();
-    let result = perform(
-        &config,
-        Duration::from_secs(5),
-        &make_http_client(),
-        &empty_svc_configs(),
-    )
-    .await;
+    let result = perform(&config, Duration::from_secs(5), None, &empty_svc_configs()).await;
     assert!(result);
 }
 
@@ -439,13 +492,7 @@ async fn tcp_check_via_perform_dispatcher() {
         }),
         ..Default::default()
     };
-    let result = perform(
-        &config,
-        Duration::from_secs(5),
-        &make_http_client(),
-        &empty_svc_configs(),
-    )
-    .await;
+    let result = perform(&config, Duration::from_secs(5), None, &empty_svc_configs()).await;
     assert!(result);
 }
 
@@ -463,13 +510,7 @@ async fn tcp_check_default_host_via_perform() {
         tcp: Some(TcpCheck { host: None, port }),
         ..Default::default()
     };
-    let result = perform(
-        &config,
-        Duration::from_secs(5),
-        &make_http_client(),
-        &empty_svc_configs(),
-    )
-    .await;
+    let result = perform(&config, Duration::from_secs(5), None, &empty_svc_configs()).await;
     assert!(result);
 }
 

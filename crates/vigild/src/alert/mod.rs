@@ -67,7 +67,7 @@ pub struct LoadEnv {
     /// vigild's environment, which each alert sees through its `pass-env*`
     /// policy.
     pub parent: Vec<(std::ffi::OsString, std::ffi::OsString)>,
-    /// Do not read the files an alert names (`tls-ca`, `proxy-ca`): only
+    /// Do not read the files an alert names (`tls:`): only
     /// for the shipped examples, whose paths exist in a deployment.
     #[cfg(test)]
     pub skip_files: bool,
@@ -86,12 +86,12 @@ impl LoadEnv {
 
 /// Alerts ready to send: `env:VAR` values resolved, HTTP clients built.
 /// Made by [`prepare_alerts`] while the layers are loaded (off the async
-/// runtime, as it reads `tls-ca` / `proxy-ca`).
+/// runtime, as it reads the `tls:` files).
 #[derive(Default)]
 pub struct PreparedAlerts(Vec<AlertEntry>);
 
 /// Prepare every alert of a plan; an error names the alert and the field
-/// (an unset or not passed variable, an unreadable `tls-ca`, a bad proxy).
+/// (an unset or not passed variable, an unreadable `tls.ca`, a bad proxy).
 pub fn prepare_alerts(
     alerts: &IndexMap<String, AlertConfig>,
     env: &LoadEnv,

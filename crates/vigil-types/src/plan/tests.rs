@@ -211,10 +211,14 @@ fn alert_merge_deduplicates_on_check() {
 }
 
 #[test]
-fn alert_merge_keeps_format_and_tls_insecure_when_not_set() {
+fn alert_merge_keeps_format_and_tls_when_not_set() {
     let mut base = alert("http://example.com");
     base.format = Some(AlertFormat::Alertmanager);
-    base.tls_insecure = Some(true);
+    base.tls = Some(TlsConfig {
+        ca: vec!["/etc/vigil/ca.pem".into()],
+        insecure: true,
+        ..Default::default()
+    });
     let mut overlay = alert("http://example.com");
     overlay.labels.insert("cluster".into(), "prod".into());
     let plan = Plan::from_layers(vec![
@@ -223,19 +227,25 @@ fn alert_merge_keeps_format_and_tls_insecure_when_not_set() {
     ]);
     let a = &plan.alerts["hook"];
     assert_eq!(a.format(), AlertFormat::Alertmanager);
-    assert!(a.tls_insecure());
+    assert!(a.tls.as_ref().unwrap().insecure);
     assert_eq!(a.labels["cluster"], "prod");
 
-    // Set in a later layer: overrides.
+    // Set in a later layer: the whole block is replaced.
     let mut overlay = alert("http://example.com");
     overlay.format = Some(AlertFormat::Webhook);
-    overlay.tls_insecure = Some(false);
+    overlay.tls = Some(TlsConfig {
+        cert: Some("/run/secrets/vigil/client.crt".into()),
+        key: Some("/run/secrets/vigil/client.key".into()),
+        ..Default::default()
+    });
     let plan = Plan::from_layers(vec![
         alert_layer("hook", plan.alerts["hook"].clone()),
         alert_layer("hook", overlay),
     ]);
-    assert_eq!(plan.alerts["hook"].format(), AlertFormat::Webhook);
-    assert!(!plan.alerts["hook"].tls_insecure());
+    let a = &plan.alerts["hook"];
+    assert_eq!(a.format(), AlertFormat::Webhook);
+    let tls = a.tls.as_ref().unwrap();
+    assert!(!tls.insecure && tls.ca.is_empty() && tls.cert.is_some());
 }
 
 #[test]

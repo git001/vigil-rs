@@ -20,6 +20,12 @@ use crate::metrics::MetricsStore;
 use super::probe::perform;
 use super::{CheckEvent, Cmd};
 
+/// A check's config and the HTTP client built for it when loading.
+pub(super) struct Setup {
+    pub config: CheckConfig,
+    pub http: Option<HttpClient>,
+}
+
 pub(super) const DEFAULT_PERIOD: Duration = Duration::from_secs(10);
 pub(super) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
 pub(super) const DEFAULT_THRESHOLD: u32 = 3;
@@ -27,13 +33,14 @@ pub(super) const DEFAULT_CHECK_DELAY: Duration = Duration::from_secs(3);
 
 pub(super) async fn run(
     name: String,
-    config: CheckConfig,
+    setup: Setup,
     service_configs: Arc<IndexMap<String, ServiceConfig>>,
     mut rx: mpsc::Receiver<Cmd>,
     event_tx: mpsc::Sender<CheckEvent>,
     metrics: Arc<MetricsStore>,
     initial_status: CheckStatus,
 ) {
+    let Setup { config, mut http } = setup;
     let period = config
         .period
         .as_deref()
@@ -57,13 +64,6 @@ pub(super) async fn run(
 
     let threshold = config.threshold.unwrap_or(DEFAULT_THRESHOLD);
 
-    let http_client = Arc::new(
-        HttpClient::builder()
-            .timeout(timeout_dur)
-            .build()
-            .unwrap_or_default(),
-    );
-
     // Wait for the initial delay before the first check (default: 3s).
     // Responds to GetStatus (reports "up, 0 failures") and Shutdown during the wait.
     let delay_dur = config
@@ -78,6 +78,7 @@ pub(super) async fn run(
                 biased;
                 cmd = rx.recv() => match cmd {
                     None | Some(Cmd::Shutdown) => return,
+                    Some(Cmd::SetHttpClient(c)) => http = Some(c),
                     Some(Cmd::GetStatus(reply)) => {
                         let _ = reply.send(CheckInfo {
                             name: name.clone(),
@@ -110,6 +111,7 @@ pub(super) async fn run(
 
             cmd = rx.recv() => match cmd {
                 None | Some(Cmd::Shutdown) => break,
+                Some(Cmd::SetHttpClient(c)) => http = Some(c),
                 Some(Cmd::GetStatus(reply)) => {
                     let next = last_tick_at + period;
                     let next_run_in_secs = next
@@ -129,7 +131,7 @@ pub(super) async fn run(
             _ = tick.tick() => {
                 last_tick_at = tokio::time::Instant::now();
                 let probe_started = std::time::Instant::now();
-                let ok = perform(&config, timeout_dur, &http_client, &service_configs).await;
+                let ok = perform(&config, timeout_dur, http.as_ref(), &service_configs).await;
                 let first = std::mem::replace(&mut first_run, false);
                 if ok {
                     metrics.record_check_success(&name);

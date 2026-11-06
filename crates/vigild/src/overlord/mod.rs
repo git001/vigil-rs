@@ -96,6 +96,8 @@ pub(super) struct Overlord {
     pub(super) plan: Plan,
     pub(super) services: IndexMap<String, ServiceEntry>,
     pub(super) checks: IndexMap<String, CheckEntry>,
+    /// Clients of the HTTP checks, built when the plan was loaded.
+    pub(super) check_clients: crate::check::PreparedChecks,
     pub(super) alert_sender: AlertSender,
     pub(super) changes: Vec<ChangeInfo>,
     pub(super) change_counter: u64,
@@ -155,6 +157,7 @@ pub fn spawn(
     let plan::Loaded {
         plan: plan_val,
         alerts,
+        checks: check_clients,
     } = plan::load(&layers_dir)?;
 
     let (queue_depth, max_age) = crate::alert::queue_limits(&plan_val);
@@ -166,6 +169,7 @@ pub fn spawn(
         plan: plan_val,
         services: IndexMap::new(),
         checks: IndexMap::new(),
+        check_clients,
         alert_sender,
         changes: Vec::new(),
         change_counter: 0,

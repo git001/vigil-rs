@@ -612,7 +612,8 @@ Decided by the user (2026-11-06):
 - **Several layers:** a later layer file replaces the whole identity; there
   is no `override:` for identities (mixing auth methods would be dangerous),
   so `override` there is an unknown key and an error.
-- **Secrets from files:** `basic.password-hash-file` and `tls.ca-cert-file`,
+- **Secrets from files:** `basic.password-hash-file` and `tls.ca` (see
+  "Central file and TLS handling"),
   like `env-file` and `--source-user-file`. Setting both the inline value and
   the file is an error. Files are read when loading (off the runtime, with
   the file I/O timeout); a read error fails the load. `--watch-layers`
@@ -631,6 +632,38 @@ time. Alerts see vigild's environment under the same rules as services:
 variables), with separate errors for "not set" and "not passed". The proxy
 variables (`HTTPS_PROXY`, …, `NO_PROXY`) are used only when the alert's
 policy passes them; reqwest's own lookup of them is switched off.
+
+### Central file and TLS handling (before 4d)
+
+**Goal:** vigild, vigil and vigil-log-relay each had their own PEM loaders
+and file reads, and the HTTP check, the alerts and (in 4d) the identities
+each had their own TLS keys (`ca`, `tls-ca`, `proxy-ca`, `insecure`,
+`tls-insecure`, `insecure-proxy`). Decided by the user (2026-11-06):
+
+- **Two crates.** `vigil-files` reads every configured file with the same
+  rules (absolute paths in layer files, regular files only, a size limit,
+  errors without the content) and, with the feature `tokio`, off the async
+  runtime with the 10s timeout (dead NFS mounts). `vigil-tls` loads CA
+  bundles, certificates and keys and applies them to HTTP clients. Command
+  line options keep their names.
+- **One layer schema.** HTTP checks and alerts take a `tls:` block (`ca`:
+  one path or a list, `cert`, `key`, `insecure`) and a `proxy:` block
+  (`url`, `no-proxy`). Identities (4d) take `tls:` with `ca` only; any other
+  key there is an error, as `insecure` would bypass authentication.
+- **Proxy TLS comes from `tls:`.** reqwest has no separate TLS settings for
+  the proxy, so a proxy's own CA goes into `tls.ca`; `insecure-proxy` is
+  removed (it also switched off the check of the server).
+- **HTTP checks without `proxy:` connect directly**; vigild's proxy
+  variables are not used. Alerts keep using the variables their `pass-env*`
+  rules pass when they have no `proxy:` block.
+- **Clients are built when loading.** The client of an HTTP check is built
+  with the plan (off the runtime on a replan), like the alert clients; an
+  unreadable `tls.ca` makes the layer invalid instead of failing every probe.
+  Every replan hands the new client to running check actors without
+  restarting them (status and failure count stay), so a rotated CA or
+  client certificate takes effect with the next replan.
+- `no-proxy` everywhere uses the matcher of `vigil-types`, so vigild's
+  alerts and checks accept CIDR ranges like the CLI and the relay.
 
 ## Releases
 

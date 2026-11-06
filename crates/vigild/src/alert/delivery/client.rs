@@ -9,7 +9,7 @@ use std::ffi::OsString;
 use anyhow::Context;
 use indexmap::IndexMap;
 use reqwest::Client;
-use vigil_types::plan::AlertConfig;
+use vigil_types::plan::{AlertConfig, ProxyConfig};
 
 use crate::process_util::EnvPolicy;
 
@@ -67,8 +67,8 @@ fn resolve(field: &str, val: &str, env: &AlertEnv<'_>) -> anyhow::Result<String>
     anyhow::bail!("{field}: environment variable {var} is not set (from {val:?})")
 }
 
-/// Proxy variables used when the alert sets no `proxy` (first one set
-/// wins; same order as the vigil CLI), and the no-proxy list.
+/// Proxy variables used when the alert has no `proxy:` block (first one
+/// set wins; same order as the vigil CLI), and the no-proxy list.
 const PROXY_VARS: &[&str] = &[
     "HTTPS_PROXY",
     "https_proxy",
@@ -85,8 +85,8 @@ fn passed_var(vars: &[&str], env: &AlertEnv<'_>) -> Option<String> {
 }
 
 /// `cfg` as it is sent: every `env:VAR` value replaced (`url`, `headers`,
-/// `labels`, `send-info-fields`, `proxy`, `no-proxy`) and, without an own
-/// `proxy` / `no-proxy`, the proxy variables the policy passes.
+/// `labels`, `send-info-fields`, `proxy.url`, `proxy.no-proxy`) and,
+/// without a `proxy:` block, the proxy variables the policy passes.
 fn resolve_all(cfg: &AlertConfig, parent: &Parent) -> anyhow::Result<AlertConfig> {
     let env = AlertEnv::new(&EnvPolicy::for_alert(cfg)?, parent);
     let env = &env;
@@ -102,18 +102,24 @@ fn resolve_all(cfg: &AlertConfig, parent: &Parent) -> anyhow::Result<AlertConfig
         }
     }
     out.proxy = match &cfg.proxy {
-        Some(p) => Some(resolve("proxy", p, env)?),
-        None => passed_var(PROXY_VARS, env),
-    };
-    out.no_proxy = match &cfg.no_proxy {
-        Some(p) => Some(resolve("no-proxy", p, env)?),
-        None => passed_var(NO_PROXY_VARS, env),
+        Some(p) => Some(ProxyConfig {
+            url: resolve("proxy.url", &p.url, env)?,
+            no_proxy: p
+                .no_proxy
+                .as_deref()
+                .map(|v| resolve("proxy.no-proxy", v, env))
+                .transpose()?,
+        }),
+        None => passed_var(PROXY_VARS, env).map(|url| ProxyConfig {
+            url,
+            no_proxy: passed_var(NO_PROXY_VARS, env),
+        }),
     };
     Ok(out)
 }
 
 /// [`resolve_all`] plus the HTTP client, done once when the layers are
-/// loaded: a missing variable, an unreadable `tls-ca` or a bad proxy URL
+/// loaded: a missing variable, an unreadable `tls.ca` or a bad proxy URL
 /// is reported there, never at send time.
 pub(crate) fn prepare(
     cfg: &AlertConfig,
@@ -128,14 +134,12 @@ pub(crate) fn prepare(
     Ok((out, client))
 }
 
-/// The HTTP client of a resolved alert (reads `tls-ca` and `proxy-ca`).
+/// The HTTP client of a resolved alert (reads the `tls:` files).
 fn http_client(out: &AlertConfig) -> anyhow::Result<Client> {
-    crate::tls::build_http_client(crate::tls::HttpClientConfig {
-        insecure: out.tls_insecure(),
-        ca: out.tls_ca.as_deref(),
-        proxy: out.proxy.as_deref(),
-        proxy_ca: out.proxy_ca.as_deref(),
-        no_proxy: out.no_proxy.as_deref(),
-    })
-    .context("HTTP client (tls-ca, proxy, proxy-ca)")
+    crate::tls::build_http_client(
+        reqwest::Client::builder(),
+        out.tls.as_ref(),
+        out.proxy.as_ref(),
+    )
+    .context("HTTP client (tls, proxy)")
 }

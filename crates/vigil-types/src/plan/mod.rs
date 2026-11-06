@@ -19,6 +19,7 @@ mod layer;
 mod service;
 #[cfg(test)]
 mod tests;
+mod tls;
 
 pub use self::alert::{AlertConfig, AlertFormat, AlertsBlock};
 pub use self::check::{CheckConfig, CheckLevel, ExecCheck, HttpCheck, TcpCheck};
@@ -27,6 +28,7 @@ pub use self::service::{
     FileChangeAction, LogsForward, LogsPushFormat, OnExit, ReadyMode, ServiceConfig, ServiceType,
     Startup, WatchFiles,
 };
+pub use self::tls::{ProxyConfig, TlsConfig};
 
 use serde::{Deserialize, Serialize};
 

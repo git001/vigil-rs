@@ -172,118 +172,92 @@ fn load_or_generate_empty_client_ca_file_errors() {
 }
 
 // -----------------------------------------------------------------------
-// parse_no_proxy
-// -----------------------------------------------------------------------
-
-#[test]
-fn parse_no_proxy_none_returns_empty() {
-    assert_eq!(parse_no_proxy(None), Vec::<String>::new());
-}
-
-#[test]
-fn parse_no_proxy_empty_string_returns_empty() {
-    assert_eq!(parse_no_proxy(Some("")), Vec::<String>::new());
-}
-
-#[test]
-fn parse_no_proxy_parses_entries() {
-    let result = parse_no_proxy(Some("example.com, .local, internal"));
-    assert_eq!(result, vec!["example.com", ".local", "internal"]);
-}
-
-#[test]
-fn parse_no_proxy_lowercases() {
-    let result = parse_no_proxy(Some("EXAMPLE.COM"));
-    assert_eq!(result, vec!["example.com"]);
-}
-
-// -----------------------------------------------------------------------
-// no_proxy_matches
-// -----------------------------------------------------------------------
-
-#[test]
-fn no_proxy_matches_empty_entries_never_matches() {
-    assert!(!no_proxy_matches("example.com", &[]));
-}
-
-#[test]
-fn no_proxy_matches_exact_host() {
-    let entries = parse_no_proxy(Some("example.com"));
-    assert!(no_proxy_matches("example.com", &entries));
-}
-
-#[test]
-fn no_proxy_matches_host_with_port() {
-    let entries = parse_no_proxy(Some("example.com"));
-    assert!(no_proxy_matches("example.com:443", &entries));
-}
-
-#[test]
-fn no_proxy_matches_subdomain_with_dot_prefix() {
-    let entries = parse_no_proxy(Some(".example.com"));
-    assert!(no_proxy_matches("sub.example.com", &entries));
-    assert!(no_proxy_matches("deep.sub.example.com", &entries));
-}
-
-#[test]
-fn no_proxy_matches_subdomain_without_dot_prefix() {
-    // A no-dot entry also matches subdomains.
-    let entries = parse_no_proxy(Some("example.com"));
-    assert!(no_proxy_matches("sub.example.com", &entries));
-}
-
-#[test]
-fn no_proxy_does_not_match_different_host() {
-    let entries = parse_no_proxy(Some("example.com"));
-    assert!(!no_proxy_matches("other.com", &entries));
-    assert!(!no_proxy_matches("notexample.com", &entries));
-}
-
-// -----------------------------------------------------------------------
 // build_http_client
 // -----------------------------------------------------------------------
 
+use vigil_types::plan::{ProxyConfig, TlsConfig};
+
+fn proxy(url: &str, no_proxy: Option<&str>) -> ProxyConfig {
+    ProxyConfig {
+        url: url.into(),
+        no_proxy: no_proxy.map(Into::into),
+    }
+}
+
 #[test]
-fn build_http_client_default_config() {
+fn build_http_client_without_settings() {
     init_crypto();
-    let client = build_http_client(HttpClientConfig {
-        insecure: false,
-        ca: None,
-        proxy: None,
-        proxy_ca: None,
-        no_proxy: None,
-    });
-    assert!(client.is_ok());
+    build_http_client(reqwest::Client::builder(), None, None).unwrap();
 }
 
 #[test]
 fn build_http_client_invalid_proxy_url_errors() {
     init_crypto();
-    let err = build_http_client(HttpClientConfig {
-        insecure: false,
-        ca: None,
-        proxy: Some("not a url at all !!!"),
-        proxy_ca: None,
-        no_proxy: None,
-    })
+    let err = build_http_client(
+        reqwest::Client::builder(),
+        None,
+        Some(&proxy("not a url at all !!!", None)),
+    )
     .unwrap_err();
-    assert!(err.to_string().contains("invalid proxy URL"));
+    assert!(
+        err.to_string()
+            .starts_with("proxy.url \"not a url at all !!!\""),
+        "{err}"
+    );
 }
 
 #[test]
-fn build_http_client_with_proxy_ca_builds() {
+fn build_http_client_with_tls_and_proxy() {
     init_crypto();
     let (ca_pem, _, _) = gen_ca_and_client();
     let mut ca_file = NamedTempFile::new().unwrap();
     ca_file.write_all(ca_pem.as_bytes()).unwrap();
-    build_http_client(HttpClientConfig {
-        insecure: false,
-        ca: None,
-        proxy: Some("http://proxy.example.com:3128"),
-        proxy_ca: Some(ca_file.path()),
-        no_proxy: None,
-    })
+    let tls = TlsConfig {
+        ca: vec![ca_file.path().to_owned(), ca_file.path().to_owned()],
+        ..Default::default()
+    };
+    build_http_client(
+        reqwest::Client::builder(),
+        Some(&tls),
+        Some(&proxy(
+            "http://proxy.example.com:3128",
+            Some("10.0.0.0/8, .svc.cluster.local"),
+        )),
+    )
     .unwrap();
+}
+
+#[test]
+fn build_http_client_tls_errors_name_the_setting() {
+    init_crypto();
+    let relative = TlsConfig {
+        ca: vec!["certs/ca.pem".into()],
+        ..Default::default()
+    };
+    let err = build_http_client(reqwest::Client::builder(), Some(&relative), None).unwrap_err();
+    assert_eq!(
+        format!("{err:#}"),
+        "tls.ca \"certs/ca.pem\": path must be absolute"
+    );
+
+    let (ca_pem, _, _) = gen_ca_and_client();
+    let mut cert = NamedTempFile::new().unwrap();
+    cert.write_all(ca_pem.as_bytes()).unwrap();
+    let cert_only = TlsConfig {
+        cert: Some(cert.path().to_owned()),
+        ..Default::default()
+    };
+    let err = build_http_client(reqwest::Client::builder(), Some(&cert_only), None).unwrap_err();
+    assert_eq!(format!("{err:#}"), "tls.cert needs a key as well");
+}
+
+/// Runs `client.get(url)` and returns the error.
+fn get_err(client: &reqwest::Client, url: &str) -> reqwest::Error {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(client.get(url).send()).unwrap_err()
 }
 
 #[test]
@@ -295,39 +269,32 @@ fn build_http_client_ignores_proxy_env_vars() {
     // Safety: single-threaded test binary, no concurrent env mutation.
     unsafe { std::env::set_var("HTTPS_PROXY", "http://proxy.invalid:3128") };
     unsafe { std::env::set_var("HTTP_PROXY", "http://proxy.invalid:3128") };
-    let client = build_http_client(HttpClientConfig {
-        insecure: false,
-        ca: None,
-        proxy: None,
-        proxy_ca: None,
-        no_proxy: None,
-    })
-    .unwrap();
+    let client = build_http_client(reqwest::Client::builder(), None, None).unwrap();
     unsafe { std::env::remove_var("HTTPS_PROXY") };
     unsafe { std::env::remove_var("HTTP_PROXY") };
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    let err = rt
-        .block_on(client.get("http://127.0.0.1:1/").send())
-        .unwrap_err();
+    let err = get_err(&client, "http://127.0.0.1:1/");
     assert!(err.is_connect(), "{err:?}");
     assert!(!format!("{err:?}").contains("proxy.invalid"), "{err:?}");
 }
 
 #[test]
-fn build_http_client_with_ca_builds() {
+fn build_http_client_no_proxy_takes_cidr() {
     init_crypto();
-    let (ca_pem, _, _) = gen_ca_and_client();
-    let mut ca_file = NamedTempFile::new().unwrap();
-    ca_file.write_all(ca_pem.as_bytes()).unwrap();
-    build_http_client(HttpClientConfig {
-        insecure: false,
-        ca: Some(ca_file.path()),
-        proxy: None,
-        proxy_ca: None,
-        no_proxy: None,
-    })
+    // Through the (unreachable) proxy unless no-proxy matches.
+    let via_proxy = build_http_client(
+        reqwest::Client::builder(),
+        None,
+        Some(&proxy("http://127.0.0.1:2", None)),
+    )
     .unwrap();
+    let direct = build_http_client(
+        reqwest::Client::builder(),
+        None,
+        Some(&proxy("http://127.0.0.1:2", Some("127.0.0.0/8"))),
+    )
+    .unwrap();
+    let err = get_err(&via_proxy, "http://127.0.0.1:1/");
+    assert!(format!("{err:?}").contains(":2"), "{err:?}");
+    let err = get_err(&direct, "http://127.0.0.1:1/");
+    assert!(!format!("{err:?}").contains(":2"), "{err:?}");
 }

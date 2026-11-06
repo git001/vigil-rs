@@ -90,6 +90,18 @@ impl Overlord {
             // changed since the last (re)plan.
             if let Some(entry) = self.checks.get(name) {
                 if entry.config == *config && entry.context == context {
+                    // Unchanged check: hand over the client this replan
+                    // built, so a rotated tls.ca or client certificate
+                    // takes effect without resetting the check's status.
+                    if let Some(client) = self.check_clients.get(name)
+                        && entry
+                            .handle
+                            .tx
+                            .try_send(check::Cmd::SetHttpClient(client.clone()))
+                            .is_err()
+                    {
+                        warn!(check = %name, "check actor busy, it keeps its previous HTTP client");
+                    }
                     continue;
                 }
                 info!(check = %name, "check config changed, restarting check actor");
@@ -103,6 +115,7 @@ impl Overlord {
             let handle = check::spawn(
                 name.clone(),
                 config.clone(),
+                self.check_clients.get(name).cloned(),
                 Arc::clone(&svc_configs),
                 self.check_event_tx.clone(),
                 Arc::clone(&self.metrics),
@@ -233,7 +246,12 @@ impl Overlord {
     }
 
     async fn apply_plan(&mut self, loaded: super::plan::Loaded) {
-        let super::plan::Loaded { plan, alerts } = loaded;
+        let super::plan::Loaded {
+            plan,
+            alerts,
+            checks,
+        } = loaded;
+        self.check_clients = checks;
         let old_plan = std::mem::replace(&mut self.plan, plan);
 
         let services_changed = count_changed(&old_plan.services, &self.plan.services);
