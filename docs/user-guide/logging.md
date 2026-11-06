@@ -479,7 +479,9 @@ Key parameters:
 ```
 
 **Stdout sink** — `--stdout-sink` writes all forwarded lines directly to stdout instead of
-opening a TCP connection. Useful for debugging or piping output to another process:
+opening a TCP connection. Useful for debugging or piping output to another process.
+The relay's own log messages always go to stderr, so stdout carries only the
+forwarded ndjson lines:
 
 ```
 vigil-log-relay --source-socket /tmp/vigil/vigild.sock --stdout-sink

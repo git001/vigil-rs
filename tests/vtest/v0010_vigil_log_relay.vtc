@@ -80,6 +80,25 @@ shell {
 	curl -sf http://127.0.0.1:$HPORT/healthz
 }
 
+# --stdout-sink: stdout carries only the forwarded ndjson lines (no blank
+# lines, no log messages); the relay's own logs go to stderr.
+shell {
+	${vigil_log_relay} \
+		--source-socket ${tmpdir}/vigild.sock \
+		--stdout-sink \
+		--healthcheck 127.0.0.1:0 \
+		> ${tmpdir}/stdout-sink.out 2> ${tmpdir}/stdout-sink.err < /dev/null &
+	echo $! > ${tmpdir}/relay2.pid
+	for i in $(seq 1 50); do
+		test "$(grep -c relay-test-line ${tmpdir}/stdout-sink.out)" -ge 2 && break
+		sleep 0.2
+	done
+	kill $(cat ${tmpdir}/relay2.pid)
+	test "$(grep -c relay-test-line ${tmpdir}/stdout-sink.out)" -ge 2
+	! grep -v '^{.*}$' ${tmpdir}/stdout-sink.out
+	grep -q 'vigil-log-relay starting' ${tmpdir}/stdout-sink.err
+}
+
 # Tear down
 shell {
 	kill $(cat ${tmpdir}/relay.pid) 2>/dev/null || true

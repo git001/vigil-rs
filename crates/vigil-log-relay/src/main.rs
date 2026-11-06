@@ -60,9 +60,11 @@ async fn main() -> Result<()> {
     } else {
         tracing_subscriber::EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into())
     };
+    // Logs go to stderr: stdout carries the data with --stdout-sink.
     match cli.log_format {
         cli::LogFormat::Json => {
             tracing_subscriber::fmt()
+                .with_writer(std::io::stderr)
                 .json()
                 .with_env_filter(env_filter)
                 .init();
@@ -70,12 +72,14 @@ async fn main() -> Result<()> {
         _ => {
             if cli.debug || std::env::var("RUST_LOG").is_ok() {
                 tracing_subscriber::fmt()
+                    .with_writer(std::io::stderr)
                     .with_target(true)
                     .with_timer(tracing_subscriber::fmt::time::SystemTime)
                     .with_env_filter(env_filter)
                     .init();
             } else {
                 tracing_subscriber::fmt()
+                    .with_writer(std::io::stderr)
                     .with_target(false)
                     .without_time()
                     .with_env_filter(env_filter)
@@ -95,13 +99,13 @@ async fn main() -> Result<()> {
     let (tx, rx) = mpsc::channel::<String>(8192);
 
     if cli.stdout_sink {
-        // Stdout sink — write each line to stdout
+        // Stdout sink — write each line to stdout (lines end with '\n').
         tokio::spawn(async move {
             let mut out = tokio::io::stdout();
             let mut rx = rx;
             while let Some(line) = rx.recv().await {
                 let _ = out.write_all(line.as_bytes()).await;
-                let _ = out.write_all(b"\n").await;
+                let _ = out.flush().await;
             }
         });
     } else {
