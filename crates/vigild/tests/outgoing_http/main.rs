@@ -28,11 +28,16 @@ fn alert_cfg(url: &str) -> AlertConfig {
     }
 }
 
+/// `alerts` as vigild prepares them when loading the layers.
+fn prepared(alerts: IndexMap<String, AlertConfig>) -> vigild::alert::PreparedAlerts {
+    vigild::alert::prepare_alerts(&alerts, &vigild::alert::LoadEnv::process()).unwrap()
+}
+
 fn sender_with_url(url: &str) -> AlertSender {
     let mut sender = AlertSender::new();
     let mut alerts = IndexMap::new();
     alerts.insert("my-alert".to_string(), alert_cfg(url));
-    sender.update_alerts(alerts);
+    sender.update_alerts(prepared(alerts));
     sender.spawn_worker();
     sender
 }

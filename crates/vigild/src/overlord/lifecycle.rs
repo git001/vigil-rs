@@ -206,11 +206,10 @@ impl Overlord {
         let dir = self.layers_dir.clone();
         // Reading files off the async runtime: a hanging file system must
         // not block the overlord.
-        let loaded =
-            crate::template::off_runtime("layers", move || super::plan::load_plan(&dir)).await;
+        let loaded = crate::template::off_runtime("layers", move || super::plan::load(&dir)).await;
         match loaded {
-            Ok(plan) => {
-                self.apply_plan(plan).await;
+            Ok(loaded) => {
+                self.apply_plan(loaded).await;
                 self.metrics.record_layers_reload(true);
                 self.send_alert(AlertEvent::resolved(
                     AlertSource::Vigild,
@@ -233,7 +232,8 @@ impl Overlord {
         }
     }
 
-    async fn apply_plan(&mut self, plan: vigil_types::plan::Plan) {
+    async fn apply_plan(&mut self, loaded: super::plan::Loaded) {
+        let super::plan::Loaded { plan, alerts } = loaded;
         let old_plan = std::mem::replace(&mut self.plan, plan);
 
         let services_changed = count_changed(&old_plan.services, &self.plan.services);
@@ -248,7 +248,7 @@ impl Overlord {
             alerts_changed,
             "plan reloaded"
         );
-        self.alert_sender.update_alerts(self.plan.alerts.clone());
+        self.alert_sender.update_alerts(alerts);
         let (queue_depth, max_age) = crate::alert::queue_limits(&self.plan);
         self.alert_sender.update_queue_limits(queue_depth, max_age);
         self.sync_actors();

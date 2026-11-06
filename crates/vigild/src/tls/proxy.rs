@@ -9,8 +9,8 @@ pub struct HttpClientConfig<'a> {
     pub insecure: bool,
     /// PEM CA file (or chain) to verify the server's TLS.
     pub ca: Option<&'a std::path::Path>,
-    /// Explicit proxy URL. `None` → fall back to `HTTPS_PROXY` / `ALL_PROXY` /
-    /// `HTTP_PROXY` env vars (same precedence as the vigil CLI).
+    /// Proxy URL. `None`: no proxy. vigild's own proxy variables are not
+    /// read here; alerts pass the ones their `pass-env*` policy allows.
     pub proxy: Option<&'a str>,
     /// PEM CA file (or chain) to verify the proxy's TLS.
     pub proxy_ca: Option<&'a std::path::Path>,
@@ -18,13 +18,9 @@ pub struct HttpClientConfig<'a> {
     pub no_proxy: Option<&'a str>,
 }
 
-/// Build a `reqwest::Client` from `HttpClientConfig`.
-///
-/// Proxy resolution order (first non-empty wins):
-/// 1. `config.proxy` (explicit)
-/// 2. `HTTPS_PROXY` env var
-/// 3. `ALL_PROXY` / `all_proxy` env var
-/// 4. `HTTP_PROXY` / `http_proxy` env var
+/// Build a `reqwest::Client` from `HttpClientConfig`. Only the given proxy
+/// is used: reqwest's own lookup of `HTTPS_PROXY` / `NO_PROXY` in vigild's
+/// environment is switched off.
 pub fn build_http_client(config: HttpClientConfig<'_>) -> anyhow::Result<reqwest::Client> {
     let mut b = reqwest::ClientBuilder::new().danger_accept_invalid_certs(config.insecure);
 
@@ -40,25 +36,7 @@ pub fn build_http_client(config: HttpClientConfig<'_>) -> anyhow::Result<reqwest
         }
     }
 
-    let effective_proxy = config.proxy.map(str::to_owned).or_else(|| {
-        for var in &[
-            "HTTPS_PROXY",
-            "https_proxy",
-            "ALL_PROXY",
-            "all_proxy",
-            "HTTP_PROXY",
-            "http_proxy",
-        ] {
-            if let Ok(v) = std::env::var(var)
-                && !v.is_empty()
-            {
-                return Some(v);
-            }
-        }
-        None
-    });
-
-    if let Some(proxy_url) = effective_proxy {
+    if let Some(proxy_url) = config.proxy {
         let proxy_uri: reqwest::Url = proxy_url
             .parse()
             .map_err(|e| anyhow::anyhow!("invalid proxy URL {proxy_url:?}: {e}"))?;
@@ -72,6 +50,8 @@ pub fn build_http_client(config: HttpClientConfig<'_>) -> anyhow::Result<reqwest
             }
         });
         b = b.proxy(proxy);
+    } else {
+        b = b.no_proxy();
     }
 
     Ok(b.build()?)

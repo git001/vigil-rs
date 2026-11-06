@@ -34,6 +34,7 @@ checks:
 alerts:
   ops:
     url: "env:WEBHOOK_URL"
+    pass-env-glob: [WEBHOOK_URL]
     format: webhook
     on-service: ["*"]
     on-check: [flaky-check]

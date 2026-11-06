@@ -23,7 +23,7 @@ socket for programmatic control.
 | **Startup ordering** | `after:` / `before:` / `requires:` dependency graph |
 | **Health checks** | HTTP, TCP, and exec checks with configurable period/timeout/threshold/delay |
 | **on-check-failure** | Automatic service restart (or shutdown) when a check goes down |
-| **Alerting** | HTTP(S) notifications on check state transitions — Alertmanager, CloudEvents, OTLP logs, or generic webhook; `env:VAR` resolution for `url`/headers/labels/proxy; proxy support; configurable retry with backoff; startup warning for unset env vars; `body-template` uses [minijinja](https://github.com/mitsuhiko/minijinja) (Jinja2-compatible) for custom webhook payloads |
+| **Alerting** | HTTP(S) notifications on check state transitions — Alertmanager, CloudEvents, OTLP logs, or generic webhook; `env:VAR` values for `url`/headers/labels/proxy under the same `pass-env*` rules as services, checked when loading (an unset or not allowed variable is an error); proxy support; configurable retry with backoff; `body-template` uses [minijinja](https://github.com/mitsuhiko/minijinja) (Jinja2-compatible) for custom webhook payloads |
 | **on-success / on-failure** | Per-service exit policies: `restart`, `ignore`, `shutdown`, `failure-shutdown`, `success-shutdown` |
 | **Exit-code propagation** | vigild exits with the managed service's actual exit code |
 | **Log streaming** | stdout/stderr captured per service; `vigil logs` and SSE follow (`vigil logs -f`) |

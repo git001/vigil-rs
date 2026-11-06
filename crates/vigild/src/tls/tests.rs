@@ -331,19 +331,33 @@ fn build_http_client_with_proxy_ca_builds() {
 }
 
 #[test]
-fn build_http_client_proxy_env_var_fallback_builds() {
+fn build_http_client_ignores_proxy_env_vars() {
+    // vigild's HTTPS_PROXY is not used unless the caller passes it (alerts:
+    // their pass-env policy). A request to a closed local port then fails
+    // with "connection refused", not with a proxy error.
     init_crypto();
     // Safety: single-threaded test binary, no concurrent env mutation.
-    unsafe { std::env::set_var("HTTPS_PROXY", "http://proxy.example.com:3128") };
-    let result = build_http_client(HttpClientConfig {
+    unsafe { std::env::set_var("HTTPS_PROXY", "http://proxy.invalid:3128") };
+    unsafe { std::env::set_var("HTTP_PROXY", "http://proxy.invalid:3128") };
+    let client = build_http_client(HttpClientConfig {
         insecure: false,
         ca: None,
         proxy: None,
         proxy_ca: None,
         no_proxy: None,
-    });
+    })
+    .unwrap();
     unsafe { std::env::remove_var("HTTPS_PROXY") };
-    result.unwrap();
+    unsafe { std::env::remove_var("HTTP_PROXY") };
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let err = rt
+        .block_on(client.get("http://127.0.0.1:1/").send())
+        .unwrap_err();
+    assert!(err.is_connect(), "{err:?}");
+    assert!(!format!("{err:?}").contains("proxy.invalid"), "{err:?}");
 }
 
 #[test]

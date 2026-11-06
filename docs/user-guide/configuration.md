@@ -49,6 +49,23 @@ Caused by:
     services.app: unknown field `comand`, expected one of `override`, `summary`, `description`, `command`, … at line 3 column 5
 ```
 
+YAML anchors and aliases work within one layer file: set the anchor where a
+value is used first and refer to it later. Merge keys (`<<: *base`) and extra
+keys that only hold anchors (such as `x-common:`) are unknown keys and
+therefore errors. Anchors do not reach into other layer files.
+
+```yaml
+alerts:
+  ops:
+    url: "env:ALERTMANAGER_URL"
+    # &alert-env names this list, so other alerts can reuse it.
+    pass-env-glob: &alert-env [ALERTMANAGER_*, ONCALL_*, CLUSTER_NAME]
+  oncall:
+    url: "env:ONCALL_WEBHOOK_URL"
+    # *alert-env inserts the list named above.
+    pass-env-glob: *alert-env
+```
+
 Identities are not part of layer files; see [Identities](#identities).
 
 ---
@@ -1056,9 +1073,17 @@ alerts:
 
   my-alert:
     # --- Endpoint ---
-    # Supports "env:VAR" — resolved at send time. Empty result → ERROR, alert dropped.
+    # Supports "env:VAR". An unset variable makes the layer invalid.
     url: "env:ALERTMANAGER_URL"              # or a literal URL
     format: alertmanager   # webhook | alertmanager | cloud-events | otlp-logs
+
+    # --- Environment ---
+    # vigild's variables this alert may use in env:VAR values and as proxy
+    # settings; the same rules as for services (default: only PATH, HOME,
+    # USER, LOGNAME and TZ).
+    pass-env-glob: [ALERTMANAGER_*, CLUSTER_NAME, KUBERNETES_*, HTTPS_PROXY, NO_PROXY]
+    # pass-env-regex: ['ALERT_.*']
+    # pass-env: true                         # all of vigild's environment
 
     on-check: [website-alive]   # checks that trigger this alert ("*" = all)
     on-service: [api, worker]   # services whose failures trigger it ("*" = all)
@@ -1067,11 +1092,13 @@ alerts:
     # --- Payload ---
     # Extra HTTP headers (e.g. authentication).
     headers:
-      Authorization: "Bearer env:ALERTMANAGER_TOKEN"
+      # env:VAR replaces the whole value: ALERTMANAGER_AUTH holds
+      # "Bearer eyJhbGciOiJIUzI1NiJ9...".
+      Authorization: "env:ALERTMANAGER_AUTH"
 
     # Labels added to the alert payload.
-    # Values prefixed with "env:" are resolved from the process environment
-    # at send time. vigild warns at startup/replan for each unset env var.
+    # Values prefixed with "env:" come from vigild's environment, resolved
+    # when the layers are loaded.
     labels:
       severity: critical
       env: production
@@ -1080,7 +1107,7 @@ alerts:
     # Arbitrary key/value fields included in the alert body.
     # Placement depends on format (annotations in Alertmanager, attributes
     # in OTLP, info object in webhook/CloudEvents).
-    # Values prefixed with "env:" are resolved from the process environment.
+    # Values prefixed with "env:" come from vigild's environment.
     send-info-fields:
       k8s_namespace: "env:KUBERNETES_NAMESPACE"
       k8s_service:   "env:KUBERNETES_SERVICE_NAME"
@@ -1091,9 +1118,9 @@ alerts:
     tls-ca: /etc/vigil/certs/ca.pem # PEM CA cert or chain file
 
     # --- Proxy ---
-    # If omitted, HTTPS_PROXY / ALL_PROXY / HTTP_PROXY env vars are used
-    # automatically (same precedence as the vigil CLI).
-    proxy:    "env:HTTPS_PROXY"      # explicit proxy URL (overrides env vars)
+    # If omitted, HTTPS_PROXY / ALL_PROXY / HTTP_PROXY (and NO_PROXY) are used
+    # when pass-env-glob allows them (same precedence as the vigil CLI).
+    proxy:    "env:HTTPS_PROXY"      # explicit proxy URL (wins over the variables)
     proxy-ca: /etc/vigil/certs/proxy-ca.pem  # CA cert to verify proxy TLS
     no-proxy: "env:NO_PROXY"         # comma-separated bypass list
 
@@ -1119,9 +1146,8 @@ alerts:
 
 #### `url`
 
-Required. HTTP or HTTPS endpoint to POST alerts to. Supports `"env:VAR"` —
-the environment variable is resolved at send time. If the resolved value is
-empty (variable unset or empty), the alert is dropped with an ERROR log.
+Required. HTTP or HTTPS endpoint to POST alerts to. Supports `"env:VAR"`
+(see below).
 
 #### `format`
 
@@ -1153,21 +1179,42 @@ List of [vigild events](#vigild-events) that trigger this alert: `layers` or
 
 #### `env:` value resolution
 
-Any string field that accepts `"env:VAR"` resolves the named environment
-variable at send time. This applies to: `url`, `headers` values, `labels`
-values, `send-info-fields` values, `proxy`, `no-proxy`.
+A value of the form `"env:VAR"` is replaced by the environment variable `VAR`
+of vigild. This applies to `url`, `headers` values, `labels` values,
+`send-info-fields` values, `proxy` and `no-proxy`. The prefix replaces the
+whole value: for a header such as `Authorization: Bearer …`, the variable
+holds the complete value including `Bearer `.
 
-vigild logs a **WARNING** at startup and after every `replan` for each
-`env:VAR` reference where the variable is unset or empty — so misconfiguration
-is visible immediately without waiting for the first alert:
+An alert sees vigild's environment under the same rules as a service
+([`pass-env`](#environment--pass-env--pass-env-glob--pass-env-regex)): only `PATH`,
+`HOME`, `USER`, `LOGNAME` and `TZ`, plus the variables its own
+`pass-env-glob` / `pass-env-regex` select; `pass-env: true` shows all of
+them. So a Secret in vigild's environment (e.g. `DB_PASSWORD`) cannot end up
+in an alert unless the alert allows it.
+
+```yaml
+alerts:
+  ops:
+    url: "env:ALERTMANAGER_URL"
+    pass-env-glob: [ALERTMANAGER_*, CLUSTER_NAME]
+    headers:
+      Authorization: "env:ALERTMANAGER_AUTH"
+    labels:
+      cluster: "env:CLUSTER_NAME"
+```
+
+vigild resolves the values when it loads the layers (at startup and on every
+replan). A variable that is not set (or empty), or not allowed, makes the
+layer invalid, with the alert, the field and the variable in the error:
 
 ```
-WARN vigild::alert: alert config references unset env var — field will be empty
-  alert=my-alert field=url env_var=ALERTMANAGER_URL
+alert "ops": headers.Authorization: environment variable ALERTMANAGER_AUTH is not set (from "env:ALERTMANAGER_AUTH")
+alert "ops": url: environment variable ALERTMANAGER_URL is not passed to the alert; allow it with pass-env-glob or pass-env-regex (from "env:ALERTMANAGER_URL")
 ```
 
-For `url` specifically an empty resolved value causes the alert to be dropped
-with an ERROR rather than silently sending to a blank URL.
+The same applies to the files an alert names: an unreadable `tls-ca` or
+`proxy-ca`, or a `proxy` that is not a valid URL, makes the layer invalid
+instead of sending without them.
 
 #### `labels` / `send-info-fields`
 
@@ -1237,12 +1284,17 @@ chain files (multiple concatenated PEM blocks).
 
 | Field | Description |
 |---|---|
-| `proxy` | Explicit proxy URL. Overrides `HTTPS_PROXY` / `ALL_PROXY` / `HTTP_PROXY` env vars. Supports `env:`. |
+| `proxy` | Explicit proxy URL. Wins over the proxy variables. Supports `env:`. |
 | `proxy-ca` | PEM CA cert (or chain) to verify the proxy's TLS connection. |
 | `no-proxy` | Comma-separated bypass list. Supports hostnames, domain suffixes, IPv4 CIDRs (`192.168.0.0/16`), and IPv6 CIDRs (`fd00::/8`). Supports `env:`. |
 
-If `proxy` is omitted, vigild automatically reads `HTTPS_PROXY`, `ALL_PROXY`,
-and `HTTP_PROXY` env vars (in that order) — the same behaviour as the vigil CLI.
+If `proxy` is omitted, the alert uses the first of `HTTPS_PROXY`,
+`https_proxy`, `ALL_PROXY`, `all_proxy`, `HTTP_PROXY`, `http_proxy` from
+vigild's environment that its `pass-env-glob` / `pass-env-regex` allows (the
+same order as the vigil CLI); without `no-proxy`, likewise `NO_PROXY` /
+`no_proxy`. Proxy variables the alert does not allow are not used, so an
+alert without `pass-env-glob: [HTTPS_PROXY, NO_PROXY]` (or similar) connects
+directly.
 
 #### `retry-attempts` / `retry-backoff`
 
@@ -1355,10 +1407,11 @@ alerts:
   # Alertmanager — URL and token from environment, custom retry
   alertmanager-prod:
     url: "env:ALERTMANAGER_URL"
+    pass-env-glob: [ALERTMANAGER_*, CLUSTER_NAME]
     format: alertmanager
     on-check: [website-alive]
     headers:
-      Authorization: "Bearer env:ALERTMANAGER_TOKEN"
+      Authorization: "env:ALERTMANAGER_AUTH"      # "Bearer <token>"
     labels:
       severity: critical
       cluster:  "env:CLUSTER_NAME"
@@ -1370,6 +1423,7 @@ alerts:
   # OTLP — via corporate proxy
   otlp-prod:
     url: http://otel-collector:4318/v1/logs
+    pass-env-glob: [KUBERNETES_NAMESPACE]
     format: otlp-logs
     on-check: [website-alive]
     proxy:    "http://corp-proxy:3128"
@@ -1382,6 +1436,7 @@ alerts:
   # Slack — body-template produces the incoming-webhook JSON shape
   slack:
     url: "env:SLACK_WEBHOOK_URL"
+    pass-env-glob: [SLACK_WEBHOOK_URL, CLUSTER_NAME]
     format: webhook
     on-check: [website-alive]
     labels:
@@ -1392,6 +1447,7 @@ alerts:
   # Microsoft Teams — MessageCard format via body-template
   teams:
     url: "env:TEAMS_WEBHOOK_URL"
+    pass-env-glob: [TEAMS_WEBHOOK_URL, CLUSTER_NAME]
     format: webhook
     on-check: [website-alive]
     labels:
@@ -1496,6 +1552,7 @@ alerts:
 
   alertmanager:
     url: http://alertmanager:9093/api/v2/alerts
+    pass-env-glob: [CLUSTER_NAME, KUBERNETES_NAMESPACE]
     format: alertmanager
     on-check: [postgres-ready, myapp-alive]
     labels:

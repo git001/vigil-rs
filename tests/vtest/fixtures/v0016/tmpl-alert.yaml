@@ -16,6 +16,7 @@ checks:
 alerts:
   tmpl-webhook:
     url: "env:WEBHOOK_URL"
+    pass-env-glob: [WEBHOOK_URL]
     format: webhook
     on-check: [tmpl-check]
     retry-attempts: 1

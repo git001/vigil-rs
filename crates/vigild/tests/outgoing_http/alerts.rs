@@ -141,7 +141,7 @@ async fn alert_custom_header_is_sent() {
     cfg.headers
         .insert("X-Token".to_string(), "secret".to_string());
     alerts.insert("my-alert".to_string(), cfg);
-    sender.update_alerts(alerts);
+    sender.update_alerts(prepared(alerts));
     sender.spawn_worker();
     sender.handle_check_event("my-check", CheckStatus::Down);
 
@@ -217,7 +217,7 @@ async fn cloudevents_are_sent_with_their_content_type() {
     let mut cfg = alert_cfg(&mock_server.uri());
     cfg.format = Some(AlertFormat::CloudEvents);
     alerts.insert("my-alert".to_string(), cfg);
-    sender.update_alerts(alerts);
+    sender.update_alerts(prepared(alerts));
     sender.spawn_worker();
     sender.handle_check_event("my-check", CheckStatus::Down);
 

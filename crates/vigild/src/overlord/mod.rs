@@ -152,11 +152,14 @@ pub fn spawn(
     let broadcast_capacity = (log_buffer / 2).clamp(64, 4096);
     let log_store = LogStore::new(log_buffer, broadcast_capacity);
     let metrics = MetricsStore::new();
-    let plan_val = plan::load_plan(&layers_dir)?;
+    let plan::Loaded {
+        plan: plan_val,
+        alerts,
+    } = plan::load(&layers_dir)?;
 
     let (queue_depth, max_age) = crate::alert::queue_limits(&plan_val);
     let mut alert_sender = AlertSender::with_queue_limits(queue_depth, max_age);
-    alert_sender.update_alerts(plan_val.alerts.clone());
+    alert_sender.update_alerts(alerts);
     alert_sender.spawn_worker();
 
     let ov = Overlord {

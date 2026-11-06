@@ -8,8 +8,6 @@ use serde_json::Value;
 use tracing::error;
 use vigil_types::plan::{AlertConfig, AlertFormat};
 
-use crate::alert::format::resolve;
-
 /// Attempt to POST `body` to `cfg.url`, retrying on connection errors or 5xx.
 pub(crate) async fn http_send(client: &Client, cfg: &AlertConfig, body: Value) {
     let max_attempts = cfg.retry_attempts.unwrap_or(3).max(1);
@@ -29,11 +27,7 @@ pub(crate) async fn http_send(client: &Client, cfg: &AlertConfig, body: Value) {
             .collect()
     };
 
-    let url = resolve(&cfg.url);
-    if url.is_empty() {
-        error!("alert: url is empty (env var not set?), dropping alert");
-        return;
-    }
+    let url = &cfg.url; // `env:VAR` already resolved (see `prepare`)
     let content_type = match cfg.format() {
         AlertFormat::CloudEvents => "application/cloudevents+json",
         _ => "application/json",
@@ -41,7 +35,7 @@ pub(crate) async fn http_send(client: &Client, cfg: &AlertConfig, body: Value) {
 
     for attempt in 0..max_attempts {
         let mut req = client
-            .post(&url)
+            .post(url)
             .header("Content-Type", content_type)
             .json(&body);
         for (k, v) in &cfg.headers {

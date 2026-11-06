@@ -11,24 +11,10 @@ use vigil_types::plan::{AlertConfig, AlertFormat};
 
 use super::event::{AlertEvent, AlertSource};
 
-// ---------------------------------------------------------------------------
-// Field resolution
-// ---------------------------------------------------------------------------
-
-pub(crate) fn resolve(val: &str) -> String {
-    if let Some(var) = val.strip_prefix("env:") {
-        std::env::var(var).unwrap_or_default()
-    } else {
-        val.to_owned()
-    }
-}
-
-pub(super) fn resolved_map(map: &IndexMap<String, String>) -> IndexMap<String, String> {
-    map.iter().map(|(k, v)| (k.clone(), resolve(v))).collect()
-}
-
-fn resolved_json(map: &IndexMap<String, String>) -> Value {
-    to_json(resolved_map(map))
+/// `env:VAR` values in `cfg` are already resolved (see
+/// `delivery::prepare`); the maps are used as they are.
+fn map_json(map: &IndexMap<String, String>) -> Value {
+    to_json(map.clone())
 }
 
 fn to_json(map: IndexMap<String, String>) -> Value {
@@ -47,8 +33,8 @@ fn event_json(ev: &AlertEvent, cfg: &AlertConfig) -> Value {
         "event":   ev.event,
         "status":  ev.status_str(),
         "message": ev.message,
-        "labels":  resolved_json(&cfg.labels),
-        "info":    resolved_json(&cfg.send_info_fields),
+        "labels":  map_json(&cfg.labels),
+        "info":    map_json(&cfg.send_info_fields),
     });
     if let Some(check) = check_name(ev) {
         v["check"] = json!(check);
@@ -100,8 +86,8 @@ fn format_webhook_template(ev: &AlertEvent, cfg: &AlertConfig, template: &str) -
             status    => ev.status_str(),
             message   => &ev.message,
             timestamp => Utc::now().to_rfc3339(),
-            labels    => resolved_map(&cfg.labels),
-            info      => resolved_map(&cfg.send_info_fields),
+            labels    => cfg.labels.clone(),
+            info      => cfg.send_info_fields.clone(),
         ),
     ) {
         Ok(s) => s,
@@ -141,7 +127,7 @@ fn format_alertmanager(ev: &AlertEvent, cfg: &AlertConfig) -> Value {
         ("0001-01-01T00:00:00Z".to_owned(), now)
     };
 
-    let mut labels = resolved_map(&cfg.labels);
+    let mut labels = cfg.labels.clone();
     labels.insert("alertname".into(), ev.name.clone());
     labels.insert("source".into(), ev.source.as_str().to_owned());
     if let Some(check) = check_name(ev) {
@@ -150,7 +136,7 @@ fn format_alertmanager(ev: &AlertEvent, cfg: &AlertConfig) -> Value {
     let mut annotations = IndexMap::new();
     annotations.insert("event".to_owned(), ev.event.clone());
     annotations.insert("message".to_owned(), ev.message.clone());
-    annotations.extend(resolved_map(&cfg.send_info_fields));
+    annotations.extend(cfg.send_info_fields.clone());
 
     json!([{
         "labels":      to_json(labels),
@@ -192,10 +178,10 @@ fn format_otlp_logs(ev: &AlertEvent, cfg: &AlertConfig) -> Value {
     attributes.push(attr("vigil.source", ev.source.as_str()));
     attributes.push(attr("vigil.name", &ev.name));
     attributes.push(attr("vigil.event", &ev.event));
-    for (k, v) in resolved_map(&cfg.labels) {
+    for (k, v) in cfg.labels.clone() {
         attributes.push(attr(&k, &v));
     }
-    for (k, v) in resolved_map(&cfg.send_info_fields) {
+    for (k, v) in cfg.send_info_fields.clone() {
         attributes.push(attr(&k, &v));
     }
 

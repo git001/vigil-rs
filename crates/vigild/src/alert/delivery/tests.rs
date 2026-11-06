@@ -8,8 +8,8 @@ use indexmap::IndexMap;
 use tokio::sync::mpsc;
 use vigil_types::plan::{AlertConfig, AlertFormat};
 
+use super::prepare;
 use super::send::http_send;
-use super::warn_unset_env_vars;
 use super::worker::{DeliveryJob, delivery_worker};
 
 fn empty_cfg() -> AlertConfig {
@@ -31,41 +31,10 @@ fn empty_cfg() -> AlertConfig {
         retry_backoff: vec![],
         override_mode: Default::default(),
         body_template: None,
+        pass_env: None,
+        pass_env_glob: vec![],
+        pass_env_regex: vec![],
     }
-}
-
-#[test]
-fn warn_unset_env_vars_no_panic() {
-    let mut cfg = empty_cfg();
-    cfg.url = "env:_VIGIL_DEFINITELY_MISSING_9999".into();
-    cfg.labels.insert(
-        "cluster".into(),
-        "env:_VIGIL_DEFINITELY_MISSING_9999".into(),
-    );
-    warn_unset_env_vars("test-alert", &cfg);
-}
-
-#[test]
-fn warn_unset_env_vars_set_var_no_warning() {
-    unsafe {
-        std::env::set_var("_VIGIL_WARN_TEST", "present");
-    }
-    let mut cfg = empty_cfg();
-    cfg.url = "env:_VIGIL_WARN_TEST".into();
-    warn_unset_env_vars("test-alert", &cfg);
-    unsafe {
-        std::env::remove_var("_VIGIL_WARN_TEST");
-    }
-}
-
-// http_send: empty URL (unset env var) returns without making any HTTP request.
-#[tokio::test]
-async fn http_send_empty_url_returns_early() {
-    // The env var is not set → resolve() returns "" → early return
-    let mut cfg = empty_cfg();
-    cfg.url = "env:_VIGIL_DEFINITELY_MISSING_URL_9998".into();
-    // Should return without panic and without hitting any real server
-    http_send(&reqwest::Client::new(), &cfg, serde_json::json!({"x": 1})).await;
 }
 
 // http_send: 2xx on the first attempt — no retry.
@@ -173,28 +142,6 @@ async fn delivery_worker_discards_expired_job() {
     mock.verify().await;
 }
 
-// warn_unset_env_vars: proxy and no_proxy fields with env: prefix
-#[test]
-fn warn_unset_env_vars_proxy_and_no_proxy() {
-    let mut cfg = empty_cfg();
-    cfg.proxy = Some("env:_VIGIL_DEFINITELY_MISSING_9999".into());
-    cfg.no_proxy = Some("env:_VIGIL_DEFINITELY_MISSING_9999".into());
-    warn_unset_env_vars("test-alert", &cfg); // must not panic
-}
-
-// warn_unset_env_vars: headers and send_info_fields with env: prefix
-#[test]
-fn warn_unset_env_vars_headers_and_send_info_fields() {
-    let mut cfg = empty_cfg();
-    cfg.headers.insert(
-        "X-Token".into(),
-        "env:_VIGIL_DEFINITELY_MISSING_9999".into(),
-    );
-    cfg.send_info_fields
-        .insert("team".into(), "env:_VIGIL_DEFINITELY_MISSING_9999".into());
-    warn_unset_env_vars("test-alert", &cfg); // must not panic
-}
-
 // http_send: connection error on all attempts → Err(e) branch retries then gives up.
 #[tokio::test]
 async fn http_send_connection_error_retries_then_gives_up() {
@@ -253,4 +200,186 @@ async fn delivery_worker_sends_fresh_job() {
     drop(tx);
     tokio::time::sleep(Duration::from_millis(100)).await;
     mock.verify().await;
+}
+
+// ---------------------------------------------------------------------------
+// prepare: env:VAR values and the HTTP client, checked when loading
+// ---------------------------------------------------------------------------
+
+/// vigild's environment for the test: just `pairs`.
+fn env_of(pairs: &[(&str, &str)]) -> crate::alert::LoadEnv {
+    crate::alert::LoadEnv {
+        parent: pairs.iter().map(|(k, v)| (k.into(), v.into())).collect(),
+        skip_files: false,
+    }
+}
+
+#[test]
+fn prepare_resolves_every_env_field() {
+    let mut cfg = empty_cfg();
+    cfg.url = "env:ALERTMANAGER_URL".into();
+    cfg.headers
+        .insert("Authorization".into(), "env:ALERTMANAGER_AUTH".into());
+    cfg.labels
+        .insert("cluster".into(), "env:CLUSTER_NAME".into());
+    cfg.labels.insert("env".into(), "production".into());
+    cfg.send_info_fields
+        .insert("k8s_namespace".into(), "env:KUBERNETES_NAMESPACE".into());
+    cfg.proxy = Some("env:HTTPS_PROXY".into());
+    cfg.no_proxy = Some("env:NO_PROXY".into());
+    cfg.pass_env_glob = vec!["ALERTMANAGER_*".into(), "*_PROXY".into()];
+    cfg.pass_env_regex = vec!["CLUSTER_NAME|KUBERNETES_.*".into()];
+    let env = env_of(&[
+        ("ALERTMANAGER_URL", "http://alertmanager:9093/api/v2/alerts"),
+        ("ALERTMANAGER_AUTH", "Bearer eyJhbGciOiJIUzI1NiJ9"),
+        ("CLUSTER_NAME", "prod-eu-1"),
+        ("KUBERNETES_NAMESPACE", "shop"),
+        ("HTTPS_PROXY", "http://proxy.corp:3128"),
+        ("NO_PROXY", "alertmanager,.svc"),
+    ]);
+    let (out, _client) = prepare(&cfg, &env).unwrap();
+    assert_eq!(out.url, "http://alertmanager:9093/api/v2/alerts");
+    assert_eq!(out.headers["Authorization"], "Bearer eyJhbGciOiJIUzI1NiJ9");
+    assert_eq!(out.labels["cluster"], "prod-eu-1");
+    assert_eq!(out.labels["env"], "production", "literal values stay");
+    assert_eq!(out.send_info_fields["k8s_namespace"], "shop");
+    assert_eq!(out.proxy.as_deref(), Some("http://proxy.corp:3128"));
+    assert_eq!(out.no_proxy.as_deref(), Some("alertmanager,.svc"));
+}
+
+#[test]
+fn prepare_rejects_unset_or_empty_variables_naming_the_field() {
+    for (setup, want) in [
+        (
+            (|c: &mut AlertConfig| c.url = "env:WEBHOOK_URL".into()) as fn(&mut AlertConfig),
+            "url: environment variable WEBHOOK_URL is not set",
+        ),
+        (
+            |c: &mut AlertConfig| {
+                c.headers
+                    .insert("Authorization".into(), "env:WEBHOOK_AUTH".into());
+            },
+            "headers.Authorization: environment variable WEBHOOK_AUTH is not set",
+        ),
+        (
+            |c: &mut AlertConfig| {
+                c.labels.insert("cluster".into(), "env:EMPTY".into());
+            },
+            "labels.cluster: environment variable EMPTY is not set",
+        ),
+        (
+            |c: &mut AlertConfig| {
+                c.send_info_fields.insert("team".into(), "env:TEAM".into());
+            },
+            "send-info-fields.team: environment variable TEAM",
+        ),
+        (
+            |c: &mut AlertConfig| c.proxy = Some("env:HTTPS_PROXY".into()),
+            "proxy: environment variable HTTPS_PROXY",
+        ),
+        (
+            |c: &mut AlertConfig| c.no_proxy = Some("env:NO_PROXY".into()),
+            "no-proxy: environment variable NO_PROXY",
+        ),
+    ] {
+        let mut cfg = empty_cfg();
+        setup(&mut cfg);
+        cfg.pass_env = Some(true); // only "not set" is tested here
+        let err = format!(
+            "{:#}",
+            prepare(&cfg, &env_of(&[("EMPTY", "")])).unwrap_err()
+        );
+        assert!(err.contains(want), "{err}");
+    }
+}
+
+#[test]
+fn prepare_only_sees_variables_the_policy_passes() {
+    let env = env_of(&[
+        ("WEBHOOK_URL", "http://hooks.example.com/alert"),
+        ("DB_PASSWORD", "MY-pw1!"),
+    ]);
+    let mut cfg = empty_cfg();
+    cfg.url = "env:WEBHOOK_URL".into();
+    cfg.labels.insert("leak".into(), "env:DB_PASSWORD".into());
+    // Default pass-env false: vigild's variables are not visible.
+    let err = format!("{:#}", prepare(&cfg, &env).unwrap_err());
+    assert!(
+        err.contains(
+            "url: environment variable WEBHOOK_URL is not passed to the alert; \
+             allow it with pass-env-glob or pass-env-regex"
+        ),
+        "{err}"
+    );
+    assert!(!err.contains("MY-pw1!"), "never the value: {err}");
+
+    cfg.pass_env_glob = vec!["WEBHOOK_*".into()];
+    let err = format!("{:#}", prepare(&cfg, &env).unwrap_err());
+    assert!(
+        err.contains("labels.leak: environment variable DB_PASSWORD is not passed"),
+        "{err}"
+    );
+
+    cfg.labels.clear();
+    let (out, _) = prepare(&cfg, &env).unwrap();
+    assert_eq!(out.url, "http://hooks.example.com/alert");
+
+    // The base variables a service gets are visible without a list.
+    let with_home = env_of(&[
+        ("WEBHOOK_URL", "http://hooks.example.com/alert"),
+        ("HOME", "/home/vigil"),
+    ]);
+    cfg.labels.insert("home".into(), "env:HOME".into());
+    assert_eq!(
+        prepare(&cfg, &with_home).unwrap().0.labels["home"],
+        "/home/vigil"
+    );
+    cfg.labels.clear();
+
+    // pass-env: true sees everything.
+    cfg.pass_env_glob.clear();
+    cfg.pass_env = Some(true);
+    cfg.labels.insert("db".into(), "env:DB_PASSWORD".into());
+    assert_eq!(prepare(&cfg, &env).unwrap().0.labels["db"], "MY-pw1!");
+}
+
+#[test]
+fn proxy_variables_are_used_only_when_passed() {
+    let env = env_of(&[
+        ("HTTPS_PROXY", "http://proxy.corp:3128"),
+        ("HTTP_PROXY", "http://other.corp:3128"),
+        ("NO_PROXY", "alertmanager,.svc"),
+    ]);
+    let cfg = empty_cfg();
+    let (out, _) = prepare(&cfg, &env).unwrap();
+    assert_eq!(out.proxy, None, "not passed: no proxy");
+    assert_eq!(out.no_proxy, None);
+
+    let mut cfg = empty_cfg();
+    cfg.pass_env_glob = vec!["*_PROXY".into()];
+    let (out, _) = prepare(&cfg, &env).unwrap();
+    assert_eq!(
+        out.proxy.as_deref(),
+        Some("http://proxy.corp:3128"),
+        "HTTPS_PROXY first"
+    );
+    assert_eq!(out.no_proxy.as_deref(), Some("alertmanager,.svc"));
+
+    // An explicit proxy wins over the variables.
+    cfg.proxy = Some("http://explicit.corp:8080".into());
+    let (out, _) = prepare(&cfg, &env).unwrap();
+    assert_eq!(out.proxy.as_deref(), Some("http://explicit.corp:8080"));
+}
+
+#[test]
+fn prepare_rejects_a_bad_proxy_or_tls_ca() {
+    let mut cfg = empty_cfg();
+    cfg.proxy = Some("http://[::1".into());
+    let err = format!("{:#}", prepare(&cfg, &env_of(&[])).unwrap_err());
+    assert!(err.contains("invalid proxy URL"), "{err}");
+
+    let mut cfg = empty_cfg();
+    cfg.tls_ca = Some("/nonexistent/vigil-alert-ca.pem".into());
+    let err = format!("{:#}", prepare(&cfg, &env_of(&[])).unwrap_err());
+    assert!(err.contains("HTTP client"), "{err}");
 }

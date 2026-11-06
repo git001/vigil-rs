@@ -24,6 +24,10 @@ checks:
 #     Static values  →  key: "value"
 #     Env-resolved   →  key: "env:ENV_VAR_NAME"
 #
+#   An alert sees only the vigild environment variables its pass-env-glob /
+#   pass-env-regex allows (like services); an env:VAR that is not allowed
+#   or not set makes the layer invalid.
+#
 # Alerts fire on state transitions only (Up→Down = firing, Down→Up = resolved).
 # ---------------------------------------------------------------------------
 alerts:
@@ -35,10 +39,11 @@ alerts:
   #
   webhook-example:
     url: http://my-webhook-endpoint:8080/alert
+    pass-env-glob: [WEBHOOK_AUTH, CLUSTER_NAME, KUBERNETES_NAMESPACE, KUBERNETES_SERVICE_NAME]
     format: webhook
     on-check: [website-alive]
     headers:
-      Authorization: "Bearer env:WEBHOOK_TOKEN"
+      Authorization: "env:WEBHOOK_AUTH"           # holds "Bearer <token>"
     labels:
       env: production
       cluster: "env:CLUSTER_NAME"
@@ -53,6 +58,7 @@ alerts:
   #
   alertmanager-example:
     url: http://alertmanager:9093/api/v2/alerts
+    pass-env-glob: [CLUSTER_NAME]
     format: alertmanager
     on-check: [website-alive]
     labels:
@@ -69,6 +75,7 @@ alerts:
   #
   cloudevents-example:
     url: http://knative-broker/default/broker
+    pass-env-glob: [KUBERNETES_SERVICE_NAME]
     format: cloud-events
     on-check: [website-alive]
     labels:
@@ -83,6 +90,7 @@ alerts:
   #
   otlp-example:
     url: http://otel-collector:4318/v1/logs
+    pass-env-glob: [KUBERNETES_NAMESPACE]
     format: otlp-logs
     on-check: [website-alive]
     labels:
@@ -95,6 +103,7 @@ alerts:
   # ---- Custom CA / self-signed TLS endpoint --------------------------------
   alertmanager-custom-tls:
     url: https://alertmanager-internal:9093/api/v2/alerts
+    pass-env-glob: [CLUSTER_NAME]
     format: alertmanager
     on-check: [website-alive]
     tls-ca: /etc/vigil/certs/internal-ca.pem
@@ -103,10 +112,12 @@ alerts:
       cluster: "env:CLUSTER_NAME"
 
   # ---- Via HTTP proxy -------------------------------------------------------
-  # Proxy URL can also be set via HTTPS_PROXY / HTTP_PROXY / ALL_PROXY env vars
-  # (same precedence as the vigil CLI). Explicit config below overrides env vars.
+  # Without proxy:, the alert uses HTTPS_PROXY / ALL_PROXY / HTTP_PROXY and
+  # NO_PROXY from vigild's environment when its pass-env-glob allows them
+  # (same precedence as the vigil CLI). The explicit config below wins.
   alertmanager-via-proxy:
     url: http://alertmanager.internal:9093/api/v2/alerts
+    pass-env-glob: [CLUSTER_NAME]
     format: alertmanager
     on-check: [website-alive]
     proxy: "http://corp-proxy.example.com:3128"
@@ -116,15 +127,17 @@ alerts:
       cluster: "env:CLUSTER_NAME"
 
   # ---- All new parameters combined -----------------------------------------
-  # url        resolved from env at send time (empty env var → ERROR, alert dropped)
+  # url        from the environment; an unset variable makes the layer invalid
   # retry-attempts / retry-backoff — override the defaults (3 / ["1s", "2s"])
-  # proxy, no-proxy — can also come from HTTPS_PROXY / HTTP_PROXY env vars
+  # proxy, no-proxy — from env:VAR here; without them, from HTTPS_PROXY etc.
+  #                   when pass-env-glob allows those variables
   full-example:
     url: "env:ALERTMANAGER_URL"           # e.g. http://alertmanager:9093/api/v2/alerts
+    pass-env-glob: [ALERTMANAGER_*, CLUSTER_NAME, KUBERNETES_NAMESPACE, HTTPS_PROXY, NO_PROXY]
     format: alertmanager
     on-check: [website-alive]
     headers:
-      Authorization: "Bearer env:ALERTMANAGER_TOKEN"
+      Authorization: "env:ALERTMANAGER_AUTH"      # holds "Bearer <token>"
     labels:
       severity: critical
       cluster:  "env:CLUSTER_NAME"
@@ -133,6 +146,6 @@ alerts:
       runbook: "https://wiki.example.com/runbooks/website-down"
     retry-attempts: 5
     retry-backoff: ["1s", "2s", "5s", "10s"]
-    proxy: "env:HTTPS_PROXY"              # or omit to auto-detect from env
+    proxy: "env:HTTPS_PROXY"
     no-proxy: "env:NO_PROXY"
     tls-ca: /etc/vigil/certs/internal-ca.pem

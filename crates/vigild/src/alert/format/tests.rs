@@ -7,7 +7,6 @@ use vigil_types::plan::{AlertConfig, AlertFormat};
 use super::super::event::{AlertEvent, AlertSource};
 use super::{
     format_alertmanager, format_cloudevents, format_otlp_logs, format_payload, format_webhook,
-    resolve,
 };
 
 fn empty_cfg() -> AlertConfig {
@@ -15,30 +14,6 @@ fn empty_cfg() -> AlertConfig {
         url: "http://example.com".into(),
         ..Default::default()
     }
-}
-
-#[test]
-fn resolve_literal_passthrough() {
-    assert_eq!(resolve("hello"), "hello");
-}
-
-#[test]
-fn resolve_env_var_set() {
-    unsafe {
-        std::env::set_var("_VIGIL_TEST_ALERT_VAR", "my-value");
-    }
-    assert_eq!(resolve("env:_VIGIL_TEST_ALERT_VAR"), "my-value");
-    unsafe {
-        std::env::remove_var("_VIGIL_TEST_ALERT_VAR");
-    }
-}
-
-#[test]
-fn resolve_env_var_unset_returns_empty() {
-    unsafe {
-        std::env::remove_var("_VIGIL_TEST_ALERT_MISSING");
-    }
-    assert_eq!(resolve("env:_VIGIL_TEST_ALERT_MISSING"), "");
 }
 
 #[test]

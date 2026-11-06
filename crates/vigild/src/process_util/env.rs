@@ -16,7 +16,7 @@ use indexmap::IndexMap;
 use regex::Regex;
 use tracing::debug;
 
-use vigil_types::plan::{ExecCheck, ServiceConfig};
+use vigil_types::plan::{AlertConfig, ExecCheck, ServiceConfig};
 
 use super::Credentials;
 
@@ -124,6 +124,12 @@ impl EnvPolicy {
             env.insert(k.into(), v.into());
         }
         env.into_iter().collect()
+    }
+
+    /// Policy of an alert: which of vigild's variables its `env:VAR`
+    /// values and the proxy fallback may use.
+    pub fn for_alert(cfg: &AlertConfig) -> anyhow::Result<Self> {
+        Self::compile(cfg.pass_env, &cfg.pass_env_glob, &cfg.pass_env_regex)
     }
 
     /// Policy of a service.

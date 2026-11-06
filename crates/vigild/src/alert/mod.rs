@@ -7,9 +7,11 @@
 //! Supported formats: webhook (generic JSON), Alertmanager, CloudEvents 1.0,
 //! OTLP HTTP/JSON logs.
 //!
-//! Values in `labels` and `send-info-fields` that start with `"env:"` are
-//! resolved from the process environment at send time, so you can inject
-//! runtime context without rebuilding the image:
+//! Values of `url`, `headers`, `labels`, `send-info-fields`, `proxy` and
+//! `no-proxy` that start with `"env:"` come from vigild's environment, so you
+//! can inject runtime context without rebuilding the image. They are
+//! resolved when the layers are loaded; an unset variable makes the layer
+//! invalid:
 //!
 //! ```yaml
 //! alerts:
@@ -38,6 +40,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use anyhow::Context;
 use indexmap::IndexMap;
 use reqwest::Client;
 use tokio::sync::mpsc;
@@ -45,7 +48,7 @@ use tracing::{debug, warn};
 use vigil_types::api::CheckStatus;
 use vigil_types::plan::AlertConfig;
 
-use self::delivery::{DeliveryJob, build_client, delivery_worker, warn_unset_env_vars};
+use self::delivery::{DeliveryJob, delivery_worker};
 use self::format::format_payload;
 
 // ---------------------------------------------------------------------------
@@ -54,8 +57,58 @@ use self::format::format_payload;
 
 struct AlertEntry {
     name: String,
+    /// With `env:VAR` values resolved.
     config: AlertConfig,
     client: Client,
+}
+
+/// What loading the layers prepares alerts against.
+pub struct LoadEnv {
+    /// vigild's environment, which each alert sees through its `pass-env*`
+    /// policy.
+    pub parent: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+    /// Do not read the files an alert names (`tls-ca`, `proxy-ca`): only
+    /// for the shipped examples, whose paths exist in a deployment.
+    #[cfg(test)]
+    pub skip_files: bool,
+}
+
+impl LoadEnv {
+    /// vigild's own environment (read once) and file system.
+    pub fn process() -> Self {
+        Self {
+            parent: std::env::vars_os().collect(),
+            #[cfg(test)]
+            skip_files: false,
+        }
+    }
+}
+
+/// Alerts ready to send: `env:VAR` values resolved, HTTP clients built.
+/// Made by [`prepare_alerts`] while the layers are loaded (off the async
+/// runtime, as it reads `tls-ca` / `proxy-ca`).
+#[derive(Default)]
+pub struct PreparedAlerts(Vec<AlertEntry>);
+
+/// Prepare every alert of a plan; an error names the alert and the field
+/// (an unset or not passed variable, an unreadable `tls-ca`, a bad proxy).
+pub fn prepare_alerts(
+    alerts: &IndexMap<String, AlertConfig>,
+    env: &LoadEnv,
+) -> anyhow::Result<PreparedAlerts> {
+    alerts
+        .iter()
+        .map(|(name, cfg)| {
+            let (config, client) =
+                delivery::prepare(cfg, env).with_context(|| format!("alert {name:?}"))?;
+            Ok(AlertEntry {
+                name: name.clone(),
+                config,
+                client,
+            })
+        })
+        .collect::<anyhow::Result<_>>()
+        .map(PreparedAlerts)
 }
 
 // ---------------------------------------------------------------------------
@@ -172,20 +225,9 @@ impl AlertSender {
         }
     }
 
-    /// Replace the active alert config (called on plan load / replan).
-    pub fn update_alerts(&mut self, alerts: IndexMap<String, AlertConfig>) {
-        self.alerts = alerts
-            .into_iter()
-            .map(|(name, cfg)| {
-                warn_unset_env_vars(&name, &cfg);
-                let client = build_client(&cfg);
-                AlertEntry {
-                    name,
-                    config: cfg,
-                    client,
-                }
-            })
-            .collect();
+    /// Replace the active alerts (on plan load / replan).
+    pub fn update_alerts(&mut self, alerts: PreparedAlerts) {
+        self.alerts = alerts.0;
     }
 
     /// Return the last observed status for `check`, if any.
@@ -239,7 +281,7 @@ impl AlertSender {
             }
             let body = format_payload(&ev, &entry.config);
             debug!(
-                alert_url = %entry.config.url,
+                alert = %entry.name,
                 source = ev.source.as_str(),
                 name = %ev.name,
                 event = %ev.event,

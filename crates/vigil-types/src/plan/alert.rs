@@ -37,8 +37,8 @@ pub struct AlertConfig {
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub headers: IndexMap<String, String>,
     /// Labels attached to alert payloads.
-    /// Values prefixed with `"env:"` are resolved from the process environment
-    /// at send time. Example: `cluster: "env:CLUSTER_NAME"`.
+    /// Values prefixed with `"env:"` come from vigild's environment, resolved
+    /// when the layers are loaded. Example: `cluster: "env:CLUSTER_NAME"`.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub labels: IndexMap<String, String>,
     /// Arbitrary key/value fields included in the alert body
@@ -118,6 +118,20 @@ pub struct AlertConfig {
     /// Ignored for formats other than `webhook`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body_template: Option<String>,
+    /// Let `env:VAR` values (and the proxy fallback) see all of vigild's
+    /// environment. Default (unset): `false`, i.e. only PATH, HOME, USER,
+    /// LOGNAME, TZ plus variables matched by `pass-env-glob` /
+    /// `pass-env-regex` — the same rules as for services.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pass_env: Option<bool>,
+    /// Names of vigild environment variables the alert may use; `*` and `?`
+    /// wildcards, the pattern must match the whole name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pass_env_glob: Vec<String>,
+    /// Regular expressions (anchored to the whole name) selecting vigild
+    /// environment variables the alert may use.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pass_env_regex: Vec<String>,
 }
 
 impl AlertConfig {
@@ -180,7 +194,8 @@ pub(super) fn merge_alert(base: &mut AlertConfig, overlay: &AlertConfig) {
             proxy_ca,
             no_proxy,
             retry_attempts,
-            body_template
+            body_template,
+            pass_env
         ]
     );
     if !overlay.retry_backoff.is_empty() {
@@ -193,4 +208,6 @@ pub(super) fn merge_alert(base: &mut AlertConfig, overlay: &AlertConfig) {
     append_unique(&mut base.on_check, &overlay.on_check);
     append_unique(&mut base.on_service, &overlay.on_service);
     append_unique(&mut base.on_vigild, &overlay.on_vigild);
+    append_unique(&mut base.pass_env_glob, &overlay.pass_env_glob);
+    append_unique(&mut base.pass_env_regex, &overlay.pass_env_regex);
 }

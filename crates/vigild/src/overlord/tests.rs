@@ -987,8 +987,10 @@ async fn checks_of_an_unhealthy_service_are_held_back() {
         on_service: vec!["*".into()],
         ..Default::default()
     };
-    ov.alert_sender
-        .update_alerts([("ops".to_string(), alert)].into_iter().collect());
+    let alerts = [("ops".to_string(), alert)].into_iter().collect();
+    ov.alert_sender.update_alerts(
+        crate::alert::prepare_alerts(&alerts, &crate::alert::LoadEnv::process()).unwrap(),
+    );
 
     // Not healthy yet (just started): the failing check is held back.
     assert!(ov.check_quiet("web"));

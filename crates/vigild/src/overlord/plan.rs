@@ -15,7 +15,27 @@ pub(crate) fn is_layer_file(name: &str) -> bool {
     !name.starts_with("..") && (name.ends_with(".yaml") || name.ends_with(".yml"))
 }
 
-pub fn load_plan(dir: &Path) -> anyhow::Result<Plan> {
+/// A validated plan and its alerts, ready to send.
+pub struct Loaded {
+    pub plan: Plan,
+    pub alerts: crate::alert::PreparedAlerts,
+}
+
+/// Read, merge and validate the layers in `dir` and prepare the alerts
+/// against vigild's environment. Reads files: call it off the async
+/// runtime (see `off_runtime`), except at startup.
+pub fn load(dir: &Path) -> anyhow::Result<Loaded> {
+    load_with(dir, &crate::alert::LoadEnv::process())
+}
+
+fn load_with(dir: &Path, env: &crate::alert::LoadEnv) -> anyhow::Result<Loaded> {
+    let plan = read_plan(dir)?;
+    validate(&plan)?;
+    let alerts = crate::alert::prepare_alerts(&plan.alerts, env)?;
+    Ok(Loaded { plan, alerts })
+}
+
+fn read_plan(dir: &Path) -> anyhow::Result<Plan> {
     if !dir.exists() {
         return Ok(Plan::default());
     }
@@ -45,9 +65,7 @@ pub fn load_plan(dir: &Path) -> anyhow::Result<Plan> {
         layers.push(layer);
     }
 
-    let plan = Plan::from_layers(layers);
-    validate(&plan)?;
-    Ok(plan)
+    Ok(Plan::from_layers(layers))
 }
 
 /// Checks that need more than deserialization. Runs on startup and on every
@@ -61,6 +79,9 @@ fn validate(plan: &Plan) -> anyhow::Result<()> {
     }
     crate::alert::validate_queue_limits(plan)?;
     for (name, alert) in &plan.alerts {
+        if redundant_lists(alert.pass_env, &alert.pass_env_glob, &alert.pass_env_regex) {
+            tracing::warn!(alert = %name, "{REDUNDANT_LISTS}");
+        }
         validate_alert(alert).with_context(|| format!("alert {name:?}"))?;
     }
     Ok(())
@@ -168,6 +189,7 @@ fn validate_alert(alert: &AlertConfig) -> anyhow::Result<()> {
             VIGILD_ALERT_EVENTS.join(", ")
         );
     }
+    // `env:VAR` values and the HTTP client: `prepare_alerts` in `load`.
     Ok(())
 }
 
@@ -267,6 +289,10 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
+    fn load_plan(dir: &Path) -> anyhow::Result<Plan> {
+        load(dir).map(|l| l.plan)
+    }
+
     fn write(dir: &TempDir, name: &str, content: &str) {
         fs::write(dir.path().join(name), content).unwrap();
     }
@@ -274,20 +300,69 @@ mod tests {
     /// Every example's layers must load (and pass validation), so example
     /// configs cannot silently break, e.g. through new pass-env rules.
     #[test]
+    fn unset_alert_env_variable_rejects_plan() {
+        let dir = TempDir::new().unwrap();
+        write(
+            &dir,
+            "001.yaml",
+            "alerts:\n  ops:\n    url: \"env:VIGIL_TEST_UNSET_WEBHOOK_URL\"\n    pass-env-glob: [VIGIL_TEST_*]\n",
+        );
+        let err = format!("{:#}", load_plan(dir.path()).unwrap_err());
+        assert!(
+            err.contains(
+                "alert \"ops\": url: environment variable VIGIL_TEST_UNSET_WEBHOOK_URL is not set"
+            ),
+            "{err}"
+        );
+    }
+
+    /// The variables the examples reference (a deployment sets them). Their
+    /// certificate paths (`/etc/vigil/certs/ca.pem`) only exist there too.
+    fn examples_env() -> crate::alert::LoadEnv {
+        let parent = [
+            (
+                "SLACK_WEBHOOK_URL",
+                "https://hooks.slack.com/services/T000/B000/XXXX",
+            ),
+            (
+                "TEAMS_WEBHOOK_URL",
+                "https://example.webhook.office.com/webhookb2/xxx",
+            ),
+            ("WEBHOOK_URL", "http://my-webhook-endpoint:8080/alert"),
+            ("WEBHOOK_AUTH", "Bearer eyJhbGciOiJIUzI1NiJ9"),
+            ("ALERTMANAGER_URL", "http://alertmanager:9093/api/v2/alerts"),
+            ("ALERTMANAGER_AUTH", "Bearer eyJhbGciOiJIUzI1NiJ9"),
+            ("CLUSTER_NAME", "prod-eu-1"),
+            ("KUBERNETES_NAMESPACE", "shop"),
+            ("KUBERNETES_SERVICE_NAME", "api"),
+            ("HTTPS_PROXY", "http://corp-proxy.example.com:3128"),
+            ("NO_PROXY", "localhost,.internal"),
+        ];
+        crate::alert::LoadEnv {
+            parent: parent.iter().map(|(k, v)| (k.into(), v.into())).collect(),
+            skip_files: true,
+        }
+    }
+
+    #[test]
     fn all_example_layers_load() {
         let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
         let mut checked = 0;
         for entry in fs::read_dir(&examples).unwrap() {
             let layers = entry.unwrap().path().join("layers");
             if layers.is_dir() {
-                load_plan(&layers).unwrap_or_else(|e| panic!("{layers:?}: {e:#}"));
+                load_with(&layers, &examples_env())
+                    .map(|_| ())
+                    .unwrap_or_else(|e| panic!("{layers:?}: {e:#}"));
                 checked += 1;
             }
         }
         // examples/layers-minimal has no layers/ subdir; it is a layers dir itself.
         let minimal = examples.join("layers-minimal");
         if minimal.is_dir() {
-            load_plan(&minimal).unwrap_or_else(|e| panic!("{minimal:?}: {e:#}"));
+            load_with(&minimal, &examples_env())
+                .map(|_| ())
+                .unwrap_or_else(|e| panic!("{minimal:?}: {e:#}"));
             checked += 1;
         }
         assert!(checked > 5, "only {checked} example layer dirs found");

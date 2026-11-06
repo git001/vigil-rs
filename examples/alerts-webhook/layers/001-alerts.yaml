@@ -44,6 +44,7 @@ alerts:
   # ---------------------------------------------------------------------------
   slack:
     url: "env:SLACK_WEBHOOK_URL"
+    pass-env-glob: [SLACK_WEBHOOK_URL]
     format: webhook
     on-check: [website-alive]
     retry-attempts: 3
@@ -85,6 +86,7 @@ alerts:
   # ---------------------------------------------------------------------------
   teams:
     url: "env:TEAMS_WEBHOOK_URL"
+    pass-env-glob: [TEAMS_WEBHOOK_URL, CLUSTER_NAME]
     format: webhook
     on-check: [website-alive]
     labels:
@@ -118,10 +120,11 @@ alerts:
   # ---------------------------------------------------------------------------
   generic:
     url: "env:WEBHOOK_URL"
+    pass-env-glob: [WEBHOOK_URL, WEBHOOK_AUTH, CLUSTER_NAME]
     format: webhook
     on-check: [website-alive]
     headers:
-      Authorization: "Bearer env:WEBHOOK_TOKEN"
+      Authorization: "env:WEBHOOK_AUTH"           # holds "Bearer <token>"
     labels:
       cluster: "env:CLUSTER_NAME"
       env:     production

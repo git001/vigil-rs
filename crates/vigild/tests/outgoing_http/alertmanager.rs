@@ -31,7 +31,7 @@ async fn alertmanager_format_fires_on_down() {
             ..Default::default()
         },
     );
-    sender.update_alerts(alerts);
+    sender.update_alerts(prepared(alerts));
     sender.spawn_worker();
     sender.handle_check_event("my-check", CheckStatus::Down);
 
@@ -60,7 +60,7 @@ async fn alertmanager_format_fires_resolved_on_up() {
             ..Default::default()
         },
     );
-    sender.update_alerts(alerts);
+    sender.update_alerts(prepared(alerts));
     sender.spawn_worker();
 
     sender.handle_check_event("my-check", CheckStatus::Down);

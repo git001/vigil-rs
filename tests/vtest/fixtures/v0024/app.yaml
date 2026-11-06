@@ -10,6 +10,7 @@ services:
 alerts:
   ops:
     url: "env:WEBHOOK_URL"
+    pass-env-glob: [WEBHOOK_URL]
     format: webhook
     on-vigild: [layers]
     retry-attempts: 1

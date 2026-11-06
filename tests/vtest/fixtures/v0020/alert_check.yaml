@@ -14,4 +14,5 @@ alerts:
   test-alert:
     override: merge
     url: "env:WEBHOOK_URL"
+    pass-env-glob: [WEBHOOK_URL]
     on-check: [dummy-check]

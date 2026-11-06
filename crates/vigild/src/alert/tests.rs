@@ -30,6 +30,9 @@ fn empty_cfg() -> AlertConfig {
         retry_backoff: vec![],
         override_mode: Default::default(),
         body_template: None,
+        pass_env: None,
+        pass_env_glob: vec![],
+        pass_env_regex: vec![],
     }
 }
 
