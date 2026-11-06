@@ -26,6 +26,12 @@ struct RunLabel {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct ResultLabel {
+    /// `ok` or `invalid`.
+    result: String,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
 struct CheckLabel {
     check: String,
 }
@@ -56,6 +62,8 @@ struct AlertLabel {
 /// - `vigil_services_count`               gauge (total number of configured services)
 /// - `vigil_service_info{service}`        gauge always 1 — enumerates service names
 /// - `vigil_alert_fire_count{alert}`      counter — incremented each time an alert fires
+/// - `vigil_layers_reloads{result}`       counter (replan / --watch-layers, result ok|invalid)
+/// - `vigil_layers_last_reload_timestamp_seconds` gauge (last successful reload)
 pub struct MetricsStore {
     registry: Registry,
     service_start_count: Family<ServiceLabel, Counter>,
@@ -72,6 +80,8 @@ pub struct MetricsStore {
     service_running: Family<ServiceLabel, Gauge>,
     service_runs: Family<RunLabel, Counter>,
     service_file_reloads: Family<ServiceLabel, Counter>,
+    layers_reloads: Family<ResultLabel, Counter>,
+    layers_last_reload: Gauge,
 }
 
 impl MetricsStore {
@@ -92,6 +102,8 @@ impl MetricsStore {
         let service_running = Family::<ServiceLabel, Gauge>::default();
         let service_runs = Family::<RunLabel, Counter>::default();
         let service_file_reloads = Family::<ServiceLabel, Counter>::default();
+        let layers_reloads = Family::<ResultLabel, Counter>::default();
+        let layers_last_reload: Gauge = Gauge::default();
 
         registry.register(
             "vigil_service_start_count",
@@ -164,6 +176,16 @@ impl MetricsStore {
             "Reactions (restart or signal) to changes of watched files",
             service_file_reloads.clone(),
         );
+        registry.register(
+            "vigil_layers_reloads",
+            "Layer reloads (vigil replan or --watch-layers), by result (ok or invalid)",
+            layers_reloads.clone(),
+        );
+        registry.register(
+            "vigil_layers_last_reload_timestamp_seconds",
+            "Unix time of the last successful layer reload (0 = none since start)",
+            layers_last_reload.clone(),
+        );
 
         Arc::new(Self {
             registry,
@@ -181,6 +203,8 @@ impl MetricsStore {
             service_running,
             service_runs,
             service_file_reloads,
+            layers_reloads,
+            layers_last_reload,
         })
     }
 
@@ -210,6 +234,18 @@ impl MetricsStore {
                 service: service.to_owned(),
             })
             .set(if active { 1 } else { 0 });
+    }
+
+    /// A layer reload finished: `ok` (applied) or not (invalid layers).
+    pub fn record_layers_reload(&self, ok: bool) {
+        self.layers_reloads
+            .get_or_create(&ResultLabel {
+                result: if ok { "ok" } else { "invalid" }.to_owned(),
+            })
+            .inc();
+        if ok {
+            self.layers_last_reload.set(chrono::Utc::now().timestamp());
+        }
     }
 
     pub fn record_file_reload(&self, service: &str) {

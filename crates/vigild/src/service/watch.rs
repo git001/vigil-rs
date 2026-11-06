@@ -25,18 +25,13 @@ use std::time::Duration;
 
 use vigil_types::plan::{FileChangeAction, WatchFiles};
 
-use crate::duration::parse_duration;
+use crate::duration::{MAX_INTERVAL, MIN_INTERVAL, parse_duration};
 use tokio::task::JoinHandle;
 use tracing::warn;
 
 use crate::template::{ContentHasher, FILE_IO_TIMEOUT, FileRead};
 
 pub const DEFAULT_WATCH_INTERVAL: Duration = Duration::from_secs(30);
-/// Shortest allowed interval: every round reads and hashes all watched
-/// files, which must not become a load on the node or a file server (NFS).
-pub const MIN_WATCH_INTERVAL: Duration = Duration::from_secs(1);
-/// Longest allowed interval.
-pub const MAX_WATCH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// State of one watched file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,7 +111,7 @@ impl FileWatch {
             .unwrap_or(DEFAULT_WATCH_INTERVAL)
             // The plan check rejects values outside the range; clamp anyway
             // so an unchecked config can never poll in a tight loop.
-            .clamp(MIN_WATCH_INTERVAL, MAX_WATCH_INTERVAL);
+            .clamp(MIN_INTERVAL, MAX_INTERVAL);
         let mut watch = match &cfg.paths {
             // Explicit paths: only these; the application reads them itself,
             // so their state is taken now.
@@ -257,11 +252,11 @@ mod tests {
         let w = FileWatch::new("svc", Some(&with("1ms")), r())
             .await
             .unwrap();
-        assert_eq!(w.interval, MIN_WATCH_INTERVAL);
+        assert_eq!(w.interval, MIN_INTERVAL);
         let w = FileWatch::new("svc", Some(&with("1000h")), r())
             .await
             .unwrap();
-        assert_eq!(w.interval, MAX_WATCH_INTERVAL);
+        assert_eq!(w.interval, MAX_INTERVAL);
         let w = FileWatch::new("svc", Some(&with("5m")), r()).await.unwrap();
         assert_eq!(w.interval, Duration::from_secs(300));
     }

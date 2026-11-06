@@ -44,7 +44,7 @@ pub(super) async fn run(
     let period = if period.is_zero() {
         DEFAULT_PERIOD
     } else {
-        period.min(super::MAX_PERIOD)
+        period.min(crate::duration::MAX_INTERVAL)
     };
 
     let timeout_dur = config

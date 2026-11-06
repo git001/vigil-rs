@@ -257,15 +257,53 @@ Deployment automatically on `oc start-build`.
 
 ### Replan on ConfigMap change
 
-Trigger a `replan` when the layer ConfigMap is updated:
+With `--watch-layers` (or `VIGIL_WATCH_LAYERS`) vigild notices changed layer
+files itself and replans, so a ConfigMap update needs no `kubectl exec`:
+
+```yaml
+spec:
+  containers:
+    - name: app
+      env:
+        - name: VIGIL_LAYERS
+          value: /etc/vigil/layers
+        - name: VIGIL_WATCH_LAYERS
+          value: 30s                 # check every 30s (1s to 24h)
+      volumeMounts:
+        - name: layers
+          mountPath: /etc/vigil/layers   # the whole directory, no subPath
+  volumes:
+    - name: layers
+      configMap:
+        name: myapp-vigil-layers
+```
+
+- **No `subPath`:** the kubelet never updates files mounted with `subPath`,
+  so vigild would not see a change. Mount the ConfigMap as a directory.
+- **Delay:** the kubelet updates a mounted ConfigMap after about 1-2 minutes
+  (its sync period plus cache); vigild applies it within two intervals
+  after that (one to see the change, one to make sure it is complete).
+- **Same as `vigil replan`:** only changed services and checks are
+  restarted; finished oneshot jobs do not run again.
+- **Invalid layers** (a YAML error, a wrong value, a failed validation)
+  are not applied: the running plan stays, vigild logs the error and sends
+  the alert `vigild`/`layers`/`invalid` (subscribe with
+  `on-vigild: [layers]`). The next change of the files is tried again; a
+  successful reload resolves the alert. A manual `vigil replan` reports the
+  same way.
+- vigild reads the layer files off its main loop with a 10s timeout, so a
+  hanging volume (e.g. a dead NFS mount) does not block it.
+- Metrics: `vigil_layers_reloads_total{result="ok|invalid"}` and
+  `vigil_layers_last_reload_timestamp_seconds`.
+
+Without `--watch-layers`, trigger the replan yourself after updating the
+ConfigMap:
 
 ```bash
-# After updating the ConfigMap
 kubectl exec <pod> -- vigil replan
 ```
 
-Or automate with a Kubernetes operator that watches ConfigMaps and calls the
-vigild REST API:
+or over the REST API:
 
 ```bash
 curl -k -X POST https://<pod-ip>:8443/v1/replan

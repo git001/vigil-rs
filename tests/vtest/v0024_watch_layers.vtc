@@ -1,0 +1,87 @@
+vtest "--watch-layers: apply changed layers without replan, alert on invalid layers"
+
+shell { mkdir -p ${tmpdir}/layers }
+
+# Start a minimal HTTP server (tests/vtest/helpers/http_capture.py) that appends every
+# POST body to received.json; it picks a free port and writes it to
+# webhook_port.txt once it listens.
+shell {
+	${vtestdir}/helpers/http_capture.py ${tmpdir}/webhook_port.txt ${tmpdir}/received.json \
+		> /dev/null 2>&1 &
+	echo $! > ${tmpdir}/webhook_server.pid
+	for i in $(seq 1 50); do
+		test -s ${tmpdir}/webhook_port.txt && break
+		sleep 0.1
+	done
+	test -s ${tmpdir}/webhook_port.txt
+}
+
+# vigild checks the layers dir every second (--watch-layers 1s).
+process p1 "env WEBHOOK_URL=http://127.0.0.1:$(cat ${tmpdir}/webhook_port.txt)/webhook ${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock --watch-layers 1s" -start
+
+shell {
+	for i in $(seq 1 50); do
+		test -S ${tmpdir}/vigild.sock && break
+		sleep 0.1
+	done
+	test -S ${tmpdir}/vigild.sock
+}
+
+# 1. A new layer (fixtures/v0024/app.yaml) is applied without "vigil replan":
+#    the service web shows up and starts.
+shell {
+	cp ${vtestdir}/fixtures/v0024/app.yaml ${tmpdir}/layers/
+	for i in $(seq 1 50); do
+		${vigil} --socket ${tmpdir}/vigild.sock services list > ${tmpdir}/svc1.txt 2>&1
+		grep -q 'web.*active' ${tmpdir}/svc1.txt && break
+		sleep 0.2
+	done
+	grep -q 'web.*active' ${tmpdir}/svc1.txt
+}
+
+# 2. A broken layer: the running plan stays, the alert reports it.
+shell {
+	cp ${vtestdir}/fixtures/v0024/broken.yaml ${tmpdir}/layers/
+	for i in $(seq 1 50); do
+		test -s ${tmpdir}/received.json && break
+		sleep 0.2
+	done
+	expected='{"event":"invalid","name":"layers","source":"vigild"}'
+	actual=$(sed -n 1p ${tmpdir}/received.json)
+	if [ "$actual" != "$expected" ]; then
+		echo "unexpected alert: $actual"
+		exit 1
+	fi
+	${vigil} --socket ${tmpdir}/vigild.sock services list > ${tmpdir}/svc2.txt 2>&1
+	grep -q 'web.*active' ${tmpdir}/svc2.txt
+	! grep -q worker ${tmpdir}/svc2.txt
+}
+
+# 3. The broken layer removed: the next reload succeeds and resolves the alert.
+shell {
+	rm ${tmpdir}/layers/broken.yaml
+	for i in $(seq 1 50); do
+		test "$(wc -l < ${tmpdir}/received.json)" -ge 2 && break
+		sleep 0.2
+	done
+	expected='{"event":"recovered","name":"layers","source":"vigild"}'
+	actual=$(sed -n 2p ${tmpdir}/received.json)
+	if [ "$actual" != "$expected" ]; then
+		echo "unexpected alert: $actual"
+		exit 1
+	fi
+}
+
+# The metrics count both reloads by result.
+shell {
+	curl -sf --unix-socket ${tmpdir}/vigild.sock \
+		http://localhost/v1/metrics > ${tmpdir}/metrics.txt
+	grep -q 'vigil_layers_reloads_total{result="ok"} 2' ${tmpdir}/metrics.txt
+	grep -q 'vigil_layers_reloads_total{result="invalid"} 1' ${tmpdir}/metrics.txt
+}
+
+# Tear down
+shell { kill $(cat ${tmpdir}/webhook_server.pid) 2>/dev/null || true }
+
+process p1 -kill TERM
+process p1 -wait

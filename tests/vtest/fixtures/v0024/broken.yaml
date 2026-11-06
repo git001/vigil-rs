@@ -1,0 +1,5 @@
+# A broken layer (unclosed list): vigild must keep the running plan and
+# send the alert vigild/layers/invalid.
+services:
+  worker:
+    command: [sleep, 300

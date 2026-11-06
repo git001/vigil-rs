@@ -25,6 +25,7 @@ mod lifecycle;
 pub mod plan;
 #[cfg(test)]
 mod tests;
+pub mod watch_layers;
 
 // ---------------------------------------------------------------------------
 // Commands
@@ -131,6 +132,7 @@ pub fn spawn(
     log_buffer: usize,
     exit_code_mode: service::ExitCodeMode,
     notify_dir: PathBuf,
+    watch_layers: Option<std::time::Duration>,
 ) -> anyhow::Result<(
     Handle,
     Arc<LogStore>,
@@ -179,7 +181,7 @@ pub fn spawn(
         check_event_rx,
         check_event_tx,
         cmd_rx,
-        layers_dir,
+        layers_dir: layers_dir.clone(),
         pending_autostart: Vec::new(),
         exit_code_mode,
         notify_dir,
@@ -187,6 +189,10 @@ pub fn spawn(
     };
 
     let join = tokio::spawn(run(ov));
+    if let Some(interval) = watch_layers {
+        // Ends by itself when the overlord's command channel closes.
+        watch_layers::spawn(layers_dir, interval, cmd_tx.clone());
+    }
     Ok((Handle { tx: cmd_tx }, log_store, metrics, join))
 }
 

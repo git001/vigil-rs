@@ -577,6 +577,21 @@ updating the ConfigMap.
   the last successful reload.
 - Docs in `orchestrators.md`: ConfigMap example without `subPath` (with
   `subPath` the kubelet never updates the files).
+- A manual `vigil replan` with invalid layers sends the same alert (decided
+  by the user): both go through `reload_layers`.
+
+**Status (2026-11-06):** implemented (`overlord/watch_layers.rs`; alert,
+metrics and `off_runtime` in `Overlord::reload_layers`). The watcher sends
+the normal replan command, so manual and automatic replans behave the same.
+Found on the way: `load_plan` read the layer files synchronously inside the
+overlord, so a hanging volume blocked vigild's control loop; it now runs
+off the runtime with the 10s timeout. Metric names as registered:
+`vigil_layers_reloads_total{result}` and
+`vigil_layers_last_reload_timestamp_seconds`. Tests: debounce, hash of
+names and contents without the kubelet's `..` entries, missing directory,
+invalid layers keep the plan and alert once, recovery. VTest `v0024`: a new
+layer is applied without replan, a broken one sends `invalid` and keeps the
+running service, removing it sends `recovered`.
 
 ## Releases
 

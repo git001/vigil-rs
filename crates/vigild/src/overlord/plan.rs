@@ -6,6 +6,13 @@ use std::path::Path;
 use anyhow::Context;
 use vigil_types::plan::{Layer, Plan};
 
+/// Whether a directory entry is a layer file: `*.yaml` or `*.yml`, but not
+/// the kubelet's own entries of a ConfigMap volume (`..data`,
+/// `..2026_11_06_…`), which start with `..`.
+pub(crate) fn is_layer_file(name: &str) -> bool {
+    !name.starts_with("..") && (name.ends_with(".yaml") || name.ends_with(".yml"))
+}
+
 pub fn load_plan(dir: &Path) -> anyhow::Result<Plan> {
     if !dir.exists() {
         return Ok(Plan::default());
@@ -14,11 +21,7 @@ pub fn load_plan(dir: &Path) -> anyhow::Result<Plan> {
     let mut entries: Vec<_> = std::fs::read_dir(dir)
         .with_context(|| format!("reading layers dir {dir:?}"))?
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            let n = e.file_name();
-            let n = n.to_string_lossy();
-            n.ends_with(".yaml") || n.ends_with(".yml")
-        })
+        .filter(|e| is_layer_file(&e.file_name().to_string_lossy()))
         .collect();
 
     entries.sort_by_key(|e| e.file_name());
@@ -113,13 +116,8 @@ fn validate_watch_files(svc: &vigil_types::plan::ServiceConfig) -> anyhow::Resul
         "watch-files does not apply to type: oneshot (every run reads its files anew)"
     );
     if let Some(i) = &w.interval {
-        use crate::service::watch::{MAX_WATCH_INTERVAL, MIN_WATCH_INTERVAL};
-        let d = crate::duration::parse_duration(i)
-            .map_err(|e| anyhow::anyhow!("invalid watch-files interval {i:?}: {e}"))?;
-        anyhow::ensure!(
-            (MIN_WATCH_INTERVAL..=MAX_WATCH_INTERVAL).contains(&d),
-            "watch-files interval {i:?} must be between 1s and 24h"
-        );
+        crate::duration::parse_interval(i)
+            .map_err(|e| anyhow::anyhow!("watch-files interval {e}"))?;
     }
     for p in w.paths.iter().flatten() {
         anyhow::ensure!(
@@ -628,7 +626,7 @@ mod tests {
             ),
             (
                 "    watch-files: {interval: soon}\n",
-                "invalid watch-files interval",
+                "watch-files interval \"soon\" is not a duration",
             ),
             ("    watch-files: {interval: 0s}\n", "between 1s and 24h"),
             ("    watch-files: {interval: 500ms}\n", "between 1s and 24h"),

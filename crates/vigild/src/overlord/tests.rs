@@ -1027,3 +1027,52 @@ fn a_check_belongs_to_the_service_it_names() {
     ov.healthy.insert("app".into());
     assert!(!ov.check_quiet("metrics"));
 }
+
+// ------------------------------------------------------------------
+// reload_layers — invalid layers keep the plan and alert
+// ------------------------------------------------------------------
+
+#[tokio::test]
+async fn invalid_layers_keep_the_plan_and_alert_until_a_valid_reload() {
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    let layer = dir.path().join("001.yaml");
+    std::fs::write(
+        &layer,
+        "services:\n  app:\n    command: sleep 999\nalerts:\n  ops:\n    url: http://127.0.0.1:1/\n    on-vigild: [layers]\n",
+    )
+    .unwrap();
+    let mut ov = make_overlord(&[], &[]);
+    ov.alert_sender.spawn_worker();
+    ov.layers_dir = dir.path().to_path_buf();
+    ov.reload_layers().await.unwrap();
+    assert_eq!(alerts_fired(&ov), 0, "a valid reload resolves nothing");
+
+    std::fs::write(&layer, "services:\n  app:\n    command: [broken\n").unwrap();
+    let err = ov.reload_layers().await.unwrap_err();
+    assert!(format!("{err:#}").contains("001.yaml"), "{err:#}");
+    assert!(ov.plan.services.contains_key("app"), "running plan kept");
+    assert!(ov.plan.alerts.contains_key("ops"));
+    assert_eq!(alerts_fired(&ov), 1, "layers/invalid");
+    assert!(ov.reload_layers().await.is_err());
+    assert_eq!(alerts_fired(&ov), 1, "same problem: no new alert");
+
+    std::fs::write(
+        &layer,
+        "services:\n  app:\n    command: sleep 998\nalerts:\n  ops:\n    url: http://127.0.0.1:1/\n    on-vigild: [layers]\n",
+    )
+    .unwrap();
+    ov.reload_layers().await.unwrap();
+    assert_eq!(alerts_fired(&ov), 2, "recovered");
+
+    let m = ov.metrics.render();
+    assert!(
+        m.contains("vigil_layers_reloads_total{result=\"ok\"} 2"),
+        "{m}"
+    );
+    assert!(
+        m.contains("vigil_layers_reloads_total{result=\"invalid\"} 2"),
+        "{m}"
+    );
+    ov.stop_all().await;
+}

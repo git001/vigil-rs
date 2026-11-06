@@ -15,22 +15,11 @@ use vigil_types::plan::{CheckConfig, ServiceConfig};
 
 use crate::metrics::MetricsStore;
 
-/// Shortest allowed check `period`: every period runs a probe (an exec
-/// check forks a process), so a tiny period would flood the pod or the
-/// target.
-pub const MIN_PERIOD: std::time::Duration = std::time::Duration::from_secs(1);
-/// Longest allowed check `period`.
-pub const MAX_PERIOD: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
-
-/// Check a check's `period` (at load and replan).
+/// Check a check's `period` (at load and replan): 1s to 24h, see
+/// [`crate::duration::parse_interval`].
 pub fn validate_period(cfg: &CheckConfig) -> anyhow::Result<()> {
     if let Some(p) = &cfg.period {
-        let d = crate::duration::parse_duration(p)
-            .map_err(|e| anyhow::anyhow!("invalid period {p:?}: {e}"))?;
-        anyhow::ensure!(
-            (MIN_PERIOD..=MAX_PERIOD).contains(&d),
-            "period {p:?} must be between 1s and 24h"
-        );
+        crate::duration::parse_interval(p).map_err(|e| anyhow::anyhow!("period {e}"))?;
     }
     Ok(())
 }

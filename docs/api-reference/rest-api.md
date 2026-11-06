@@ -468,6 +468,8 @@ Metrics exposed:
 | `vigil_service_last_run_success{service}` | gauge | `1` if the last run of a `type: oneshot` service succeeded, else `0` |
 | `vigil_service_runs_total{service,result}` | counter | Finished runs of a `type: oneshot` service; `result` is `success` or `failure` |
 | `vigil_service_file_reloads_total{service}` | counter | Reactions (restart or signal) to a change of a watched file (`watch-files`) |
+| `vigil_layers_reloads_total{result}` | counter | Layer reloads (`vigil replan` or `--watch-layers`), `result` is `ok` or `invalid` |
+| `vigil_layers_last_reload_timestamp_seconds` | gauge | Unix time of the last successful layer reload (0 = none since start) |
 | `vigil_service_start_count_total{service}` | counter | Number of times the service has started |
 | `vigil_check_up{check}` | gauge | `1` if check is up, `0` if down |
 | `vigil_check_success_count_total{check}` | counter | Number of successful check runs |

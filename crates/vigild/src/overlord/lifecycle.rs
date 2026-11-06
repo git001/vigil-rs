@@ -11,6 +11,7 @@ use tracing::{error, info, warn};
 use vigil_types::api::CheckStatus;
 use vigil_types::plan::Startup;
 
+use crate::alert::{AlertEvent, AlertSource};
 use crate::check;
 use crate::service::{self, Cmd as SvcCmd};
 use crate::state::ServiceState;
@@ -195,9 +196,43 @@ impl Overlord {
         }
     }
 
+    /// Load the layers again and apply them (`vigil replan`,
+    /// `--watch-layers`). Invalid layers leave the running plan as it is and
+    /// send the alert `vigild`/`layers`/`invalid`; the next successful
+    /// reload resolves it.
     pub(super) async fn reload_layers(&mut self) -> anyhow::Result<()> {
         let dir = self.layers_dir.clone();
-        let old_plan = std::mem::replace(&mut self.plan, super::plan::load_plan(&dir)?);
+        // Reading files off the async runtime: a hanging file system must
+        // not block the overlord.
+        let loaded =
+            crate::template::off_runtime("layers", move || super::plan::load_plan(&dir)).await;
+        match loaded {
+            Ok(plan) => {
+                self.apply_plan(plan).await;
+                self.metrics.record_layers_reload(true);
+                self.send_alert(AlertEvent::resolved(
+                    AlertSource::Vigild,
+                    "layers",
+                    "layers loaded",
+                ));
+                Ok(())
+            }
+            Err(e) => {
+                error!(error = %format!("{e:#}"), "layers are invalid, keeping the running plan");
+                self.metrics.record_layers_reload(false);
+                self.send_alert(AlertEvent::firing(
+                    AlertSource::Vigild,
+                    "layers",
+                    "invalid",
+                    format!("{e:#}"),
+                ));
+                Err(e)
+            }
+        }
+    }
+
+    async fn apply_plan(&mut self, plan: vigil_types::plan::Plan) {
+        let old_plan = std::mem::replace(&mut self.plan, plan);
 
         let services_changed = self
             .plan
@@ -284,7 +319,6 @@ impl Overlord {
         }
 
         self.autostart().await;
-        Ok(())
     }
 
     pub(super) async fn stop_all(&mut self) {

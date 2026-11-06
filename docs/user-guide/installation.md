@@ -71,6 +71,7 @@ org.opencontainers.image.licenses = AGPL-3.0-only
 | `--reaper` | `VIGIL_REAPER` | *(auto when PID 1)* | Enable zombie-reaping (init mode) |
 | `--log-format <FORMAT>` | `VIGIL_LOG_FORMAT` | `text` | vigild's own log format: `text` or `json` |
 | `--log-buffer <N>` | `VIGIL_LOG_BUFFER` | `1000` | Per-service log ring-buffer size (lines) |
+| `--watch-layers <INTERVAL>` | `VIGIL_WATCH_LAYERS` | *(off)* | Reload the layers when the files in the layers dir change, checking every `INTERVAL` (`1s` to `24h`); see [Orchestrators](../operator-guide/orchestrators.md#replan-on-configmap-change) |
 
 See [Logging](logging.md) for details on `--log-format` and `--log-buffer`.
 

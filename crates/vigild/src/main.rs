@@ -117,6 +117,12 @@ struct Args {
     #[arg(long, env = "VIGIL_LOG_FORMAT", default_value = "text")]
     log_format: String,
 
+    /// Reload the layers automatically when the files in --layers-dir
+    /// change (e.g. a mounted ConfigMap), checking every INTERVAL
+    /// (1s to 24h, e.g. 30s). Off by default.
+    #[arg(long, env = "VIGIL_WATCH_LAYERS", value_name = "INTERVAL", value_parser = vigild::duration::parse_interval)]
+    watch_layers: Option<std::time::Duration>,
+
     /// Per-service log ring-buffer size (number of lines kept in memory).
     /// Also controls the SSE broadcast channel depth (half this value,
     /// clamped to [64, 4096]), which determines how many entries can queue
@@ -210,6 +216,7 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
             _ => vigild::service::ExitCodeMode::Propagate,
         },
         path_prefix::notify_dir(&args.path_prefix),
+        args.watch_layers,
     )?;
     let identity_store = identity::IdentityStore::new();
 
