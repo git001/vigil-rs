@@ -15,15 +15,6 @@ use vigil_types::plan::{CheckConfig, ServiceConfig};
 
 use crate::metrics::MetricsStore;
 
-/// Check a check's `period` (at load and replan): 1s to 24h, see
-/// [`crate::duration::parse_interval`].
-pub fn validate_period(cfg: &CheckConfig) -> anyhow::Result<()> {
-    if let Some(p) = &cfg.period {
-        crate::duration::parse_interval(p).map_err(|e| anyhow::anyhow!("period {e}"))?;
-    }
-    Ok(())
-}
-
 /// The HTTP clients of the HTTP checks, by check name.
 pub type PreparedChecks = IndexMap<String, probe::CheckClient>;
 

@@ -25,6 +25,20 @@ pub fn parse_interval(s: &str) -> Result<std::time::Duration, String> {
     Ok(d)
 }
 
+/// Parse an optional duration setting. An invalid value is an error that
+/// names the setting (`kill-delay "10 sec" is not a duration: …`), never a
+/// silent fallback to the default.
+pub fn parse_field(
+    field: &str,
+    value: Option<&str>,
+) -> anyhow::Result<Option<std::time::Duration>> {
+    value
+        .map(|s| {
+            parse_duration(s).map_err(|e| anyhow::anyhow!("{field} {s:?} is not a duration: {e}"))
+        })
+        .transpose()
+}
+
 /// Parse a human-readable duration string into `std::time::Duration`.
 ///
 /// Supported suffixes: ms, s, m, h

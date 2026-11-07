@@ -155,12 +155,8 @@ impl Overlord {
         let Some(cfg) = self.plan.services.get(name) else {
             return Some("not in the plan");
         };
-        if cfg.startup() != Startup::Enabled {
-            return Some("startup is not enabled");
-        }
-        // Scheduled jobs are started by their schedule, not at startup.
-        if cfg.schedule.is_some() {
-            return Some("scheduled; its schedule starts it");
+        if let Some(why) = super::plan::dependencies::autostart_skip_reason(cfg) {
+            return Some(why);
         }
         // A finished oneshot is not run again by a replan.
         if self
@@ -215,17 +211,8 @@ impl Overlord {
         let Some(config) = self.plan.services.get(name) else {
             return Vec::new();
         };
-        // X before: [name] makes X an ordering dependency of name.
-        let reverse_before = self
-            .plan
-            .services
-            .iter()
-            .filter(|(other, c)| *other != name && c.before.iter().any(|b| b == name))
-            .map(|(other, _)| other);
-        let ordering = config.after.iter().chain(reverse_before);
-
         let mut unmet: Vec<String> = Vec::new();
-        for dep in ordering {
+        for dep in super::plan::dependencies::ordering_deps(&self.plan, name, config) {
             if !self.dep_ready(dep) && !self.ordering_dep_ignored(dep) && !unmet.contains(dep) {
                 unmet.push(dep.clone());
             }

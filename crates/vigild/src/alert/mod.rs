@@ -155,8 +155,8 @@ pub fn validate_queue_limits(plan: &vigil_types::plan::Plan) -> anyhow::Result<(
         anyhow::ensure!(d >= 1, "alerts: max-queue-depth must be at least 1");
     }
     if let Some(t) = &plan.alert_max_queue_time {
-        let d = crate::duration::parse_duration(t)
-            .map_err(|e| anyhow::anyhow!("alerts: max-queue-time {t:?} is not a duration: {e}"))?;
+        let d =
+            crate::duration::parse_field("alerts: max-queue-time", Some(t))?.unwrap_or_default();
         anyhow::ensure!(
             d >= Duration::from_secs(1),
             "alerts: max-queue-time {t:?} must be at least 1s"
