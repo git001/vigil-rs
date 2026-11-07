@@ -39,9 +39,16 @@ fn spawn_actor(
     config: CheckConfig,
     initial_status: CheckStatus,
 ) -> (mpsc::Sender<Cmd>, mpsc::Receiver<CheckEvent>) {
+    spawn_actor_with_metrics(config, initial_status, MetricsStore::new())
+}
+
+fn spawn_actor_with_metrics(
+    config: CheckConfig,
+    initial_status: CheckStatus,
+    metrics: Arc<MetricsStore>,
+) -> (mpsc::Sender<Cmd>, mpsc::Receiver<CheckEvent>) {
     let (cmd_tx, cmd_rx) = mpsc::channel(8);
     let (event_tx, event_rx) = mpsc::channel(16);
-    let metrics = MetricsStore::new();
     tokio::spawn(run(
         "test-check".to_string(),
         Setup {
@@ -402,4 +409,53 @@ async fn detached_run_reports_only_this_run() {
     assert_eq!(ok.error, None);
     assert_eq!(ok.info.status, CheckStatus::Up);
     assert_eq!(ok.info.failures, 0);
+}
+
+/// The value of the metric line starting with `prefix` (labels included).
+fn metric_value(metrics: &MetricsStore, prefix: &str) -> Option<f64> {
+    metrics
+        .render()
+        .lines()
+        .find_map(|l| l.strip_prefix(prefix)?.trim().parse().ok())
+}
+
+// vigil_check_up exists from the start; an outage counts once in
+// vigil_check_down_count however many runs fail, and its length goes into
+// vigil_check_down_seconds when the check recovers.
+#[tokio::test]
+async fn outage_counts_once_and_its_time_is_added_on_recovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let ready = dir.path().join("ready");
+    let config = CheckConfig {
+        level: Some(vigil_types::plan::CheckLevel::Ready),
+        delay: Some("1h".to_string()),
+        threshold: Some(1),
+        exec: Some(ExecCheck {
+            command: format!("test -e {}", ready.display()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let metrics = MetricsStore::new();
+    metrics.set_checks(&[("test-check", vigil_types::plan::CheckLevel::Ready)]);
+    let (tx, _event_rx) = spawn_actor_with_metrics(config, CheckStatus::Up, Arc::clone(&metrics));
+    let up = r#"vigil_check_up{check="test-check",level="ready"}"#;
+    let count = r#"vigil_check_down_count_total{check="test-check",level="ready"}"#;
+    let seconds = r#"vigil_check_down_seconds_total{check="test-check",level="ready"}"#;
+    assert_eq!(get_status(&tx).await.status, CheckStatus::Up);
+    assert_eq!(metric_value(&metrics, up), Some(1.0));
+
+    refresh(&tx).await;
+    refresh(&tx).await;
+    assert_eq!(metric_value(&metrics, up), Some(0.0));
+    assert_eq!(metric_value(&metrics, count), Some(1.0));
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    std::fs::write(&ready, "").unwrap();
+    assert_eq!(refresh(&tx).await.info.status, CheckStatus::Up);
+    assert_eq!(metric_value(&metrics, up), Some(1.0));
+    assert_eq!(metric_value(&metrics, count), Some(1.0));
+    let down = metric_value(&metrics, seconds).unwrap();
+    assert!((0.2..5.0).contains(&down), "down seconds: {down}");
+    let _ = tx.send(Cmd::Shutdown).await;
 }

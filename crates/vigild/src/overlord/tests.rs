@@ -1851,3 +1851,55 @@ async fn stop_cancels_a_pending_replan_restart() {
     ov.handle_svc_event(state_event("db", ServiceState::Inactive)).await;
     assert_eq!(drain(&mut cmds), [("db".into(), "stop"), ("db".into(), "stop")]);
 }
+
+// ------------------------------------------------------------------
+// vigil_health{level} follows the checks like GET /v1/health
+// ------------------------------------------------------------------
+
+#[test]
+fn publish_health_per_level_ignores_disabled_checks() {
+    use vigil_types::api::CheckStatus::{Down, Up};
+    use vigil_types::plan::{CheckConfig, CheckLevel};
+    let mut ov = make_overlord(&[], &[]);
+    for (name, level, startup) in [
+        ("app", CheckLevel::Alive, Startup::Enabled),
+        ("db", CheckLevel::Ready, Startup::Enabled),
+        ("old", CheckLevel::Alive, Startup::Disabled),
+    ] {
+        ov.plan.checks.insert(
+            name.into(),
+            CheckConfig {
+                level: Some(level),
+                startup: Some(startup),
+                ..Default::default()
+            },
+        );
+    }
+    let health = |ov: &Overlord| {
+        let m = ov.metrics.render();
+        (
+            m.contains(r#"vigil_health{level="alive"} 1"#),
+            m.contains(r#"vigil_health{level="ready"} 1"#),
+        )
+    };
+
+    // Not run yet: up. A disabled check that is down does not count.
+    ov.alert_sender.hold_check_event("old", Down, None);
+    ov.publish_health();
+    assert_eq!(health(&ov), (true, true));
+
+    // A dependency is down: not ready, still alive.
+    ov.alert_sender.hold_check_event("db", Down, Some("connect refused"));
+    ov.publish_health();
+    assert_eq!(health(&ov), (true, false));
+
+    // The own app is down too: neither.
+    ov.alert_sender.hold_check_event("app", Down, None);
+    ov.publish_health();
+    assert_eq!(health(&ov), (false, false));
+
+    ov.alert_sender.hold_check_event("db", Up, None);
+    ov.alert_sender.hold_check_event("app", Up, None);
+    ov.publish_health();
+    assert_eq!(health(&ov), (true, true));
+}

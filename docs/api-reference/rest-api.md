@@ -641,25 +641,9 @@ Return Prometheus/OpenMetrics metrics in text exposition format.
 
 **Response** `200 OK` — `application/openmetrics-text; version=1.0.0; charset=utf-8`
 
-Metrics exposed:
-
-| Metric | Type | Description |
-|---|---|---|
-| `vigil_services_count` | gauge | Total number of configured services |
-| `vigil_service_info{service}` | gauge (always 1) | Enumerates all configured service names |
-| `vigil_service_active{service}` | gauge | `1` if service is active, `0` otherwise |
-| `vigil_service_running{service}` | gauge | `1` while a process of the service is alive (`starting`, `active` or stopping), `0` otherwise; unlike `vigil_service_active` also `1` for a running `oneshot` job or a service still waiting for readiness |
-| `vigil_service_last_exit_code{service}` | gauge | Exit code of the last process (`128 + signal` if killed by a signal, `-1` if unknown); absent until the service has exited once |
-| `vigil_service_last_run_timestamp_seconds{service}` | gauge | Unix time when the last run of a `type: oneshot` service ended |
-| `vigil_service_last_run_success{service}` | gauge | `1` if the last run of a `type: oneshot` service succeeded, else `0` |
-| `vigil_service_runs_total{service,result}` | counter | Finished runs of a `type: oneshot` service; `result` is `success` or `failure` |
-| `vigil_service_file_reloads_total{service}` | counter | Reactions (restart or signal) to a change of a watched file (`watch-files`) |
-| `vigil_layers_reloads_total{result}` | counter | Layer reloads (`vigil replan` or `--watch-layers`), `result` is `ok` or `invalid` |
-| `vigil_layers_last_reload_timestamp_seconds` | gauge | Unix time of the last successful layer reload (0 = none since start) |
-| `vigil_service_start_count_total{service}` | counter | Number of times the service has started |
-| `vigil_check_up{check}` | gauge | `1` if check is up, `0` if down |
-| `vigil_check_success_count_total{check}` | counter | Number of successful check runs |
-| `vigil_check_failure_count_total{check}` | counter | Number of failed check runs |
+Every metric, with PromQL examples: [Metrics](../operator-guide/metrics.md).
+Check metrics carry the labels `check` and `level`; `vigil_health{level}`
+says what `GET /v1/health?level=` answers.
 
 **Example:**
 
@@ -687,7 +671,11 @@ vigil_service_start_count_total{service="haproxy"} 1
 vigil_service_start_count_total{service="controller"} 1
 # HELP vigil_check_up Whether the health check is up (1) or not (0)
 # TYPE vigil_check_up gauge
-vigil_check_up{check="check-haproxy"} 1
+vigil_check_up{check="check-haproxy",level="alive"} 1
+# HELP vigil_health Whether GET /v1/health?level= answers healthy (1) or not (0)
+# TYPE vigil_health gauge
+vigil_health{level="alive"} 1
+vigil_health{level="ready"} 1
 ```
 
 ---

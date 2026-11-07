@@ -12,7 +12,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{MissedTickBehavior, interval};
 use tracing::{debug, info, warn};
 use vigil_types::api::{CheckInfo, CheckRefresh, CheckStatus};
-use vigil_types::plan::{CheckConfig, ServiceConfig};
+use vigil_types::plan::{CheckConfig, CheckLevel, ServiceConfig};
 
 use crate::duration::parse_duration;
 use crate::metrics::MetricsStore;
@@ -73,6 +73,9 @@ struct Checker {
     first_run: bool,
     /// Why the last run failed; cleared by a pass.
     last_error: Option<String>,
+    /// Since when the down time was last counted
+    /// (`vigil_check_down_seconds`); `None` while up.
+    down_since: Option<std::time::Instant>,
 }
 
 impl Checker {
@@ -81,6 +84,7 @@ impl Checker {
     /// (`POST /v1/checks/refresh`) both go through here.
     async fn run_once(&mut self) -> ProbeResult {
         let name = self.name.clone();
+        let level = self.config.level();
         let probe_started = std::time::Instant::now();
         let result = perform(
             &self.config,
@@ -92,7 +96,7 @@ impl Checker {
         let first = std::mem::replace(&mut self.first_run, false);
         match &result {
             Err(reason) => {
-                self.metrics.record_check_failure(&name);
+                self.metrics.record_check_failure(&name, level);
                 self.failures += 1;
                 let (failures, threshold) = (self.failures, self.threshold);
                 warn!(check = %name, failures, threshold, error = ?reason, "check failed");
@@ -100,8 +104,11 @@ impl Checker {
                 if down {
                     info!(check = %name, error = ?reason, "check is down");
                     self.status = CheckStatus::Down;
-                    self.metrics.set_check_up(&name, false);
+                    self.metrics.set_check_up(&name, level, false);
+                    self.metrics.record_check_down(&name, level);
+                    self.down_since = Some(std::time::Instant::now());
                 }
+                self.count_down_time(level);
                 let error = (self.status == CheckStatus::Down).then(|| reason.clone());
                 self.last_error = Some(reason.clone());
                 // A Down transition is reported; on the first run the
@@ -113,11 +120,13 @@ impl Checker {
             }
             Ok(()) => {
                 self.last_error = None;
-                self.metrics.record_check_success(&name);
+                self.metrics.record_check_success(&name, level);
                 if self.status == CheckStatus::Down {
                     info!(check = %name, "check recovered");
+                    self.count_down_time(level);
+                    self.down_since = None;
                     self.status = CheckStatus::Up;
-                    self.metrics.set_check_up(&name, true);
+                    self.metrics.set_check_up(&name, level, true);
                 }
                 self.failures = 0;
                 // Every pass is reported (for `ready: check`); it also
@@ -127,6 +136,17 @@ impl Checker {
             }
         }
         result
+    }
+
+    /// Add the time since the last count to `vigil_check_down_seconds`.
+    fn count_down_time(&mut self, level: CheckLevel) {
+        if let Some(since) = self.down_since.as_mut() {
+            let now = std::time::Instant::now();
+            let seconds = now.duration_since(*since).as_secs_f64();
+            self.metrics
+                .add_check_down_seconds(&self.name, level, seconds);
+            *since = now;
+        }
     }
 
     async fn send(&self, passed_at: Option<std::time::Instant>, error: Option<String>) {
@@ -195,7 +215,13 @@ pub(super) async fn run(
         status: initial_status,
         first_run: true,
         last_error: None,
+        // A check restarted by a replan may start down (initial_status).
+        down_since: (initial_status == CheckStatus::Down).then(std::time::Instant::now),
     };
+    let level = checker.config.level();
+    checker
+        .metrics
+        .set_check_up(&checker.name, level, checker.status == CheckStatus::Up);
 
     // Wait for the initial delay before the first scheduled run (default:
     // 3s). Answers GetStatus, Refresh and Shutdown meanwhile.
@@ -205,7 +231,10 @@ pub(super) async fn run(
             tokio::select! {
                 biased;
                 cmd = rx.recv() => match cmd {
-                    None | Some(Cmd::Shutdown) => return,
+                    None | Some(Cmd::Shutdown) => {
+                        checker.count_down_time(level);
+                        return;
+                    }
                     Some(Cmd::SetHttpClient(c)) => checker.http = Some(c),
                     Some(Cmd::GetStatus(reply)) => {
                         let _ = reply.send(checker.info(None));
@@ -216,10 +245,6 @@ pub(super) async fn run(
             }
         }
     }
-
-    checker
-        .metrics
-        .set_check_up(&checker.name, checker.status == CheckStatus::Up);
 
     let mut tick = interval(period);
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -253,6 +278,7 @@ pub(super) async fn run(
         }
     }
 
+    checker.count_down_time(level);
     debug!(check = %checker.name, "check actor shut down");
 }
 

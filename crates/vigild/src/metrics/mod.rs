@@ -2,12 +2,16 @@
 // Copyright (C) 2026 vigil-rs contributors
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use prometheus_client::{
     encoding::{EncodeLabelSet, text::encode},
     metrics::{counter::Counter, family::Family, gauge::Gauge},
     registry::Registry,
 };
+
+mod check;
+use check::{CheckLabel, KnownChecks, LevelLabel};
 
 // ---------------------------------------------------------------------------
 // Label types
@@ -35,11 +39,6 @@ struct RunLabel {
 struct ResultLabel {
     /// `ok` or `invalid`.
     result: String,
-}
-
-#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
-struct CheckLabel {
-    check: String,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
@@ -72,9 +71,12 @@ where
 /// - `vigil_service_last_run_success{service}` gauge (oneshot result, 0/1)
 /// - `vigil_service_runs{service,result}` counter (oneshot runs, result success|failure)
 /// - `vigil_service_file_reloads{service}` counter (reactions to watched file changes)
-/// - `vigil_check_up{check}`              gauge (0/1)
-/// - `vigil_check_success_count{check}`   counter
-/// - `vigil_check_failure_count{check}`   counter
+/// - `vigil_check_up{check,level}`        gauge (0/1)
+/// - `vigil_check_success_count{check,level}` counter
+/// - `vigil_check_failure_count{check,level}` counter
+/// - `vigil_check_down_count{check,level}` counter (outages: up → down)
+/// - `vigil_check_down_seconds{check,level}` counter (time spent down)
+/// - `vigil_health{level}`                gauge (0/1, as `GET /v1/health?level=`)
 /// - `vigil_services_count`               gauge (total number of configured services)
 /// - `vigil_service_info{service}`        gauge always 1 — enumerates service names
 /// - `vigil_alert_fire_count{alert}`      counter — incremented each time an alert fires
@@ -89,6 +91,10 @@ pub struct MetricsStore {
     check_up: Family<CheckLabel, Gauge>,
     check_success_count: Family<CheckLabel, Counter>,
     check_failure_count: Family<CheckLabel, Counter>,
+    check_down_count: Family<CheckLabel, Counter>,
+    check_down_seconds: Family<CheckLabel, Counter<f64, AtomicU64>>,
+    health: Family<LevelLabel, Gauge>,
+    known_checks: KnownChecks,
     alert_fire_count: Family<AlertLabel, Counter>,
     service_last_exit_code: Family<ServiceLabel, Gauge>,
     service_last_run_timestamp: Family<ServiceLabel, Gauge>,
@@ -139,6 +145,22 @@ impl MetricsStore {
                 "vigil_check_failure_count",
                 "Number of times the check has failed",
             ),
+            check_down_count: reg(
+                &mut r,
+                "vigil_check_down_count",
+                "Number of outages: the check went from up to down",
+            ),
+            check_down_seconds: reg(
+                &mut r,
+                "vigil_check_down_seconds",
+                "Time the check spent down, updated at each run while it is down",
+            ),
+            health: reg(
+                &mut r,
+                "vigil_health",
+                "Whether GET /v1/health?level= answers healthy (1) or not (0)",
+            ),
+            known_checks: Default::default(),
             alert_fire_count: reg(
                 &mut r,
                 "vigil_alert_fire_count",
@@ -252,30 +274,6 @@ impl MetricsStore {
                 result: if success { "success" } else { "failure" }.to_owned(),
             })
             .inc();
-    }
-
-    pub fn record_check_success(&self, check: &str) {
-        self.check_success_count
-            .get_or_create(&CheckLabel {
-                check: check.to_owned(),
-            })
-            .inc();
-    }
-
-    pub fn record_check_failure(&self, check: &str) {
-        self.check_failure_count
-            .get_or_create(&CheckLabel {
-                check: check.to_owned(),
-            })
-            .inc();
-    }
-
-    pub fn set_check_up(&self, check: &str, up: bool) {
-        self.check_up
-            .get_or_create(&CheckLabel {
-                check: check.to_owned(),
-            })
-            .set(if up { 1 } else { 0 });
     }
 
     /// Increment the alert fire counter for the named alert.

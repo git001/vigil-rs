@@ -69,6 +69,7 @@ impl Overlord {
         let names: Vec<&str> = self.plan.services.keys().map(String::as_str).collect();
         self.metrics.set_services(&names);
 
+        self.publish_running_checks();
         let svc_configs = Arc::new(self.plan.services.clone());
         for (name, config) in &self.plan.checks {
             // Checks with startup: disabled do not run; a replan to disabled
@@ -130,6 +131,7 @@ impl Overlord {
                 },
             );
         }
+        self.publish_health();
     }
 
     /// Start every service autostart covers (at startup, on replan).

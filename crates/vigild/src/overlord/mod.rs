@@ -22,6 +22,7 @@ use crate::service;
 
 mod events;
 mod handlers;
+mod health_metric;
 mod lifecycle;
 mod restart;
 pub mod plan;

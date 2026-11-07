@@ -81,7 +81,7 @@ shell {
 	curl -sf --unix-socket ${tmpdir}/vigild.sock \
 		http://localhost/v1/metrics > ${tmpdir}/metrics2.txt
 	grep -qF 'vigil_alert_fire_count_total{alert="test-alert"}' ${tmpdir}/metrics2.txt
-	grep -qF 'vigil_check_failure_count_total{check="dummy-check"}' ${tmpdir}/metrics2.txt
+	grep -qF 'vigil_check_failure_count_total{check="dummy-check",level="alive"}' ${tmpdir}/metrics2.txt
 }
 
 # The counter is at least 1 (the line ends with its value).

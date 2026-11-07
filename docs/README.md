@@ -18,6 +18,7 @@ vigil-rs is a service supervisor and container init daemon written in Rust.
 |---|---|
 | [Container Setup](operator-guide/container-setup.md) | Dockerfile, entrypoint, directory layout |
 | [TLS](operator-guide/tls.md) | HTTPS API listener, certificates |
+| [Metrics](operator-guide/metrics.md) | Prometheus metrics, PromQL examples |
 | [Orchestrators](operator-guide/orchestrators.md) | Kubernetes, Nomad integration |
 
 ### API Reference

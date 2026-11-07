@@ -162,6 +162,7 @@ impl Overlord {
             );
             self.count_fired(&fired);
         }
+        self.publish_health();
 
         if event.status != CheckStatus::Down {
             return;

@@ -893,6 +893,15 @@ how often and how long a check was down, and how long a probe takes.
 - Later, only if needed: separate HTTP phases (DNS, TCP connect, TLS,
   time to first byte).
 
+Done, part 1 (level label, `vigil_health`, outages, Metrics page): the
+store knows the running checks and their level (`set_checks` on every
+plan), drops the series of removed, disabled or re-levelled checks and
+ignores late writes for them. `vigil_check_up` is set when the actor
+starts (before its delay), not only after it. `vigil_check_down_seconds`
+grows at each run while down and on recovery (lags by up to one period).
+`vigil_health` is computed by the overlord from the last observed status
+of every running check, on every check event and every plan. vtest v0031.
+
 ### Not taken from the comparison
 
 Pebble's exec and files API (Juju-specific, large attack surface) and

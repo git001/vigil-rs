@@ -1,0 +1,51 @@
+vtest "Check metrics: level label, vigil_health per level, outages and time down"
+
+# vigild loads the static layer directory and logs to stdout, the terminal
+# of p1; -expect-text waits there for a line. A wide terminal keeps long log
+# lines on one row.
+process p1 -winsz 200 400 "env DB_MARKER=${tmpdir}/db.up ${vigild} --layers-dir ${vtestdir}/fixtures/v0031 --socket ${tmpdir}/vigild.sock" -start
+process p1 -expect-text 0 0 "API listening"
+process p1 -expect-text 0 0 "check is down"
+
+# db (ready) is down, app (alive) is up: /v1/health?level=ready would say
+# 502, ?level=alive 200, and vigil_health says the same. In the body
+# patterns "." stands for a brace or a quote of the label set.
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /v1/metrics -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "vigil_health.level=.alive.. 1"
+	expect resp.body ~ "vigil_health.level=.ready.. 0"
+	expect resp.body ~ "vigil_check_up.check=.app.,level=.alive.. 1"
+	expect resp.body ~ "vigil_check_up.check=.db.,level=.ready.. 0"
+	expect resp.body ~ "vigil_check_down_count_total.check=.db.,level=.ready.. 1\n"
+	expect resp.body ~ "vigil_check_failure_count_total.check=.db.,level=.ready.. [1-9]"
+	expect resp.body !~ "vigil_check_down_count_total.check=.app."
+} -run
+
+# The same answer from /v1/health.
+client c2 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/health?level=ready" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 502
+} -run
+
+# db becomes reachable; the next run recovers it.
+delay 1
+filewrite ${tmpdir}/db.up ""
+process p1 -expect-text 0 0 "check recovered"
+
+# Healthy again; the outage counted once, and its length (at least the
+# second waited above) went into vigil_check_down_seconds.
+client c3 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /v1/metrics -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "vigil_health.level=.ready.. 1"
+	expect resp.body ~ "vigil_check_up.check=.db.,level=.ready.. 1"
+	expect resp.body ~ "vigil_check_down_count_total.check=.db.,level=.ready.. 1\n"
+	expect resp.body ~ "vigil_check_down_seconds_total.check=.db.,level=.ready.. [1-9]"
+} -run
+
+process p1 -kill TERM
+process p1 -wait

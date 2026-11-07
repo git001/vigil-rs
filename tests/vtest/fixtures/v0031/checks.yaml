@@ -1,0 +1,21 @@
+# v0031 starts vigild with this directory as --layers-dir. app stands for
+# the own app (level: alive) and always passes. db stands for a dependency
+# (level: ready): it fails until the file $DB_MARKER exists, which the test
+# creates. vigild gets DB_MARKER from the test.
+checks:
+  app:
+    level: alive
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: "true"
+  db:
+    level: ready
+    startup: enabled
+    delay: 0s
+    period: 1s
+    threshold: 1
+    exec:
+      command: 'test -e "$DB_MARKER" || { echo "db not reachable"; exit 1; }'
+      pass-env-glob: [DB_MARKER]
