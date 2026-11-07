@@ -104,20 +104,10 @@ impl Overlord {
         self.restart_stopped(service, new_state).await;
     }
 
-    /// `service` entered Error: warn about queued services that wait for it
-    /// (`after`, `requires`), they will never autostart.
+    /// `service` entered Error: warn about queued services that wait for it,
+    /// they will never autostart.
     fn warn_blocked(&self, service: &str) {
-        let blocked: Vec<&str> = self
-            .pending_autostart
-            .iter()
-            .filter(|name| {
-                self.plan
-                    .services
-                    .get(*name)
-                    .is_some_and(|c| c.after.iter().chain(&c.requires).any(|d| d == service))
-            })
-            .map(String::as_str)
-            .collect();
+        let blocked = self.blocked_by(service);
         if !blocked.is_empty() {
             warn!(
                 dependency = %service,
@@ -152,5 +142,15 @@ impl Overlord {
                 error!(service = %dep_name, error = %e, "failed to stop service after required dependency stopped");
             }
         }
+    }
+
+    /// The queued services that wait for `service` (`after`, `requires`,
+    /// or `service` lists them in `before`).
+    pub(super) fn blocked_by(&self, service: &str) -> Vec<&str> {
+        self.pending_autostart
+            .iter()
+            .filter(|name| self.unmet_deps(name).iter().any(|d| d == service))
+            .map(String::as_str)
+            .collect()
     }
 }

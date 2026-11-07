@@ -746,6 +746,26 @@ async fn error_state_warns_blocked_pending_services() {
     assert!(ov.pending_autostart.contains(&"svc".to_string()));
 }
 
+#[test]
+fn blocked_by_covers_after_requires_and_before() {
+    // a after dep, b requires dep, dep before c; d does not wait for dep.
+    let mut ov = make_overlord(
+        &[
+            ("dep", &[], &[], &["c"]),
+            ("a", &["dep"], &[], &[]),
+            ("b", &[], &["dep"], &[]),
+            ("c", &[], &[], &[]),
+            ("d", &[], &[], &[]),
+        ],
+        &[("dep", ServiceState::Error)],
+    );
+    ov.plan.services.values_mut().for_each(|c| {
+        c.startup = Some(vigil_types::plan::Startup::Enabled);
+    });
+    ov.pending_autostart = ["a", "b", "c", "d"].map(String::from).to_vec();
+    assert_eq!(ov.blocked_by("dep"), ["a", "b", "c"]);
+}
+
 #[tokio::test]
 async fn sync_actors_restarts_check_on_success_statuses_change() {
     use tempfile::TempDir;
