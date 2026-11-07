@@ -508,7 +508,9 @@ Default: `disabled`
 #### `after` / `before` / `requires`
 
 Startup ordering and dependency constraints. All referenced service names must
-exist in the merged plan.
+exist in the merged plan, a service cannot name itself, and the services must
+not wait for each other in a circle (`a after: [b]`, `b after: [a]`); each of
+these makes the layer invalid, and the error names the services involved.
 
 - `after: [a, b]` — this service starts after `a` and `b` reach `Active`
   (that is, after they are ready, see [`ready`](#ready--ready-check--ready-timeout))
@@ -832,6 +834,9 @@ layers.
 
 ## Checks
 
+Each check has exactly one probe: `http`, `tcp` or `exec`. A check with none
+or with several makes the layer invalid.
+
 ### Full reference
 
 ```yaml
@@ -1026,7 +1031,7 @@ The check passes if the command exits with code 0. stdout and stderr are
 suppressed (they do not appear in container logs).
 
 `service-context` inherits the environment variables (including `env-file`),
-user, group, and working directory from the named service. Individual fields
+user, group, and working directory from the named service, which must exist. Individual fields
 (`user`, `user-id`, `group`, `group-id`, `working-dir`, `environment`) override
 the inherited values.
 

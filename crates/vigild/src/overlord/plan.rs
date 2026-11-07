@@ -112,6 +112,7 @@ fn validate(plan: &Plan) -> anyhow::Result<()> {
     for (name, svc) in &plan.services {
         validate_service(plan, name, svc).with_context(|| format!("service {name:?}"))?;
     }
+    check_dependency_cycles(plan)?;
     for (name, check) in &plan.checks {
         validate_check(plan, name, check).with_context(|| format!("check {name:?}"))?;
     }
@@ -131,6 +132,7 @@ fn validate_service(plan: &Plan, name: &str, svc: &ServiceConfig) -> anyhow::Res
         tracing::warn!(service = %name, "{REDUNDANT_LISTS}");
     }
     validate_ready(plan, svc)?;
+    validate_dependency_names(plan, name, svc)?;
     for warning in dependency_warnings(plan, name, svc) {
         tracing::warn!(service = %name, "{warning}");
     }
@@ -182,6 +184,17 @@ fn validate_check(plan: &Plan, name: &str, check: &CheckConfig) -> anyhow::Resul
         anyhow::ensure!(!t.is_zero(), "timeout must be greater than 0");
     }
     anyhow::ensure!(check.threshold != Some(0), "threshold must be at least 1");
+    // A check without a probe would always pass; with several, only one
+    // of them would run.
+    let probes = [
+        check.http.is_some(),
+        check.tcp.is_some(),
+        check.exec.is_some(),
+    ];
+    anyhow::ensure!(
+        probes.iter().filter(|p| **p).count() == 1,
+        "needs exactly one of http, tcp or exec"
+    );
     if let Some(http) = &check.http {
         anyhow::ensure!(!http.url.is_empty(), "http: url must not be empty");
     }
@@ -192,10 +205,14 @@ fn validate_check(plan: &Plan, name: &str, check: &CheckConfig) -> anyhow::Resul
         );
     }
     if let Some(exec) = &check.exec {
-        let ctx = exec
-            .service_context
-            .as_deref()
-            .and_then(|s| plan.services.get(s));
+        let ctx = match exec.service_context.as_deref() {
+            None => None,
+            Some(s) => Some(
+                plan.services
+                    .get(s)
+                    .with_context(|| format!("exec: service-context {s:?} is not a service"))?,
+            ),
+        };
         EnvPolicy::for_exec_check(exec, ctx)?;
         // Only the check's own lists: a service context still needs its
         // lists for the service itself.
@@ -295,6 +312,91 @@ fn validate_oneshot(svc: &ServiceConfig) -> anyhow::Result<()> {
             "on-success: restart does not apply to type: oneshot \
              (use a schedule to run it repeatedly)"
         );
+    }
+    Ok(())
+}
+
+/// Every name in `after`, `before` and `requires` is a service, and not the
+/// service itself (a typo would otherwise be ignored or wait forever).
+fn validate_dependency_names(plan: &Plan, name: &str, svc: &ServiceConfig) -> anyhow::Result<()> {
+    for (key, deps) in [
+        ("after", &svc.after),
+        ("before", &svc.before),
+        ("requires", &svc.requires),
+    ] {
+        for dep in deps {
+            anyhow::ensure!(dep != name, "{key}: a service cannot depend on itself");
+            anyhow::ensure!(
+                plan.services.contains_key(dep),
+                "{key}: {dep:?} is not a service"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The start order must have no cycle: `a after b` and `b after a` would
+/// make both wait forever. `after` and `requires` point from a service to
+/// its dependency, `before` the other way. Reports the first cycle found.
+fn check_dependency_cycles(plan: &Plan) -> anyhow::Result<()> {
+    let names: Vec<&String> = plan.services.keys().collect();
+    let index = |n: &str| names.iter().position(|x| x.as_str() == n);
+    // deps[i]: the services service i waits for.
+    let mut deps: Vec<Vec<usize>> = vec![Vec::new(); names.len()];
+    for (i, svc) in plan.services.values().enumerate() {
+        for dep in svc.after.iter().chain(&svc.requires) {
+            if let Some(j) = index(dep) {
+                deps[i].push(j);
+            }
+        }
+        for later in &svc.before {
+            if let Some(j) = index(later) {
+                deps[j].push(i);
+            }
+        }
+    }
+
+    // Depth-first search; 0 = unvisited, 1 = on the current path, 2 = done.
+    fn visit(
+        i: usize,
+        deps: &[Vec<usize>],
+        mark: &mut [u8],
+        path: &mut Vec<usize>,
+    ) -> Option<Vec<usize>> {
+        mark[i] = 1;
+        path.push(i);
+        for &j in &deps[i] {
+            match mark[j] {
+                1 => {
+                    let start = path.iter().position(|&p| p == j).unwrap_or(0);
+                    let mut cycle = path[start..].to_vec();
+                    cycle.push(j);
+                    return Some(cycle);
+                }
+                0 => {
+                    if let Some(c) = visit(j, deps, mark, path) {
+                        return Some(c);
+                    }
+                }
+                _ => {}
+            }
+        }
+        path.pop();
+        mark[i] = 2;
+        None
+    }
+
+    let mut mark = vec![0u8; names.len()];
+    for i in 0..names.len() {
+        if mark[i] == 0
+            && let Some(cycle) = visit(i, &deps, &mut mark, &mut Vec::new())
+        {
+            let chain: Vec<&str> = cycle.iter().map(|&k| names[k].as_str()).collect();
+            anyhow::bail!(
+                "services wait for each other (after, before, requires): {}",
+                chain.join(" → ")
+            );
+        }
     }
     Ok(())
 }
@@ -470,6 +572,80 @@ mod tests {
         crate::alert::LoadEnv {
             parent: parent.iter().map(|(k, v)| (k.into(), v.into())).collect(),
         }
+    }
+
+    fn load_err(yaml: &str) -> String {
+        let dir = TempDir::new().unwrap();
+        write(&dir, "001.yaml", yaml);
+        format!("{:#}", load_plan(dir.path()).unwrap_err())
+    }
+
+    #[test]
+    fn dependency_names_must_be_other_services() {
+        for (key, want) in [
+            ("after: [dbb]", "after: \"dbb\" is not a service"),
+            ("before: [dbb]", "before: \"dbb\" is not a service"),
+            ("requires: [dbb]", "requires: \"dbb\" is not a service"),
+            ("after: [app]", "after: a service cannot depend on itself"),
+        ] {
+            let err = load_err(&format!(
+                "services:\n  db:\n    command: sleep 9\n  app:\n    command: sleep 9\n    {key}\n"
+            ));
+            assert!(err.contains("service \"app\""), "{err}");
+            assert!(err.contains(want), "{key}: {err}");
+        }
+    }
+
+    #[test]
+    fn dependency_cycles_are_rejected_with_the_chain() {
+        // after and requires.
+        let err = load_err(
+            "services:\n  a:\n    command: sleep 9\n    after: [b]\n  b:\n    command: sleep 9\n    requires: [c]\n  c:\n    command: sleep 9\n    after: [a]\n",
+        );
+        assert!(err.contains("services wait for each other"), "{err}");
+        assert!(err.contains("a → b → c → a"), "{err}");
+        // before: b before a and a after b is the same direction (fine);
+        // a before b and a after b is a cycle.
+        let err = load_err(
+            "services:\n  a:\n    command: sleep 9\n    after: [b]\n    before: [b]\n  b:\n    command: sleep 9\n",
+        );
+        assert!(err.contains("a → b → a"), "{err}");
+        let dir = TempDir::new().unwrap();
+        write(
+            &dir,
+            "001.yaml",
+            "services:\n  a:\n    command: sleep 9\n    after: [b]\n  b:\n    command: sleep 9\n    before: [a]\n  c:\n    command: sleep 9\n    requires: [a, b]\n",
+        );
+        load_plan(dir.path()).unwrap();
+    }
+
+    #[test]
+    fn a_check_needs_exactly_one_probe() {
+        let err = load_err("checks:\n  empty:\n    period: 10s\n");
+        assert!(err.contains("check \"empty\""), "{err}");
+        assert!(
+            err.contains("needs exactly one of http, tcp or exec"),
+            "{err}"
+        );
+        let err = load_err(
+            "checks:\n  both:\n    http:\n      url: http://127.0.0.1:8080/\n    tcp:\n      port: 8080\n",
+        );
+        assert!(
+            err.contains("needs exactly one of http, tcp or exec"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn exec_service_context_must_be_a_service() {
+        let err = load_err(
+            "checks:\n  db-up:\n    exec:\n      command: pg_isready\n      service-context: postgress\n",
+        );
+        assert!(err.contains("check \"db-up\""), "{err}");
+        assert!(
+            err.contains("exec: service-context \"postgress\" is not a service"),
+            "{err}"
+        );
     }
 
     #[test]
