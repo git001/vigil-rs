@@ -180,7 +180,7 @@ pub fn spawn(name: String, config: ServiceConfig, ctx: Context) -> Handle {
 }
 
 // ---------------------------------------------------------------------------
-// Defaults (matching Pebble)
+// Defaults
 // ---------------------------------------------------------------------------
 
 pub(super) const DEFAULT_KILL_DELAY: Duration = Duration::from_secs(5);

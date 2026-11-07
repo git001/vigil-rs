@@ -349,10 +349,10 @@ curl --unix-socket /run/vigil/vigild.sock \
 
 **Required access level:** `write`
 
-Run a check now and return its state after the run. Same path and body as
-Pebble. The run counts like a scheduled one: failures, `threshold`, status
-and alerts. A check with `startup: disabled` runs once without changing any
-state; the result then shows only that run.
+Run a check now and return its state after the run. The run counts like a
+scheduled one: failures, `threshold`, status and alerts. A check with
+`startup: disabled` runs once without changing any state; the result then
+shows only that run.
 
 **Request body:**
 

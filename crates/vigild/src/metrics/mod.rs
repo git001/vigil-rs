@@ -63,7 +63,7 @@ where
 
 /// Prometheus/OpenMetrics metrics store.
 ///
-/// Compatible with Pebble's metric names and types:
+/// Metric names and types:
 /// - `vigil_service_start_count{service}` counter
 /// - `vigil_service_active{service}`      gauge (0/1)
 /// - `vigil_service_running{service}`     gauge (0/1, process alive: starting/active/stopping)
