@@ -85,9 +85,20 @@ impl Overlord {
     ) -> anyhow::Result<ChangeInfo> {
         use vigil_types::api::ServiceAction;
 
-        if action == ServiceAction::Autostart {
-            let (targets, errors) = self.autostart_action(names).await;
-            return Ok(self.record_change(action, &targets, errors));
+        match action {
+            ServiceAction::Autostart => {
+                let (targets, errors) = self.autostart_action(names).await;
+                return Ok(self.record_change(action, &targets, errors));
+            }
+            // The layers are loaded once, whatever `names` says.
+            ServiceAction::Replan => {
+                let errors = match self.reload_layers().await {
+                    Ok(()) => Vec::new(),
+                    Err(e) => vec![format!("{e:#}")],
+                };
+                return Ok(self.record_change(action, &names, errors));
+            }
+            ServiceAction::Start | ServiceAction::Stop | ServiceAction::Restart => {}
         }
 
         let targets: Vec<String> = if names.is_empty() {
@@ -106,8 +117,7 @@ impl Overlord {
                     self.svc_cmd(name, SvcCmd::Stop).await
                 }
                 ServiceAction::Restart => self.svc_cmd(name, SvcCmd::Restart).await,
-                ServiceAction::Replan => self.reload_layers().await,
-                ServiceAction::Autostart => unreachable!("handled above"),
+                ServiceAction::Autostart | ServiceAction::Replan => unreachable!("handled above"),
             };
             if let Err(e) = res {
                 errors.push(format!("{name}: {e:#}"));

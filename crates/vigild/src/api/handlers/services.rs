@@ -49,7 +49,7 @@ pub(crate) async fn list_services(
     post, path = "/v1/services",
     tag = "services",
     summary = "Perform a service action",
-    description = "Start, stop, restart, autostart, or replan one or more services.\n\nPass an empty `services` array to act on all services; for `autostart`, all services with `startup: enabled` that are not scheduled.\n\n**Required access:** `write` or higher.",
+    description = "Start, stop, restart, autostart, or replan one or more services.\n\nPass an empty `services` array to act on all services; for `autostart`, all services with `startup: enabled` that are not scheduled. `replan` reloads the layers once, like `POST /v1/replan`, and ignores `services`.\n\n**Required access:** `write` or higher.",
     request_body = ServicesAction,
     responses(
         (status = 200, description = "Change record for the performed action.", body = ChangeInfo),

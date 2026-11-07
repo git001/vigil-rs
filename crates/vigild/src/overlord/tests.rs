@@ -1356,6 +1356,21 @@ async fn replan_action_reloads_the_layers() {
 }
 
 #[tokio::test]
+async fn replan_action_loads_the_layers_once() {
+    // Invalid layers: each load adds the error, so a load per service
+    // would report it once per service.
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(dir.path().join("001.yaml"), "services: [\n").unwrap();
+    let mut ov = make_overlord(&[("a", &[], &[], &[]), ("b", &[], &[], &[])], &[]);
+    ov.layers_dir = dir.path().to_path_buf();
+    let change = services_action(&mut ov, vigil_types::api::ServiceAction::Replan, vec![]).await;
+    assert_eq!(change.status, vigil_types::api::ChangeStatus::Error);
+    let err = change.err.unwrap();
+    assert!(!err.contains("; "), "loaded more than once: {err}");
+    assert!(!err.starts_with("a: "), "error names a service: {err}");
+}
+
+#[tokio::test]
 async fn forward_signal_command_reaches_every_service() {
     let mut ov = make_overlord(&[("a", &[], &[], &[]), ("b", &[], &[], &[])], &[]);
     let mut a = stub_actor(&mut ov, "a");
