@@ -538,6 +538,10 @@ vigild logs a warning for both cases when it loads the layers, and
 `vigil services list` shows `waiting for <dependency>` in the `Message`
 column of a waiting service.
 
+The whole decision as a flow chart:
+[service-dependencies.svg](../../images/service-dependencies.svg) (rendered
+by CI from `docs/user-guide/service-dependencies.dot`).
+
 #### `ready` / `ready-check` / `ready-timeout`
 
 When a started service counts as ready. Until then its status is `starting`,

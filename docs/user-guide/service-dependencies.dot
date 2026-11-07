@@ -1,0 +1,170 @@
+// How vigild decides when a service starts: startup, schedule, after,
+// before and requires. It describes the behaviour documented in
+// configuration.md, section "after / before / requires".
+//
+// CI (.github/workflows/diagrams.yml) renders it to
+// images/service-dependencies.svg, which configuration.md links to.
+// By hand:
+//   dot -Tsvg docs/user-guide/service-dependencies.dot -o images/service-dependencies.svg
+
+digraph service_dependencies {
+    graph [
+        label = "vigild: when does service S start?",
+        labelloc = t,
+        fontname = "Helvetica",
+        fontsize = 18,
+        rankdir = TB,
+        nodesep = 0.5,
+        ranksep = 0.45,
+        newrank = true
+    ];
+    node [fontname = "Helvetica", fontsize = 11, style = "rounded,filled", fillcolor = white];
+    edge [fontname = "Helvetica", fontsize = 10];
+
+    // ------------------------------------------------------------------
+    // Triggers
+    // ------------------------------------------------------------------
+    subgraph cluster_triggers {
+        label = "Triggers";
+        style = "rounded,dashed";
+        color = gray50;
+        fontcolor = gray30;
+
+        autostart [shape = box, fillcolor = "#dbeafe",
+                   label = "Autostart\nvigild start · replan · POST /v1/services autostart"];
+        manual    [shape = box, fillcolor = "#fef3c7",
+                   label = "vigil services start S\n(POST /v1/services start)"];
+        cron      [shape = box, fillcolor = "#ede9fe",
+                   label = "schedule fires\n(cron, startup: enabled)"];
+        // All three side by side at the top.
+        { rank = same; autostart; manual; cron; }
+    }
+
+    // ------------------------------------------------------------------
+    // Does autostart cover S?
+    // ------------------------------------------------------------------
+    q_enabled  [shape = diamond, label = "startup:\nenabled?"];
+    q_schedule [shape = diamond, label = "schedule\nset?"];
+    q_done     [shape = diamond, label = "oneshot that\nalready ran\n(done)?"];
+
+    not_started [shape = box, fillcolor = "#f3f4f6",
+                 label = "not started by autostart\n(stays inactive)"];
+    by_schedule [shape = box, fillcolor = "#f3f4f6",
+                 label = "left to its schedule"];
+
+    autostart  -> q_enabled;
+    q_enabled  -> not_started [label = "no (disabled)"];
+    q_enabled  -> q_schedule  [label = "yes"];
+    q_schedule -> by_schedule [label = "yes"];
+    q_schedule -> q_done      [label = "no"];
+    q_done     -> not_started [label = "yes"];
+
+    // ------------------------------------------------------------------
+    // Dependencies of S, checked one by one
+    // ------------------------------------------------------------------
+    subgraph cluster_deps {
+        label = "for each dependency D of S";
+        style = "rounded";
+        color = "#2563eb";
+        fontcolor = "#1e3a8a";
+
+        q_kind [shape = diamond, label = "kind of\ndependency?"];
+
+        // requires: hard dependency
+        q_req_ready [shape = diamond, label = "D ready?\n(active, or done\nfor a oneshot)"];
+
+        // after / before: ordering only
+        q_ord_ready [shape = diamond, label = "D ready?"];
+        q_ord_comes [shape = diamond,
+                     label = "will D come up?\nautostart starts D,\nor D is starting now"];
+        ignored     [shape = box, fillcolor = "#fef9c3",
+                     label = "ordering ignored\n(load warning:\n\"the ordering is ignored\")"];
+
+        dep_ok   [shape = box, fillcolor = "#dcfce7", label = "D satisfied"];
+        dep_wait [shape = box, fillcolor = "#fee2e2", label = "D unmet"];
+
+        q_kind      -> q_req_ready [label = "requires: [D]"];
+        q_kind      -> q_ord_ready [label = "after: [D]\nor D before: [S]"];
+
+        q_req_ready -> dep_ok   [label = "yes"];
+        q_req_ready -> dep_wait [label = "no (even if D\nis disabled)"];
+
+        q_ord_ready -> dep_ok      [label = "yes"];
+        q_ord_ready -> q_ord_comes [label = "no"];
+        q_ord_comes -> dep_wait    [label = "yes"];
+        q_ord_comes -> ignored     [label = "no (disabled,\nscheduled)"];
+        ignored     -> dep_ok;
+    }
+
+    q_done -> q_kind [label = "no"];
+
+    q_all [shape = diamond, label = "all dependencies\nsatisfied?"];
+    dep_ok   -> q_all;
+    dep_wait -> q_all;
+
+    queued [shape = box, fillcolor = "#fee2e2",
+            label = "queued (pending_autostart)\nvigil services list: \"waiting for D\"\nrequires on a disabled D: load warning\n\"S waits until D is started\""];
+    recheck [shape = box, style = "rounded,dashed",
+             label = "re-checked whenever\na service becomes ready"];
+
+    q_all   -> queued [label = "no"];
+    queued  -> recheck;
+    recheck -> q_kind [style = dashed];
+
+    // ------------------------------------------------------------------
+    // Start and readiness
+    // ------------------------------------------------------------------
+    start [shape = box, fillcolor = "#dcfce7", label = "start S"];
+    q_all  -> start [label = "yes"];
+    manual -> start [label = "at once,\ndependencies\nnot checked", color = "#b45309", fontcolor = "#b45309"];
+    cron   -> start [label = "dependencies\nnot checked", color = "#6d28d9", fontcolor = "#6d28d9"];
+
+    starting [shape = box, fillcolor = "#e0f2fe",
+              label = "starting\n(ready: notify / check)"];
+    active   [shape = box, fillcolor = "#bbf7d0", label = "active (ready)"];
+    start    -> starting;
+    starting -> active [label = "READY=1 /\ncheck passes /\nready: process"];
+    active   -> recheck [style = dashed, label = "may unblock\nqueued services"];
+
+    // ------------------------------------------------------------------
+    // Runtime: requires stop cascade
+    // ------------------------------------------------------------------
+    subgraph cluster_cascade {
+        label = "while S runs: requires stop cascade";
+        style = "rounded";
+        color = "#dc2626";
+        fontcolor = "#7f1d1d";
+
+        q_dstate [shape = diamond, label = "required D\nchanges state"];
+        stop_s   [shape = box, fillcolor = "#fecaca",
+                  label = "stop S\n(S becomes inactive)"];
+        keep_s   [shape = box, fillcolor = "#dcfce7",
+                  label = "S keeps running\n(D restarts by itself)"];
+
+        q_dstate -> stop_s [label = "inactive or error"];
+        q_dstate -> keep_s [label = "backoff, stopping"];
+    }
+
+    active -> q_dstate [style = dashed, label = "S requires D"];
+
+    // ------------------------------------------------------------------
+    // Legend
+    // ------------------------------------------------------------------
+    subgraph cluster_legend {
+        label = "Legend";
+        style = "rounded,dashed";
+        color = gray60;
+        fontcolor = gray30;
+        fontsize = 10;
+
+        l_after [shape = plaintext, fillcolor = none, fontsize = 10, label = <
+            <table border="0" cellspacing="2" cellpadding="2">
+            <tr><td align="left"><b>after: [D]</b></td><td align="left">S starts after D is ready (ordering only)</td></tr>
+            <tr><td align="left"><b>D before: [S]</b></td><td align="left">same as S after: [D]</td></tr>
+            <tr><td align="left"><b>requires: [D]</b></td><td align="left">S waits for D, and is stopped when D stops for good</td></tr>
+            <tr><td align="left"><b>startup: disabled</b></td><td align="left">not started by autostart; only by hand</td></tr>
+            <tr><td align="left"><b>schedule</b></td><td align="left">started by its cron schedule, not by autostart</td></tr>
+            </table>
+        >];
+    }
+}
