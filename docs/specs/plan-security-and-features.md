@@ -689,6 +689,111 @@ each had their own TLS keys (`ca`, `tls-ca`, `proxy-ca`, `insecure`,
 - `no-proxy` everywhere uses the matcher of `vigil-types`, so vigild's
   alerts and checks accept CIDR ranges like the CLI and the relay.
 
+## Phase 5: debugging and runtime control (after the Pebble/gopherd comparison)
+
+Decided by the user on 2026-11-07 after comparing vigil-rs v4 with Pebble
+v1.33 and gopherd v1.3.5. Goal: find out quickly why a check fails, give
+Kubernetes a real health endpoint, control single services more finely, and
+make replan do what phase 4c assumed. Steps in this order; each is one
+commit (or a small series) with unit tests, a vtest where it runs end to
+end, docs, OpenAPI, and an entry here. All of phase 5 is part of v4.0,
+before the release; the user confirmed 5b (a refresh counts like a
+scheduled run), 5c (502 when unhealthy) and 5f (requires-dependents are
+restarted too).
+
+### 5a: why a check fails
+
+Today a failed probe logs `check failed failures=1 threshold=3` at `warn`;
+the reason (HTTP status, connection error, exit code) is only at `debug`,
+and an exec check's output is dropped.
+
+- Probes return the reason, not just pass/fail: `Err("http 503")`,
+  `Err("connect 127.0.0.1:5432: connection refused")`, `Err("timed out after
+  3s")`, `Err("exit status 2")`.
+- The `check failed` warning carries the reason; so does the `check is down`
+  line and the alert (`message`).
+- Exec checks keep the last lines of stdout/stderr (bounded, e.g. 4 KiB) and
+  add them to the reason. Nothing is logged on success.
+- `GET /v1/checks` gets `last-error` (the reason of the last failed run,
+  cleared by a pass); `vigil checks list` shows it.
+
+### 5b: run a check now
+
+- `POST /v1/checks/refresh {"name": "db-ready"}` (Pebble's path and body):
+  runs the check once at once and answers with the check info and `error`
+  (the reason, absent on success). Access: `write`.
+- The run counts like a scheduled one (failures, threshold, status, alerts),
+  as in Pebble. A check with `startup: disabled` is run once without
+  changing any state.
+- CLI: `vigil checks run NAME` prints the result and the reason; exit code 0
+  on pass, 1 on failure, so it fits scripts.
+
+### 5c: `GET /v1/health`
+
+- Pebble's semantics: `?level=alive|ready` and `?names=a,b`. `ready`
+  includes `alive` checks. A check counts when it matches and is running;
+  disabled checks are ignored. 200 `{"healthy": true}` if none is down,
+  otherwise 502 `{"healthy": false}` (502 as in Pebble).
+- Access: `open`, like `/v1/checks`, so Kubernetes probes over TLS work
+  without credentials.
+- The check field `level` gets a meaning through this; the docs say so.
+- The kubernetes-pod-logs Deployment switches its probes to
+  `/v1/health?level=alive` and `?level=ready`.
+
+### 5d: send a signal to single services
+
+- `POST /v1/signals {"signal": "SIGHUP", "services": ["nginx"]}` (Pebble's
+  path and body). The signal goes to the service's process group, like
+  forwarding does; a service that is not running is an error for that
+  service. Access: `write`.
+- CLI: `vigil services signal SIGHUP nginx [more…]`.
+- Forwarding SIGHUP/SIGUSR1/SIGUSR2 to all services stays as it is.
+
+### 5e: `follow` on `/v1/logs`
+
+- `GET /v1/logs?follow=true` behaves like `/v1/logs/follow?format=ndjson`
+  (with `services` and `n`). Unknown query parameters on `/v1/logs` become
+  a 400 instead of being ignored.
+- `/v1/logs` without `follow` keeps its JSON envelope (the vigil CLI uses
+  it); `/v1/logs/follow` stays.
+
+### 5f: replan restarts changed services
+
+Phase 3 made a changed service config apply from the next start
+(`UpdateConfig`); phase 4c then assumed that replan restarts changed
+services. Pebble restarts them. With `--watch-layers` a changed ConfigMap
+should take effect without a crash or a manual restart.
+
+- On replan, a running service (`starting`, `active`, `backoff`) whose
+  `ServiceConfig` changed is restarted: stopped, then started with the new
+  config through its readiness. Services that depend on it via `requires`
+  are restarted after it, in start order.
+- Not restarted: stopped services (they get the config for their next
+  start, as today), oneshots in `done`, a scheduled job between runs (its
+  schedule is re-armed, as today), and a running scheduled run (applies from
+  the next run).
+- Changes that do not affect the process (`summary`, `description`) do not
+  restart it.
+- The `plan reloaded` log line lists the restarted services.
+- Breaking for anyone who relied on "applies at the next start":
+  `fix(vigild)!` with a migration note.
+
+### 5g: diagram of exit, restart and backoff
+
+`docs/user-guide/service-lifecycle.dot`, rendered by the Diagrams workflow
+to `images/service-lifecycle.svg` and linked from configuration.md: process
+exit → `exit-code-map` → `success-exit-codes` → `on-success` / `on-failure`
+(`restart`, `shutdown`, `success-shutdown`, `failure-shutdown`, `ignore`)
+→ backoff (`backoff-delay`, `-factor`, `-limit` → `error`) → `healthy-time`
+resets it; plus `on-check-failure`, `ready-timeout` and `kill-delay`. Last,
+so it shows the behaviour after 5f.
+
+### Not taken from the comparison
+
+Pebble's exec and files API (Juju-specific, large attack surface) and
+notices (alerts cover them); `logs-push-format` stays a documented
+placeholder.
+
 ## Releases
 
 ```
