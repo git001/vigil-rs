@@ -1,0 +1,59 @@
+name: Diagrams
+
+# Renders every Graphviz file docs/**/*.dot to images/<name>.svg and commits
+# the result to the same branch when it changed. The docs link to the SVGs.
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'docs/**/*.dot'
+      - '.github/workflows/diagrams.yml'
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write   # commit the rendered SVGs
+
+# One render per branch at a time, so two pushes cannot race on the commit.
+concurrency:
+  group: diagrams-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  render:
+    name: Render diagrams
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Graphviz
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends graphviz
+          dot -V
+
+      - name: Render docs/**/*.dot to images/*.svg
+        run: |
+          mkdir -p images
+          find docs -name '*.dot' -print0 | while IFS= read -r -d '' src; do
+            out="images/$(basename "${src%.dot}").svg"
+            echo "${src} -> ${out}"
+            dot -Tsvg "${src}" -o "${out}"
+          done
+
+      # A push made with GITHUB_TOKEN does not start another workflow run, so
+      # this commit cannot loop.
+      - name: Commit changed SVGs
+        run: |
+          git add images/
+          if git diff --cached --quiet; then
+            echo "SVGs are up to date"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "docs: render diagrams from docs/**/*.dot"
+          git push
