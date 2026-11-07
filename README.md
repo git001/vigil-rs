@@ -281,27 +281,48 @@ from outside the container.
 
 ### vs. Canonical Pebble
 
-vigil-rs is a Rust rewrite of Pebble with the following differences:
+vigil-rs started as a Rust rewrite of Pebble. The layer format and the API
+look alike, but they are not interchangeable (see below).
 
 | | Pebble | vigil-rs |
 |---|---|---|
 | Language | Go | Rust |
-| PID 1 / zombie reaper | ❌ | ✅ |
-| Custom stop signal | 🔶 [PR 720](https://github.com/canonical/pebble/pull/720) (unmerged) | ✅ |
-| Check `delay` field | ❌ | ✅ (vigil extension) |
-| HTTP check headers | ✅ | ✅ arbitrary key/value map |
+| PID 1 / zombie reaper | ✅ always a child subreaper | ✅ as PID 1 or with `--reaper` |
+| Custom stop signal | ❌ | ✅ `stop-signal` |
+| Oneshot services, cron schedules | ❌ | ✅ `type: oneshot`, `schedule` |
+| Readiness | ❌ (a start succeeds after 1 s) | ✅ `ready: process \| notify \| check` |
+| Templating, env files, environment isolation | ❌ (services inherit the full environment) | ✅ minijinja, `env-file`, `pass-env*` |
+| Exit code of the daemon | 0, 10 (service failure), 11 (check failure) | the service's own exit code (`--exit-code propagate`), or 0/10 |
+| HTTP check headers | ✅ | ✅ |
 | HTTP check TLS and proxy (`tls:` / `proxy:`) | ❌ | ✅ custom CAs, client certificate, proxy |
-| Alerting (Alertmanager / CloudEvents / OTLP) | ❌ | ✅ |
-| Memory footprint | ~20 MB | ~10 MB |
-| API compatibility | Pebble API | Pebble-compatible |
+| Check `delay` field | ❌ | ✅ |
+| `/v1/health` endpoint | ✅ | ❌ |
+| Log targets | ✅ Loki, OpenTelemetry, syslog | ndjson push per service (Unix/TCP), `vigil-log-relay` |
+| Alerting (webhook / Alertmanager / CloudEvents / OTLP) | ❌ | ✅ |
+| exec, files and signals API; notices | ✅ | ❌ |
+| Asynchronous changes (`/v1/changes`, `/wait`) | ✅ | ❌ (service actions are synchronous) |
+| TLS API listener | ✅ `--https` | ✅ `--tls-addr`, optional mTLS |
+| Identities | API, persisted | API (in memory) and layer files |
+| Prometheus metrics | ✅ | ✅ (more series) |
 | OpenAPI / Swagger UI | ❌ | ✅ |
-| TLS API listener | ❌ | ✅ |
-| Exit-code propagation | ❌ (hardcoded 0/10) | ✅ (real exit code) |
 
-vigil-rs is **API-compatible** with Pebble for the core endpoints
-(`/v1/services`, `/v1/checks`, `/v1/logs`, `/v1/changes`, `/v1/system-info`)
-so existing tooling built against Pebble can be pointed at vigild without
-changes.
+**Moving from Pebble.** Simple layer files load unchanged, but some keys
+behave differently:
+
+- Checks without `startup:` do not run in vigil-rs (Pebble starts them); set
+  `startup: enabled`.
+- `backoff-limit` is where vigil-rs gives up (state `error`); Pebble keeps
+  retrying at that interval.
+- `requires` orders the start and stops the dependent when the dependency
+  stops; it does not start the dependency.
+- Services get only `PATH`, `TZ`, `HOME`, `USER` and `LOGNAME` from vigild's
+  environment unless `pass-env*` allows more.
+- `log-targets:`, `workloads:` and layer subdirectories (`NNN-name.d/`) are
+  not supported.
+- The REST API has the same shape for `/v1/services`, `/v1/checks` and
+  `/v1/system-info`, but `/v1/logs` returns a JSON envelope (follow via
+  `/v1/logs/follow`), and service actions return a finished change instead of
+  an asynchronous one. Pebble clients need adjusting.
 
 ---
 

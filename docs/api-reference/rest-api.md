@@ -4,8 +4,11 @@ vigild exposes an HTTP/1.1 API over:
 - A Unix domain socket (always active)
 - An optional TLS TCP listener (`--tls-addr`)
 
-The API is **Pebble-compatible** for core endpoints. Existing tooling built
-against Canonical Pebble can be pointed at vigild without changes.
+The API follows the shape of Canonical Pebble's API for `/v1/services`,
+`/v1/checks` and `/v1/system-info`, but it is not a drop-in replacement:
+`/v1/logs` returns a JSON envelope, and service actions return a finished
+change instead of an asynchronous one. See "vs. Canonical Pebble" in the
+README.
 
 Interactive documentation is available at `/docs` (Swagger UI) and
 `/openapi.json` on a running daemon.
