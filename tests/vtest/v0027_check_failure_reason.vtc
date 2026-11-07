@@ -1,127 +1,131 @@
 vtest "why a check fails: last-error in GET /v1/checks, vigil checks list/run, the log, the alert; GET /v1/health"
 
-shell { mkdir -p ${tmpdir}/layers }
+# The alert receiver: the first alert is the failure, with its reason in the
+# message. "Connection: close" makes vigild open a new connection for the
+# next alert, which s1 gets after its restart below. In the body patterns
+# each "." matches one character of a JSON escape (\" or \n).
+server s1 {
+	rxreq
+	expect req.method == POST
+	expect req.body ~ "status.:.down."
+	expect req.body ~ "message.:.check migrate-done failed: exit status 2: migration 42 pending..see /var/log/migrate.log."
+	txresp -hdr "Connection: close"
+} -start
 
-# HTTP server (helpers/http_capture.py) that records the alert bodies.
-shell {
-	${vtestdir}/helpers/http_capture.py ${tmpdir}/webhook_port.txt ${tmpdir}/received.json \
-		> /dev/null 2>&1 &
-	echo $! > ${tmpdir}/webhook_server.pid
-	for i in $(seq 1 50); do
-		test -s ${tmpdir}/webhook_port.txt && break
-		sleep 0.1
-	done
-	test -s ${tmpdir}/webhook_port.txt
-}
+# vigild loads the static layer directory fixtures/v0027: migrate-done
+# fails with output until ${tmpdir}/check_marker exists. vigild logs to
+# stdout, the terminal of p1; -expect-text waits there for a text.
+process p1 -winsz 200 400 "env CHECK_MARKER=${tmpdir}/check_marker WEBHOOK_URL=http://${s1_addr}:${s1_port}/webhook ${vigild} --layers-dir ${vtestdir}/fixtures/v0027 --socket ${tmpdir}/vigild.sock" -start
+process p1 -expect-text 0 0 "API listening"
 
-# vigild's log goes to a file: the reason must be in the "check failed" line.
-shell {
-	env CHECK_MARKER=${tmpdir}/check_marker \
-		WEBHOOK_URL=http://127.0.0.1:$(cat ${tmpdir}/webhook_port.txt)/webhook NO_COLOR=1 \
-		${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock \
-		> ${tmpdir}/vigild.log 2>&1 &
-	echo $! > ${tmpdir}/vigild.pid
-	for i in $(seq 1 50); do
-		test -S ${tmpdir}/vigild.sock && break
-		sleep 0.1
-	done
-	test -S ${tmpdir}/vigild.sock
-}
+# The log: "check failed" and "check is down" carry the reason, quoted, so
+# the multi-line output stays on one log line.
+process p1 -expect-text 0 0 {check is down}
+process p1 -match-text 0 0 {check failed .*error="exit status 2: migration 42 pending\\nsee /var/log/migrate.log"}
+process p1 -match-text 0 0 {check is down .*error="exit status 2: migration 42 pending\\nsee /var/log/migrate.log"}
 
-# Layer fixtures/v0027/check-reason.yaml: migrate-done fails with output
-# until the marker exists.
-shell {
-	cp ${vtestdir}/fixtures/v0027/check-reason.yaml ${tmpdir}/layers/
-	${vigil} --socket ${tmpdir}/vigild.sock replan
-}
+# The alert arrived with the reason.
+server s1 -wait
 
 # GET /v1/checks: last-error has the exit status and both output lines.
-shell {
-	for i in $(seq 1 40); do
-		curl -s --unix-socket ${tmpdir}/vigild.sock http://localhost/v1/checks > ${tmpdir}/checks.json
-		grep -q '"last-error"' ${tmpdir}/checks.json && break
-		sleep 0.2
-	done
-	grep -qF '"last-error":"exit status 2: migration 42 pending\nsee /var/log/migrate.log"' ${tmpdir}/checks.json
-}
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /v1/checks -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "last-error.:.exit status 2: migration 42 pending..see /var/log/migrate.log."
+} -run
 
 # vigil checks list: the first line of the reason, with … for the rest.
-shell {
-	${vigil} --socket ${tmpdir}/vigild.sock checks list > ${tmpdir}/checks.txt
-	grep -qF 'exit status 2: migration 42 pending …' ${tmpdir}/checks.txt
+shell -expect {exit status 2: migration 42 pending …} {
+	${vigil} --socket ${tmpdir}/vigild.sock checks list
 }
 
-# The log: "check failed" and "check is down" carry the reason, quoted.
-shell {
-	grep -F 'check failed' ${tmpdir}/vigild.log | grep -qF 'error="exit status 2: migration 42 pending\nsee /var/log/migrate.log"'
-	grep -F 'check is down' ${tmpdir}/vigild.log | grep -qF 'error="exit status 2: migration 42 pending'
-}
+# GET /v1/health: 502 while the ready check is down.
+client c2 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /v1/health -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 502
+	expect resp.body ~ "healthy.:false"
+} -run
 
-# GET /v1/health: 502 while the ready check is down; level=alive does not
-# look at it; a name that is not a check is 404.
-shell {
-	h() { curl -s -o /dev/null -w '%{http_code}' --unix-socket ${tmpdir}/vigild.sock "http://localhost/v1/health$1"; }
-	test "$(h '')" = 502
-	test "$(h '?level=ready')" = 502
-	test "$(h '?level=alive')" = 200
-	test "$(h '?names=migrate-done')" = 502
-	test "$(h '?names=migrate-dnoe')" = 404
-	test "$(h '?level=live')" = 400
-	curl -s --unix-socket ${tmpdir}/vigild.sock http://localhost/v1/health | grep -qF '"result":{"healthy":false}'
-}
+# level=ready counts the ready check: 502.
+client c3 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/health?level=ready" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 502
+} -run
 
-# vigil checks run: runs it now, exit code 1 and the reason on a failure.
-shell {
-	if ${vigil} --socket ${tmpdir}/vigild.sock checks run migrate-done > ${tmpdir}/run.out 2> ${tmpdir}/run.err; then
-		echo "checks run should fail"; exit 1
-	fi
-	grep -qF 'migrate-done: failed (status down' ${tmpdir}/run.out
-	grep -qF 'check migrate-done failed: exit status 2: migration 42 pending' ${tmpdir}/run.err
+# level=alive does not look at a ready check: 200.
+client c4 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/health?level=alive" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "healthy.:true"
+} -run
+
+# By name: 502.
+client c5 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/health?names=migrate-done" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 502
+} -run
+
+# A name that is not a check: 404.
+client c6 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/health?names=migrate-dnoe" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 404
+	expect resp.body ~ "check ..migrate-dnoe.. not found"
+} -run
+
+# An unknown level: 400.
+client c7 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/health?level=live" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 400
+} -run
+
+# vigil checks run: runs it now; the state on stdout, the reason on stderr,
+# exit code 1.
+shell -exit 1 -match {migrate-done: failed \(status down[\s\S]*check migrate-done failed: exit status 2: migration 42 pending} {
+	${vigil} --socket ${tmpdir}/vigild.sock checks run migrate-done
 }
 
 # An unknown check: the API answers 404, the CLI fails.
-shell {
-	! ${vigil} --socket ${tmpdir}/vigild.sock checks run no-such-check 2> ${tmpdir}/run404.err
-	grep -qF 'Error: check "no-such-check" not found' ${tmpdir}/run404.err
+shell -exit 1 -expect {Error: check "no-such-check" not found} {
+	${vigil} --socket ${tmpdir}/vigild.sock checks run no-such-check
 }
 
-# The alert message carries the reason.
-shell {
-	for i in $(seq 1 40); do
-		grep -q '"status":"down"' ${tmpdir}/received.json 2>/dev/null && break
-		sleep 0.2
-	done
-	grep -qF '"message":"check migrate-done failed: exit status 2: migration 42 pending\nsee /var/log/migrate.log"' ${tmpdir}/received.json
-}
+# The recovery alert comes on a new connection.
+server s1 {
+	rxreq
+	expect req.body ~ "status.:.up."
+	txresp -hdr "Connection: close"
+} -start
 
-# A pass clears last-error.
-shell {
-	touch ${tmpdir}/check_marker
-	for i in $(seq 1 40); do
-		curl -s --unix-socket ${tmpdir}/vigild.sock http://localhost/v1/checks > ${tmpdir}/checks2.json
-		grep -q '"status":"up"' ${tmpdir}/checks2.json && break
-		sleep 0.2
-	done
-	grep -q '"status":"up"' ${tmpdir}/checks2.json
-	! grep -q '"last-error"' ${tmpdir}/checks2.json
-}
+# The marker makes the check pass.
+filewrite ${tmpdir}/check_marker ""
+process p1 -expect-text 0 0 {check recovered}
+server s1 -wait
 
-# GET /v1/health: 200 once the check passed.
-shell {
-	test "$(curl -s -o /dev/null -w '%{http_code}' --unix-socket ${tmpdir}/vigild.sock http://localhost/v1/health)" = 200
-}
+# A pass clears last-error; GET /v1/health is 200 again.
+client c8 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /v1/checks -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.body !~ "last-error"
+} -run
+
+client c9 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /v1/health -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+} -run
 
 # vigil checks run on a passing check: exit code 0.
-shell {
-	${vigil} --socket ${tmpdir}/vigild.sock checks run migrate-done > ${tmpdir}/run2.out
-	grep -qF 'migrate-done: passed (status up, failures 0/1)' ${tmpdir}/run2.out
+shell -expect {migrate-done: passed (status up, failures 0/1)} {
+	${vigil} --socket ${tmpdir}/vigild.sock checks run migrate-done
 }
 
-shell {
-	kill $(cat ${tmpdir}/webhook_server.pid) 2>/dev/null || true
-	kill $(cat ${tmpdir}/vigild.pid) 2>/dev/null || true
-	for i in $(seq 1 50); do
-		kill -0 $(cat ${tmpdir}/vigild.pid) 2>/dev/null || break
-		sleep 0.1
-	done
-}
+process p1 -kill TERM
+process p1 -wait

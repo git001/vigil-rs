@@ -1,5 +1,7 @@
-# A check that fails with output until the marker file exists, and an alert
-# that reports it. vigild gets CHECK_MARKER and WEBHOOK_URL from the test.
+# v0027 starts vigild with this directory as --layers-dir. A check that
+# fails with output until the marker file exists, and an alert that reports
+# it. vigild gets CHECK_MARKER and WEBHOOK_URL (the test's server s1) from
+# the test.
 checks:
   migrate-done:
     level: ready

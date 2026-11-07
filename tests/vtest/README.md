@@ -102,6 +102,32 @@ Prefer a static file over building configs, bodies or scripts inside a
 
 ## Patterns and gotchas
 
+### Native VTest2 first
+
+Use VTest2's own commands wherever they fit; `shell` only for what they
+cannot do. v0027 and v0028 show all of these:
+
+| Need | Native command |
+|---|---|
+| A layer directory | `--layers-dir ${vtestdir}/fixtures/vNNNN` (the static fixture itself; no `mkdir`, no `cp`, no replan) |
+| Wait until vigild listens, a check is down, a service is ready | `process p1 -winsz 200 400 "… ${vigild} …" -start`, then `process p1 -expect-text 0 0 "API listening"` (vigild logs to stdout, the terminal of `p1`; `-expect-text` waits) |
+| Check a log line | `process p1 -match-text 0 0 {check failed .*error="…"}` (a regex; does not wait, so wait with `-expect-text` first) |
+| An API request | one `client cN -connect ${tmpdir}/vigild.sock { txreq …; rxresp; expect resp.status == 409; expect resp.body ~ "…" } -run` per request, with a comment, so a failure names the case |
+| Receive an alert | `server s1 { rxreq; expect req.body ~ "…"; txresp -hdr "Connection: close" } -start`, URL `http://${s1_addr}:${s1_port}/…`, then `server s1 -wait`; restart s1 with a new spec for the next alert |
+| Create a file | `filewrite ${tmpdir}/check_marker ""` |
+| Test the vigil CLI | `shell -exit 1 -expect {Error: …} { ${vigil} … }` or `-match {regex}`; no `grep`, no `!` |
+| Wait a moment | `delay 0.5` |
+
+Always start vigild with `-winsz 200 400`: `-expect-text` and `-match-text`
+search only the emulated terminal screen, which is 24 x 80 by default. At
+80 columns a vigild log line (often over 200 characters) wraps and a pattern
+no longer matches; with 24 rows early lines such as "API listening" scroll
+off.
+
+In `expect … ~` patterns each `.` can stand for one character of a JSON
+escape (`\"`, `\n`, `[`), which keeps them readable:
+`"not running: ..idle.."`.
+
 ### Background process (POSIX sh / dash)
 
 Use this pattern when a process must run in the background but is not started
