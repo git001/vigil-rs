@@ -335,7 +335,8 @@ impl Overlord {
         self.sync_actors();
         self.pending_autostart.clear();
         let plan = &self.plan;
-        self.pending_restart.retain(|n| plan.services.contains_key(n));
+        self.pending_restart
+            .retain(|n| plan.services.contains_key(n));
 
         let removed_svcs: Vec<String> = self
             .services

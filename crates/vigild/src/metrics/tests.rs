@@ -151,7 +151,10 @@ fn set_checks_drops_stale_series_and_ignores_unknown_checks() {
     // Replan: db becomes a ready check, cache is removed.
     m.set_checks(&[("web", Alive), ("db", Ready)]);
     let out = m.render();
-    assert!(out.contains(r#"vigil_check_up{check="web",level="alive"} 1"#), "{out}");
+    assert!(
+        out.contains(r#"vigil_check_up{check="web",level="alive"} 1"#),
+        "{out}"
+    );
     assert!(!out.contains(r#"check="db",level="alive""#), "{out}");
     assert!(!out.contains(r#"check="cache""#), "{out}");
 
@@ -162,7 +165,10 @@ fn set_checks_drops_stale_series_and_ignores_unknown_checks() {
     let out = m.render();
     assert!(!out.contains(r#"check="cache""#), "{out}");
     assert!(!out.contains(r#"check="db",level="alive""#), "{out}");
-    assert!(out.contains(r#"vigil_check_up{check="db",level="ready"} 0"#), "{out}");
+    assert!(
+        out.contains(r#"vigil_check_up{check="db",level="ready"} 0"#),
+        "{out}"
+    );
 }
 
 #[test]

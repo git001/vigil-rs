@@ -24,8 +24,8 @@ mod events;
 mod handlers;
 mod health_metric;
 mod lifecycle;
-mod restart;
 pub mod plan;
+mod restart;
 #[cfg(test)]
 mod tests;
 pub mod watch_layers;

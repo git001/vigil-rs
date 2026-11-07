@@ -1795,7 +1795,10 @@ fn replan_restarts_changed_running_services_and_their_dependents() {
     ov.plan.services["retrying"].command = Some("app --retry".into());
     ov.plan.services["job"].command = Some("backup --full".into());
 
-    assert_eq!(ov.replan_restarts(&old), ["db", "api", "worker", "retrying"]);
+    assert_eq!(
+        ov.replan_restarts(&old),
+        ["db", "api", "worker", "retrying"]
+    );
 }
 
 #[tokio::test]
@@ -1825,14 +1828,17 @@ async fn replan_restart_stops_then_starts_dependents_after_their_dependency() {
     assert_eq!(ov.pending_autostart, ["api"]);
 
     // db is gone: started again with the new config.
-    ov.handle_svc_event(state_event("db", ServiceState::Inactive)).await;
+    ov.handle_svc_event(state_event("db", ServiceState::Inactive))
+        .await;
     assert_eq!(drain(&mut cmds), [("db".into(), "start")]);
     assert!(ov.pending_restart.is_empty());
 
     // db is ready: now api.
-    ov.handle_svc_event(state_event("db", ServiceState::Starting)).await;
+    ov.handle_svc_event(state_event("db", ServiceState::Starting))
+        .await;
     assert!(drain(&mut cmds).is_empty());
-    ov.handle_svc_event(state_event("db", ServiceState::Active)).await;
+    ov.handle_svc_event(state_event("db", ServiceState::Active))
+        .await;
     assert_eq!(drain(&mut cmds), [("api".into(), "start")]);
 }
 
@@ -1848,8 +1854,12 @@ async fn stop_cancels_a_pending_replan_restart() {
         reply: tx,
     })
     .await;
-    ov.handle_svc_event(state_event("db", ServiceState::Inactive)).await;
-    assert_eq!(drain(&mut cmds), [("db".into(), "stop"), ("db".into(), "stop")]);
+    ov.handle_svc_event(state_event("db", ServiceState::Inactive))
+        .await;
+    assert_eq!(
+        drain(&mut cmds),
+        [("db".into(), "stop"), ("db".into(), "stop")]
+    );
 }
 
 // ------------------------------------------------------------------
@@ -1889,7 +1899,8 @@ fn publish_health_per_level_ignores_disabled_checks() {
     assert_eq!(health(&ov), (true, true));
 
     // A dependency is down: not ready, still alive.
-    ov.alert_sender.hold_check_event("db", Down, Some("connect refused"));
+    ov.alert_sender
+        .hold_check_event("db", Down, Some("connect refused"));
     ov.publish_health();
     assert_eq!(health(&ov), (true, false));
 
