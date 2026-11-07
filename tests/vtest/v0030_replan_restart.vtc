@@ -1,0 +1,61 @@
+vtest "Replan restarts a running service whose config changed, then the services that require it"
+
+# The layers directory is a symlink to a static fixture directory; the test
+# changes the plan by pointing it to another one, the way Kubernetes swaps
+# the ..data symlink of a ConfigMap volume. VTest2 cannot make symlinks.
+shell {ln -s ${vtestdir}/fixtures/v0030/before ${tmpdir}/layers}
+
+# vigild logs to stdout, the terminal of p1; -expect-text waits there for a
+# line. A wide terminal keeps long log lines on one row. api requires db, so
+# it starts last.
+process p1 -winsz 200 400 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+process p1 -expect-text 0 0 "API listening"
+process p1 -expect-text 0 0 "[api] api started"
+
+# c1 follows the log of db and api from now on (n=0), one chunk per line.
+# After the replan, db must start again with the new environment, and api
+# only after it. In the body patterns (?s) lets ".*" span lines.
+barrier b1 cond 2
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/logs?follow=true&services=db,api&n=0" -hdr "Host: localhost"
+	rxresphdrs
+	expect resp.status == 200
+	barrier b1 sync
+	rxchunk
+	expect resp.body ~ "message.:.db started with max_connections=200."
+	rxchunk
+	expect resp.body ~ "(?s)max_connections=200.*message.:.api started."
+} -start
+barrier b1 sync
+
+# db gets another environment, web only another summary.
+shell {ln -sfn ${vtestdir}/fixtures/v0030/after ${tmpdir}/layers}
+client c2 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/replan -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+} -run
+
+# The replan names what it restarts: db, and api because it requires db.
+process p1 -expect-text 0 0 {restarted=["db", "api"]}
+client c1 -wait
+
+# web kept its process: it started once.
+client c3 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/logs?services=web" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "web started"
+	expect resp.body !~ "web started.*web started"
+} -run
+
+# All three run again.
+client c4 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/services" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.body !~ "current.:.(inactive|error|backoff)"
+} -run
+
+process p1 -kill TERM
+process p1 -wait

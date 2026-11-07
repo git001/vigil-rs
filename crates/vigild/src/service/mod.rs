@@ -36,7 +36,8 @@ pub enum Cmd {
     /// the reply says whether there was a process to send it to.
     Signal(nix::sys::signal::Signal, oneshot::Sender<bool>),
     /// The plan changed (`replan`). The new config applies from the next
-    /// start; a running process is left alone.
+    /// start; a running process is left alone (the overlord restarts it,
+    /// see `overlord/restart.rs`).
     UpdateConfig(Box<ServiceConfig>),
     /// A probe of `check` that started at `started_at` succeeded
     /// (for `ready: check`).

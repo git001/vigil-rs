@@ -311,7 +311,8 @@ services:
   `apk add tzdata`; without it vigild rejects the layer. Daylight saving
   time is handled: a time that does not exist (spring forward) or exists
   twice (fall back) still runs once.
-- `replan` re-arms a changed schedule immediately.
+- `replan` re-arms a changed schedule immediately. A run in progress is not
+  restarted; it finishes with the old configuration.
 - There is no state on disk: runs missed while vigild was not running (e.g.
   during a pod restart) are not caught up.
 - The next run is shown as `next-run` in the API and in the `Next-Run` column

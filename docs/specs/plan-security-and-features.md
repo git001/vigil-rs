@@ -826,6 +826,16 @@ should take effect without a crash or a manual restart.
 - Breaking for anyone who relied on "applies at the next start":
   `fix(vigild)!` with a migration note.
 
+Done. The overlord picks the services before it applies the new plan
+(`replan_restarts`: changed beyond `summary`/`description`, state
+`starting`/`active`/`backoff`, not scheduled, plus running
+`requires`-dependents, transitively), sends `Stop` and keeps them in
+`pending_restart`; when one reports `inactive` it goes through
+`start_or_defer`, so a dependent starts once the service it requires is
+ready. The overlord never waits for a stop. A `stop` of the service cancels
+its pending restart. New module `overlord/restart.rs`; vtest v0030 follows
+the log with `/v1/logs?follow=true` and checks that db starts before api.
+
 ### 5g: diagram of exit, restart and backoff
 
 `docs/user-guide/service-lifecycle.dot`, rendered by the Diagrams workflow

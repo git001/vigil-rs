@@ -91,6 +91,8 @@ impl Overlord {
                     }
                 }
 
+                self.restart_stopped(&event.service, *new_state).await;
+
                 None
             }
             service::EventKind::ProcessExited { exit, .. } => {

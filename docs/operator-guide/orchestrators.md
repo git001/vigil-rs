@@ -299,7 +299,9 @@ spec:
   (its sync period plus cache); vigild applies it within two intervals
   after that (one to see the change, one to make sure it is complete).
 - **Same as `vigil replan`:** only changed services and checks are
-  restarted; finished oneshot jobs do not run again.
+  restarted, plus the services that need a restarted one via `requires`;
+  finished oneshot jobs do not run again. See
+  [`vigil replan`](../user-guide/cli-reference.md#replan).
 - **Invalid layers** (a YAML error, a wrong value, a failed validation)
   are not applied: the running plan stays, vigild logs the error and sends
   the alert `vigild`/`layers`/`invalid` (subscribe with

@@ -1,0 +1,16 @@
+# v0030 starts vigild with a symlink to this directory as --layers-dir and
+# then points the symlink to ../after. api requires db; web stands alone.
+services:
+  db:
+    command: sh -c 'echo "db started with max_connections=$MAX_CONNECTIONS"; exec sleep 300'
+    startup: enabled
+    environment:
+      MAX_CONNECTIONS: "100"
+  api:
+    command: sh -c 'echo "api started"; exec sleep 300'
+    startup: enabled
+    requires: [db]
+  web:
+    summary: web site
+    command: sh -c 'echo "web started"; exec sleep 300'
+    startup: enabled

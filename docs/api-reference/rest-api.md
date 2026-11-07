@@ -606,7 +606,15 @@ Hot-reload all layer YAML files from disk and apply changes.
 After replan:
 - New services with `startup: enabled` are started.
 - Services removed from the plan are stopped.
-- Configuration changes take effect on the next restart of each service.
+- A running service (`starting`, `active` or `backoff`) whose configuration
+  changed is restarted with the new one: stopped, then started again. The
+  running services that need it via `requires` are restarted too, each once
+  the service it requires is ready again. A change of only `summary` or
+  `description` restarts nothing. The log line `plan reloaded` lists the
+  restarted services (`restarted=["db", "api"]`).
+- A stopped service gets the new configuration at its next start. A
+  scheduled job re-arms a changed `schedule` at once; a run in progress
+  finishes with the old configuration.
 
 **Request body:** empty or `null`
 

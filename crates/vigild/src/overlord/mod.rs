@@ -23,6 +23,7 @@ use crate::service;
 mod events;
 mod handlers;
 mod lifecycle;
+mod restart;
 pub mod plan;
 #[cfg(test)]
 mod tests;
@@ -163,6 +164,9 @@ pub(super) struct Overlord {
     /// Services with `startup: enabled` that are waiting for their `after:`
     /// dependencies to start before being auto-started.
     pub(super) pending_autostart: Vec<String>,
+    /// Services a replan stopped to start them again with their new config
+    /// (see `restart.rs`).
+    pub(super) pending_restart: Vec<String>,
     /// How vigild's exit code is chosen on a shutdown policy (`--exit-code`).
     pub(super) exit_code_mode: service::ExitCodeMode,
     /// `<path-prefix>/notify` for `ready: notify` sockets.
@@ -252,6 +256,7 @@ pub async fn spawn(
         cmd_rx,
         layers_dir: layers_dir.clone(),
         pending_autostart: Vec::new(),
+        pending_restart: Vec::new(),
         exit_code_mode,
         notify_dir,
         healthy: Default::default(),

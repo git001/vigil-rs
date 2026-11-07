@@ -96,6 +96,7 @@ pub(super) fn make_overlord(
         cmd_rx,
         layers_dir: std::path::PathBuf::new(),
         pending_autostart: Vec::new(),
+        pending_restart: Vec::new(),
         exit_code_mode: service::ExitCodeMode::default(),
         notify_dir: std::env::temp_dir(),
         healthy: Default::default(),
@@ -1711,4 +1712,142 @@ async fn signal_services_sends_nothing_when_one_does_not_run() {
         Err(SignalError::NotFound("nginx-typo".into()))
     );
     assert_eq!(signal(&ov, &[]).await, Err(SignalError::NoServices));
+}
+
+// ------------------------------------------------------------------
+// replan restarts changed running services and their requires-dependents
+// ------------------------------------------------------------------
+
+/// Replaces each service's actor with a stub that answers Start/Stop and
+/// reports `(service, "start"|"stop")` on the returned channel.
+fn record_svc_cmds(ov: &mut Overlord) -> mpsc::UnboundedReceiver<(String, &'static str)> {
+    let (log_tx, log_rx) = mpsc::unbounded_channel();
+    for (name, entry) in ov.services.iter_mut() {
+        let (tx, mut rx) = mpsc::channel::<service::Cmd>(8);
+        let name = name.clone();
+        let log_tx = log_tx.clone();
+        tokio::spawn(async move {
+            while let Some(cmd) = rx.recv().await {
+                match cmd {
+                    service::Cmd::Start(reply) => {
+                        let _ = log_tx.send((name.clone(), "start"));
+                        let _ = reply.send(Ok(()));
+                    }
+                    service::Cmd::Stop(reply) => {
+                        let _ = log_tx.send((name.clone(), "stop"));
+                        let _ = reply.send(Ok(()));
+                    }
+                    _ => {}
+                }
+            }
+        });
+        entry.handle = service::Handle { tx };
+    }
+    log_rx
+}
+
+fn drain(rx: &mut mpsc::UnboundedReceiver<(String, &'static str)>) -> Vec<(String, &'static str)> {
+    let mut out = Vec::new();
+    while let Ok(x) = rx.try_recv() {
+        out.push(x);
+    }
+    out
+}
+
+fn state_event(service: &str, new_state: ServiceState) -> service::Event {
+    service::Event {
+        service: service.into(),
+        kind: service::EventKind::StateChanged { new_state },
+    }
+}
+
+#[test]
+fn replan_restarts_changed_running_services_and_their_dependents() {
+    // api requires db, worker requires api (transitive); web and idle are
+    // unrelated; job is scheduled.
+    let mut ov = make_overlord(
+        &[
+            ("db", &[], &[], &[]),
+            ("api", &[], &["db"], &[]),
+            ("worker", &[], &["api"], &[]),
+            ("web", &[], &[], &[]),
+            ("idle", &[], &[], &[]),
+            ("retrying", &[], &[], &[]),
+            ("job", &[], &[], &[]),
+        ],
+        &[
+            ("db", ServiceState::Active),
+            ("api", ServiceState::Starting),
+            ("worker", ServiceState::Active),
+            ("web", ServiceState::Active),
+            ("retrying", ServiceState::Backoff),
+            ("job", ServiceState::Active),
+        ],
+    );
+    ov.plan.services["job"].schedule = Some("0 3 * * *".into());
+    let old = ov.plan.services.clone();
+    ov.plan.services["db"].command = Some("postgres -c max_connections=200".into());
+    // Not the process: no restart.
+    ov.plan.services["web"].summary = Some("public web site".into());
+    ov.plan.services["web"].description = Some("serves www.example.com".into());
+    // Stopped: gets the config at its next start.
+    ov.plan.services["idle"].command = Some("sleep 600".into());
+    ov.plan.services["retrying"].command = Some("app --retry".into());
+    ov.plan.services["job"].command = Some("backup --full".into());
+
+    assert_eq!(ov.replan_restarts(&old), ["db", "api", "worker", "retrying"]);
+}
+
+#[tokio::test]
+async fn replan_restart_stops_then_starts_dependents_after_their_dependency() {
+    let mut ov = make_overlord(
+        &[("db", &[], &[], &[]), ("api", &[], &["db"], &[])],
+        &[("db", ServiceState::Active), ("api", ServiceState::Active)],
+    );
+    let mut cmds = record_svc_cmds(&mut ov);
+
+    ov.begin_restarts(vec!["db".into(), "api".into()]).await;
+    assert_eq!(
+        drain(&mut cmds),
+        [("db".into(), "stop"), ("api".into(), "stop")]
+    );
+    assert_eq!(ov.pending_restart, ["db", "api"]);
+
+    // Both stop; api stops first and waits for db.
+    for (svc, state) in [
+        ("db", ServiceState::Stopping),
+        ("api", ServiceState::Stopping),
+        ("api", ServiceState::Inactive),
+    ] {
+        ov.handle_svc_event(state_event(svc, state)).await;
+    }
+    assert!(drain(&mut cmds).is_empty());
+    assert_eq!(ov.pending_autostart, ["api"]);
+
+    // db is gone: started again with the new config.
+    ov.handle_svc_event(state_event("db", ServiceState::Inactive)).await;
+    assert_eq!(drain(&mut cmds), [("db".into(), "start")]);
+    assert!(ov.pending_restart.is_empty());
+
+    // db is ready: now api.
+    ov.handle_svc_event(state_event("db", ServiceState::Starting)).await;
+    assert!(drain(&mut cmds).is_empty());
+    ov.handle_svc_event(state_event("db", ServiceState::Active)).await;
+    assert_eq!(drain(&mut cmds), [("api".into(), "start")]);
+}
+
+#[tokio::test]
+async fn stop_cancels_a_pending_replan_restart() {
+    let mut ov = make_overlord(&[("db", &[], &[], &[])], &[("db", ServiceState::Active)]);
+    let mut cmds = record_svc_cmds(&mut ov);
+    ov.begin_restarts(vec!["db".into()]).await;
+    let (tx, _rx) = tokio::sync::oneshot::channel();
+    ov.handle_cmd(super::Cmd::Services {
+        action: vigil_types::api::ServiceAction::Stop,
+        names: vec!["db".into()],
+        reply: tx,
+    })
+    .await;
+    ov.handle_svc_event(state_event("db", ServiceState::Inactive)).await;
+    assert_eq!(drain(&mut cmds), [("db".into(), "stop"), ("db".into(), "stop")]);
 }

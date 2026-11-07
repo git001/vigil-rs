@@ -100,7 +100,11 @@ impl Overlord {
         for name in &targets {
             let res = match action {
                 ServiceAction::Start => self.svc_cmd(name, SvcCmd::Start).await,
-                ServiceAction::Stop => self.svc_cmd(name, SvcCmd::Stop).await,
+                ServiceAction::Stop => {
+                    // A stop wins over a pending replan restart.
+                    self.pending_restart.retain(|n| n != name);
+                    self.svc_cmd(name, SvcCmd::Stop).await
+                }
                 ServiceAction::Restart => self.svc_cmd(name, SvcCmd::Restart).await,
                 ServiceAction::Replan => self.reload_layers().await,
                 ServiceAction::Autostart => unreachable!("handled above"),

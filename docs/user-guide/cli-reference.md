@@ -302,8 +302,15 @@ After replan:
 - New services with `startup: enabled` are started (a `oneshot` that is
   already `done` is not run again; scheduled jobs only re-arm their schedule).
 - Services removed from the plan are stopped.
-- Configuration changes take effect on the next start of each service; a
-  running process is not restarted. A changed `schedule` is re-armed at once.
+- A running service (`starting`, `active` or `backoff`) whose configuration
+  changed is restarted with the new one: stopped, then started again. The
+  running services that need it via `requires` are restarted too, each once
+  the service it requires is ready again. A change of only `summary` or
+  `description` restarts nothing. The log line `plan reloaded` lists the
+  restarted services (`restarted=["db", "api"]`).
+- A stopped service gets the new configuration at its next start. A
+  scheduled job re-arms a changed `schedule` at once; a run in progress
+  finishes with the old configuration.
 
 ---
 

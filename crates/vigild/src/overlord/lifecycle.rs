@@ -312,6 +312,9 @@ impl Overlord {
         let old_plan = std::mem::replace(&mut self.plan, plan);
 
         let services_changed = count_changed(&old_plan.services, &self.plan.services);
+        // Decided before sync_actors: it needs the states from before the
+        // replan.
+        let restarts = self.replan_restarts(&old_plan.services);
         let checks_changed = count_changed(&old_plan.checks, &self.plan.checks);
         let alerts_changed = count_changed(&old_plan.alerts, &self.plan.alerts);
         info!(
@@ -321,6 +324,7 @@ impl Overlord {
             services_changed,
             checks_changed,
             alerts_changed,
+            restarted = ?restarts,
             "plan reloaded"
         );
         self.alert_sender.update_alerts(alerts);
@@ -328,6 +332,8 @@ impl Overlord {
         self.alert_sender.update_queue_limits(queue_depth, max_age);
         self.sync_actors();
         self.pending_autostart.clear();
+        let plan = &self.plan;
+        self.pending_restart.retain(|n| plan.services.contains_key(n));
 
         let removed_svcs: Vec<String> = self
             .services
@@ -355,6 +361,7 @@ impl Overlord {
         }
 
         self.autostart().await;
+        self.begin_restarts(restarts).await;
     }
 
     /// Whether the service `name` is ready (active, or a finished oneshot).
