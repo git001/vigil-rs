@@ -44,11 +44,11 @@ pub(super) fn split_list(value: Option<&str>) -> Vec<String> {
 // Re-exports — keep all handler names accessible as `handlers::<name>`
 // ---------------------------------------------------------------------------
 
-pub(crate) use admin::replan;
+pub(crate) use admin::{daemon_action, replan};
 pub(crate) use alerts::list_alerts;
 pub(crate) use checks::{list_checks, refresh_check};
 pub(crate) use health::health;
-pub(crate) use identities::{add_identities, daemon_action, list_identities, remove_identities};
+pub(crate) use identities::{add_identities, list_identities, remove_identities};
 pub(crate) use logs::{follow_logs, get_logs};
 pub(crate) use metrics::get_metrics;
 pub(crate) use services::{get_change, list_services, services_action};

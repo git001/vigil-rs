@@ -5,37 +5,12 @@ use axum::{
     Json,
     extract::{Query, State},
 };
-use vigil_types::api::DaemonActionRequest;
 use vigil_types::identity::{
     AddIdentitiesRequest, Identity, IdentityAccess, RemoveIdentitiesRequest,
 };
 
 use super::super::{ApiError, ApiResult, AppState, auth::Caller, ok};
 use super::{NamesQuery, parse_names};
-
-#[utoipa::path(
-    post, path = "/v1/vigild",
-    tag = "daemon",
-    summary = "Control the daemon",
-    description = "Stop or restart the vigild daemon gracefully.\n\n`stop` stops all services and exits. `restart` stops all services and re-executes the daemon in-place.\n\n**Required access:** `admin`.",
-    request_body = DaemonActionRequest,
-    responses(
-        (status = 200, description = "Action accepted."),
-        (status = 403, description = "Forbidden."),
-        (status = 500, description = "Internal error."),
-    )
-)]
-pub(crate) async fn daemon_action(
-    caller: Caller,
-    State(s): State<AppState>,
-    Json(body): Json<DaemonActionRequest>,
-) -> ApiResult<()> {
-    caller
-        .require(IdentityAccess::Admin)
-        .map_err(ApiError::forbidden_from)?;
-    let _ = s.shutdown_tx.send(body.action).await;
-    ok(())
-}
 
 #[utoipa::path(
     get, path = "/v1/identities",
