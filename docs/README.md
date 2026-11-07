@@ -45,9 +45,9 @@ vigil    CLI client. Connects to vigild via Unix socket or HTTP/HTTPS URL.
 vigild --layers-dir /etc/vigil/layers --socket /run/vigil/vigild.sock
 
 # Use the CLI (inside the container)
-vigil services
+vigil services list
 vigil logs -f
 
 # Use the CLI (remote via HTTPS)
-vigil --url https://host:8443 --insecure services
+vigil --url https://host:8443 --insecure services list
 ```

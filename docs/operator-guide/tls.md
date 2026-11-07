@@ -44,7 +44,7 @@ Connect with certificate verification disabled:
 
 ```bash
 # vigil CLI
-vigil --url https://myhost:8443 --insecure services
+vigil --url https://myhost:8443 --insecure services list
 
 # curl
 curl -k https://myhost:8443/v1/services
@@ -100,10 +100,10 @@ podman run \
 
 ```bash
 # With a valid/trusted certificate
-vigil --url https://myhost:8443 services
+vigil --url https://myhost:8443 services list
 
 # With a self-signed or untrusted certificate
-vigil --url https://myhost:8443 --insecure services
+vigil --url https://myhost:8443 --insecure services list
 
 # Via environment
 export VIGIL_URL=https://myhost:8443
@@ -258,10 +258,10 @@ Unix socket and TLS listener run in parallel. You can connect via either:
 
 ```bash
 # From inside the container (Unix socket)
-vigil services
+vigil services list
 
 # From outside (HTTPS)
-vigil --url https://myhost:8443 --insecure services
+vigil --url https://myhost:8443 --insecure services list
 
 # Via curl (Unix socket)
 curl --unix-socket /run/vigil/vigild.sock http://localhost/v1/services

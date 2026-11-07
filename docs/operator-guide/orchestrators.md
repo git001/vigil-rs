@@ -494,10 +494,10 @@ without `exec`-ing into the container:
 
 ```bash
 # Restart a service after a deployment
-vigil --url https://myhost:8443 --insecure restart myapp
+vigil --url https://myhost:8443 --insecure services restart myapp
 
-# Wait until all checks are up
-until vigil --url https://myhost:8443 --insecure checks | grep -v down; do
+# Wait until no check is down
+while vigil --url https://myhost:8443 --insecure checks list | grep -q ' down '; do
   sleep 2
 done
 

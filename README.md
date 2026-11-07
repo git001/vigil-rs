@@ -82,21 +82,21 @@ vigild --layers-dir /etc/vigil/layers --socket /run/vigil/vigild.sock
 
 ```bash
 # Default: connect via Unix socket
-vigil services
-vigil checks
+vigil services list
+vigil checks list
 vigil logs -f
-vigil start myservice
-vigil restart myservice
-vigil stop myservice
+vigil services start myservice
+vigil services restart myservice
+vigil services stop myservice
 
 # Connect via HTTP (when vigild is reachable over the network)
-vigil --url http://myhost:8080 services
+vigil --url http://myhost:8080 services list
 
 # Connect via HTTPS (vigild --tls-addr)
-vigil --url https://myhost:8443 services
+vigil --url https://myhost:8443 services list
 
 # HTTPS with auto-generated self-signed cert
-vigil --url https://myhost:8443 --insecure services
+vigil --url https://myhost:8443 --insecure services list
 ```
 
 ### API via curl
@@ -199,9 +199,9 @@ ENTRYPOINT ["/usr/local/bin/vigild", \
 Interact with the running container:
 
 ```bash
-podman exec <ctr> vigil services
+podman exec <ctr> vigil services list
 podman exec <ctr> vigil logs -f
-podman exec <ctr> vigil restart myapp
+podman exec <ctr> vigil services restart myapp
 ```
 
 See the [examples/](examples/) directory for complete, buildable examples.
@@ -390,8 +390,8 @@ podman run --rm --network host --name vigil-hug vigil-hug
 Interact:
 
 ```bash
-podman exec vigil-hug vigil --socket /run/vigil/vigild.sock services
-podman exec vigil-hug vigil --socket /run/vigil/vigild.sock checks
+podman exec vigil-hug vigil --socket /run/vigil/vigild.sock services list
+podman exec vigil-hug vigil --socket /run/vigil/vigild.sock checks list
 podman exec vigil-hug vigil --socket /run/vigil/vigild.sock logs
 ```
 

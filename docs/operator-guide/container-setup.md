@@ -121,29 +121,29 @@ podman build -f examples/hug/Containerfile -t vigil-hug .
 podman run --rm --network host --name vigil-hug vigil-hug
 
 # Interact
-podman exec vigil-hug vigil services
-podman exec vigil-hug vigil checks
+podman exec vigil-hug vigil services list
+podman exec vigil-hug vigil checks list
 podman exec vigil-hug vigil logs -f
-podman exec vigil-hug vigil restart haproxy
+podman exec vigil-hug vigil services restart haproxy
 ```
 
 ## Interacting with a running container
 
 ```bash
 # List services
-podman exec <ctr> vigil services
+podman exec <ctr> vigil services list
 
 # Show logs
 podman exec <ctr> vigil logs
 podman exec <ctr> vigil logs -f
 
 # Start / stop / restart
-podman exec <ctr> vigil start myapp
-podman exec <ctr> vigil stop myapp
-podman exec <ctr> vigil restart myapp
+podman exec <ctr> vigil services start myapp
+podman exec <ctr> vigil services stop myapp
+podman exec <ctr> vigil services restart myapp
 
 # Check health
-podman exec <ctr> vigil checks
+podman exec <ctr> vigil checks list
 
 # Hot-reload config
 podman exec <ctr> vigil replan
