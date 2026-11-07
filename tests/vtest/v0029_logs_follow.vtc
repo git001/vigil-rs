@@ -1,0 +1,67 @@
+vtest "GET /v1/logs?follow=true: the last n lines, then new lines as NDJSON; unknown parameters are 400"
+
+# vigild loads the static layer directory and logs to stdout, the terminal
+# of p1; -expect-text waits there for a line. A wide terminal keeps long log
+# lines on one row.
+process p1 -winsz 200 400 "env READY_FILE=${tmpdir}/web.ready ${vigild} --layers-dir ${vtestdir}/fixtures/v0029 --socket ${tmpdir}/vigild.sock" -start
+process p1 -expect-text 0 0 "API listening"
+process p1 -expect-text 0 0 "service is ready"
+
+# c1 follows web's log. The response is chunked, one chunk per log line;
+# rxchunk adds each chunk to resp.body. First comes the tail (n=1: the line
+# "started"), then, after the barrier, the line web prints on SIGHUP.
+# In the body patterns ".." before "$" matches the closing quote and brace
+# of the last NDJSON line ("$" also matches before its final newline);
+# (?s) lets ".*" span lines.
+barrier b1 cond 2
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/logs?follow=true&services=web&n=1" -hdr "Host: localhost"
+	rxresphdrs
+	expect resp.status == 200
+	expect resp.http.content-type == "application/x-ndjson"
+	rxchunk
+	expect resp.body ~ "message.:.started..$"
+	barrier b1 sync
+	rxchunk
+	expect resp.body ~ "(?s)started.*message.:.reloaded..$"
+	expect resp.body !~ "(?s)started.*started"
+} -start
+barrier b1 sync
+
+# SIGHUP makes web print "reloaded" while c1 follows.
+client c2 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/signals -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"signal\":\"SIGHUP\",\"services\":[\"web\"]}"
+	rxresp
+	expect resp.status == 200
+} -run
+client c1 -wait
+
+# Without follow, /v1/logs keeps its JSON envelope.
+client c3 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/logs?services=web&n=5" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.http.content-type == "application/json"
+	expect resp.body ~ "type.:.sync."
+	expect resp.body ~ "started.*reloaded"
+} -run
+
+# format belongs to /v1/logs/follow: on /v1/logs it is an unknown parameter.
+client c4 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/logs?format=ndjson" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 400
+	expect resp.body ~ "unknown field `format`"
+} -run
+
+# follow takes true or false.
+client c5 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/logs?follow=yes" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 400
+} -run
+
+process p1 -kill TERM
+process p1 -wait

@@ -485,7 +485,8 @@ curl --unix-socket /run/vigil/vigild.sock -X POST \
 
 **Required access level:** `read`
 
-Return recent log output from service stdout/stderr.
+Return recent log output from service stdout/stderr. With `follow=true`, keep
+the connection open and stream new lines as well.
 
 **Query parameters:**
 
@@ -493,6 +494,10 @@ Return recent log output from service stdout/stderr.
 |---|---|---|---|
 | `services` | string | all | Comma-separated service names to filter |
 | `n` | integer | 100 | Number of most-recent lines to return |
+| `follow` | boolean | `false` | `true`: stream the last `n` lines, then each new line, as NDJSON (see below) |
+
+Any other query parameter is `400 Bad Request`, for example `format`, which
+belongs to `/v1/logs/follow`.
 
 **Response** `200 OK`
 
@@ -523,6 +528,23 @@ curl --unix-socket /run/vigil/vigild.sock http://localhost/v1/logs
 # Last 20 lines from myapp
 curl --unix-socket /run/vigil/vigild.sock \
   "http://localhost/v1/logs?services=myapp&n=20"
+```
+
+**With `follow=true`:** `200 OK` with `Content-Type: application/x-ndjson`,
+no envelope: one `LogEntry` JSON object per line, first the last `n` lines
+(`n=0` for none), then each new line until the client closes the connection.
+The same as `/v1/logs/follow?format=ndjson`, plus the lines from before the
+request.
+
+```
+{"timestamp":"2026-03-18T10:00:05.123Z","service":"myapp","stream":"stdout","message":"server listening on :8080"}
+{"timestamp":"2026-03-18T10:00:09.876Z","service":"myapp","stream":"stderr","message":"GET /health 200"}
+```
+
+```bash
+# The last 10 lines of myapp, then follow (Ctrl+C to stop)
+curl -N --unix-socket /run/vigil/vigild.sock \
+  "http://localhost/v1/logs?services=myapp&n=10&follow=true"
 ```
 
 ---

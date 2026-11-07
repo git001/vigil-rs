@@ -303,7 +303,7 @@ pub enum LogStream {
     Stderr,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "kebab-case")]
 pub struct LogEntry {
     pub timestamp: DateTime<Utc>,

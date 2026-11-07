@@ -799,6 +799,12 @@ CLI: `vigil services signal SIGHUP nginx`. vtest v0028.
 - `/v1/logs` without `follow` keeps its JSON envelope (the vigil CLI uses
   it); `/v1/logs/follow` stays.
 
+Done. `follow=true` subscribes first, then reads the last `n` lines (default
+100, `n=0` for none) and streams both as NDJSON; a live line that is already
+in that tail is not sent twice. Unknown parameters and a `follow` that is not
+`true`/`false` are 400 with a JSON error, checked after the access check.
+`/v1/logs/follow` no longer lists `n`, which it never used. vtest v0029.
+
 ### 5f: replan restarts changed services
 
 Phase 3 made a changed service config apply from the next start

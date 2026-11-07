@@ -322,9 +322,10 @@ behave differently:
 - `log-targets:`, `workloads:` and layer subdirectories (`NNN-name.d/`) are
   not supported.
 - The REST API has the same shape for `/v1/services`, `/v1/checks` and
-  `/v1/system-info`, but `/v1/logs` returns a JSON envelope (follow via
-  `/v1/logs/follow`), and service actions return a finished change instead of
-  an asynchronous one. Pebble clients need adjusting.
+  `/v1/system-info`, but `/v1/logs` returns a JSON envelope (with
+  `follow=true` an NDJSON stream without one), and service actions return a
+  finished change instead of an asynchronous one. Pebble clients need
+  adjusting.
 
 ---
 

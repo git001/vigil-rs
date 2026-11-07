@@ -1,0 +1,21 @@
+# web prints "started", and "reloaded" on each SIGHUP, so v0029 can make a
+# new log line while it follows the log. It sets the trap first and only
+# then creates $READY_FILE; the check web-started makes web ready once that
+# file exists, so a SIGHUP after "service is ready" always meets the trap.
+services:
+  web:
+    command: sh -c 'trap "echo reloaded" HUP; touch "$READY_FILE"; echo started; while :; do sleep 0.1; done'
+    startup: enabled
+    pass-env-glob: [READY_FILE]
+    ready: check
+    ready-check: web-started
+
+checks:
+  web-started:
+    level: alive
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: 'test -e "$READY_FILE"'
+      pass-env-glob: [READY_FILE]

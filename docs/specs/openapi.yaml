@@ -346,7 +346,13 @@ paths:
       summary: Get recent log output
       tags:
         - logs
-      description: Returns the most recent log lines from service stdout/stderr.
+      description: |
+        Returns the most recent log lines from service stdout/stderr.
+
+        With `follow=true` the response is a stream instead: the last `n`
+        lines, then each new line, as newline-delimited JSON
+        (`application/x-ndjson`), until the client closes the connection.
+        An unknown query parameter is `400`.
       parameters:
         - name: services
           in: query
@@ -363,9 +369,19 @@ paths:
             type: integer
             default: 100
           example: 50
+        - name: follow
+          in: query
+          description: |
+            `true` keeps the connection open and streams the last `n` lines,
+            then each new line, as newline-delimited JSON, like
+            `/v1/logs/follow?format=ndjson`.
+          required: false
+          schema:
+            type: boolean
+            default: false
       responses:
         "200":
-          description: Recent log entries.
+          description: Recent log entries; with `follow=true` an NDJSON stream.
           content:
             application/json:
               schema:
@@ -380,6 +396,14 @@ paths:
                     service: web
                     stream: stderr
                     message: "WARN: slow response 823ms"
+            application/x-ndjson:
+              schema:
+                type: string
+              example: |
+                {"timestamp":"2026-03-18T10:01:00.123Z","service":"web","stream":"stdout","message":"Server listening on :8080"}
+                {"timestamp":"2026-03-18T10:01:01.456Z","service":"web","stream":"stderr","message":"WARN: slow response 823ms"}
+        "400":
+          $ref: "#/components/responses/Error"
         "500":
           $ref: "#/components/responses/Error"
 

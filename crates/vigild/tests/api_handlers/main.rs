@@ -50,6 +50,8 @@ pub struct TestApp {
     pub _dir: TempDir,
     /// Keep the overlord tx so we can shut it down cleanly.
     pub overlord_tx: mpsc::Sender<overlord::Cmd>,
+    /// The store the API reads logs from; tests push entries into it.
+    pub log_store: std::sync::Arc<vigild::logs::LogStore>,
 }
 
 impl TestApp {
@@ -96,7 +98,7 @@ impl TestApp {
 
         let state = AppState {
             overlord: handle.clone(),
-            log_store,
+            log_store: log_store.clone(),
             identity_store,
             metrics,
             shutdown_tx,
@@ -107,6 +109,7 @@ impl TestApp {
             router: router(state),
             _dir: dir,
             overlord_tx: handle.tx,
+            log_store,
         }
     }
 

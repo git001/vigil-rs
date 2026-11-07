@@ -25,42 +25,13 @@ pub(super) struct NamesQuery {
 }
 
 pub(super) fn parse_names(q: &NamesQuery) -> Vec<String> {
-    q.names
-        .as_deref()
-        .unwrap_or("")
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .collect()
+    split_list(q.names.as_deref())
 }
 
-#[derive(Deserialize, Default, Clone, Copy, utoipa::ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub(super) enum LogFormat {
-    /// JSON object per line: `{"timestamp":"…","service":"…","stream":"…","message":"…"}`
-    #[default]
-    Json,
-    /// Plain text: `[service] message`
-    Text,
-    /// Newline-delimited JSON (`application/x-ndjson`): one JSON object per line, no SSE framing.
-    /// Ideal for log collectors (Vector, Fluent Bit, …) that read from stdin.
-    Ndjson,
-}
-
-#[derive(Deserialize, utoipa::IntoParams)]
-pub(super) struct LogsQuery {
-    /// Comma-separated list of service names to filter by. Omit for all services.
-    services: Option<String>,
-    /// Number of most-recent lines to return (default 100).
-    n: Option<usize>,
-    /// Response format for the follow stream: `json` (default) or `text`.
-    format: Option<LogFormat>,
-}
-
-pub(super) fn parse_services(q: &LogsQuery) -> Vec<String> {
-    q.services
-        .as_deref()
+/// Splits a comma-separated query value (`services=web,worker`) into names;
+/// empty when the parameter is missing.
+pub(super) fn split_list(value: Option<&str>) -> Vec<String> {
+    value
         .unwrap_or("")
         .split(',')
         .map(str::trim)

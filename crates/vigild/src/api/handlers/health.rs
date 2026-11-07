@@ -14,6 +14,7 @@ use vigil_types::plan::CheckLevel;
 use crate::overlord::Cmd;
 
 use super::super::{ApiError, AppState, auth::Caller};
+use super::split_list;
 
 #[derive(Deserialize, utoipa::IntoParams)]
 #[serde(deny_unknown_fields)]
@@ -46,15 +47,7 @@ pub(crate) async fn health(
     caller
         .require(IdentityAccess::Open)
         .map_err(ApiError::forbidden_from)?;
-    let names = q
-        .names
-        .as_deref()
-        .unwrap_or("")
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .collect();
+    let names = split_list(q.names.as_deref());
     let (tx, rx) = oneshot::channel();
     s.overlord
         .tx
