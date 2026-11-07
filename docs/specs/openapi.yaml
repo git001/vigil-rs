@@ -201,6 +201,51 @@ paths:
                     status: down
                     failures: 3
                     threshold: 3
+                    last-error: "HTTP 503 Service Unavailable"
+        "500":
+          $ref: "#/components/responses/Error"
+
+  /v1/checks/refresh:
+    post:
+      summary: Run a check now
+      tags:
+        - checks
+      description: >
+        Runs the check at once and returns its state after the run, plus
+        `error`: why this run failed (absent when it passed). The run counts
+        like a scheduled one (failures, threshold, status, alerts). A check
+        with `startup: disabled` runs once without changing any state.
+        Required access: `write`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CheckRefreshRequest"
+            example:
+              name: db-ready
+      responses:
+        "200":
+          description: The check after the run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckRefreshResponse"
+              example:
+                result:
+                  info:
+                    name: db-ready
+                    level: ready
+                    status: down
+                    failures: 3
+                    threshold: 3
+                    next-run-in-secs: 7
+                    last-error: "connect localhost:5432: Connection refused (os error 111)"
+                  error: "connect localhost:5432: Connection refused (os error 111)"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
         "500":
           $ref: "#/components/responses/Error"
 
@@ -678,6 +723,29 @@ components:
             output). Absent once a run passes.
           example: "HTTP 503 Service Unavailable"
       required: [name, level, status, failures, threshold]
+
+    CheckRefreshRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: The check to run now.
+      required: [name]
+      additionalProperties: false
+
+    CheckRefreshResponse:
+      type: object
+      properties:
+        result:
+          type: object
+          properties:
+            info:
+              $ref: "#/components/schemas/CheckInfo"
+            error:
+              type: string
+              description: Why this run failed; absent when it passed.
+          required: [info]
+      required: [result]
 
     ChecksResponse:
       type: object

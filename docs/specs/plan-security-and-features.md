@@ -738,6 +738,15 @@ vtest v0027.
 - CLI: `vigil checks run NAME` prints the result and the reason; exit code 0
   on pass, 1 on failure, so it fits scripts.
 
+Done: response `{"info": CheckInfo, "error": "…"}` (Pebble's shape). The
+overlord only hands the request to the check actor (`check::Cmd::Refresh`)
+and never waits for the probe; the actor runs it between scheduled runs,
+also during the initial `delay`. A disabled check runs once in a task of
+its own (`check::run_once_detached`). Unknown check 404, unknown body
+fields rejected. The docs' CLI examples used commands that do not exist
+(`vigil services`, `vigil start NAME`); fixed to `services list`,
+`services start NAME` etc.
+
 ### 5c: `GET /v1/health`
 
 - Pebble's semantics: `?level=alive|ready` and `?names=a,b`. `ready`

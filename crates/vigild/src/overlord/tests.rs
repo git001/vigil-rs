@@ -1462,3 +1462,114 @@ async fn after_waits_for_a_disabled_dependency_that_is_starting() {
     ov.plan.services.get_mut("db").unwrap().startup = Some(Startup::Enabled);
     assert_eq!(ov.unmet_deps("app"), ["db"]);
 }
+
+// ------------------------------------------------------------------
+// refresh_check — POST /v1/checks/refresh
+// ------------------------------------------------------------------
+
+async fn refresh(ov: &Overlord, name: &str) -> Option<vigil_types::api::CheckRefresh> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    ov.refresh_check(name.into(), tx);
+    tokio::time::timeout(std::time::Duration::from_secs(5), rx)
+        .await
+        .expect("refresh timed out")
+        .unwrap()
+}
+
+#[tokio::test]
+async fn refresh_check_unknown_name_is_none() {
+    let ov = make_overlord(&[], &[]);
+    assert!(refresh(&ov, "nope").await.is_none());
+}
+
+// A disabled check has no actor: it runs once, and still has none after.
+#[tokio::test]
+async fn refresh_check_runs_a_disabled_check_once() {
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("001.yaml"),
+        "checks:\n  off:\n    startup: disabled\n    exec:\n      command: \"echo off; exit 3\"\n",
+    )
+    .unwrap();
+    let mut ov = make_overlord(&[], &[]);
+    ov.alert_sender.spawn_worker();
+    ov.layers_dir = dir.path().to_path_buf();
+    ov.reload_layers().await.unwrap();
+
+    let result = refresh(&ov, "off").await.unwrap();
+    assert_eq!(result.error.as_deref(), Some("exit status 3: off"));
+    assert!(ov.checks.is_empty());
+}
+
+// An enabled check: the refresh goes to its actor.
+#[tokio::test]
+async fn refresh_check_goes_to_the_actor() {
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("001.yaml"),
+        "checks:\n  on:\n    startup: enabled\n    delay: 1h\n    threshold: 1\n    exec:\n      command: \"exit 5\"\n",
+    )
+    .unwrap();
+    let mut ov = make_overlord(&[], &[]);
+    ov.alert_sender.spawn_worker();
+    ov.layers_dir = dir.path().to_path_buf();
+    ov.reload_layers().await.unwrap();
+
+    let result = refresh(&ov, "on").await.unwrap();
+    assert_eq!(result.error.as_deref(), Some("exit status 5"));
+    // Counted by the actor: threshold 1 → down.
+    assert_eq!(result.info.status, vigil_types::api::CheckStatus::Down);
+    let infos = ov.query_checks(&["on".into()]).await;
+    assert_eq!(infos[0].last_error.as_deref(), Some("exit status 5"));
+}
+
+// A disabled check run by refresh gets the same environment as a scheduled
+// run: its service-context's environment (templates included), pass-env-glob
+// of vigild's variables, nothing else of vigild's environment. cargo sets
+// CARGO_PKG_NAME and CARGO_MANIFEST_DIR for the test process.
+#[tokio::test]
+async fn refresh_check_detached_run_uses_the_env_policy() {
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("001.yaml"),
+        r#"services:
+  db-client:
+    command: sleep 300
+    startup: disabled
+    environment:
+      DB_HOST: db.internal
+checks:
+  env-probe:
+    startup: disabled
+    exec:
+      service-context: db-client
+      pass-env-glob: [CARGO_PKG_NAME]
+      environment:
+        DB_URL: "postgres://{{ env.DB_HOST }}:5432"
+      command: |
+        test "$CARGO_PKG_NAME" = vigild &&
+        test -z "$CARGO_MANIFEST_DIR" &&
+        test "$DB_URL" = "postgres://db.internal:5432" || { env | sort; exit 1; }
+"#,
+    )
+    .unwrap();
+    assert!(
+        std::env::var_os("CARGO_MANIFEST_DIR").is_some(),
+        "run under cargo"
+    );
+    let mut ov = make_overlord(&[], &[]);
+    ov.alert_sender.spawn_worker();
+    ov.layers_dir = dir.path().to_path_buf();
+    ov.reload_layers().await.unwrap();
+
+    let result = refresh(&ov, "env-probe").await.unwrap();
+    assert_eq!(
+        result.error,
+        None,
+        "{}",
+        result.error.as_deref().unwrap_or_default()
+    );
+}

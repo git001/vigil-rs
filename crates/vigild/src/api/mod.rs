@@ -45,6 +45,7 @@ mod handlers;
         handlers::services::services_action,
         handlers::services::get_change,
         handlers::checks::list_checks,
+        handlers::checks::refresh_check,
         handlers::alerts::list_alerts,
         handlers::logs::get_logs,
         handlers::logs::follow_logs,
@@ -64,6 +65,8 @@ mod handlers;
         vigil_types::api::ChangeStatus,
         ChangeInfo,
         CheckInfo,
+        vigil_types::api::CheckRefreshRequest,
+        vigil_types::api::CheckRefresh,
         vigil_types::api::CheckStatus,
         AlertInfo, AlertCheckStatus,
         vigil_types::plan::AlertFormat,
@@ -181,6 +184,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/changes/{id}", get(handlers::get_change))
         .route("/v1/checks", get(handlers::list_checks))
+        .route("/v1/checks/refresh", post(handlers::refresh_check))
         .route("/v1/alerts", get(handlers::list_alerts))
         .route("/v1/logs", get(handlers::get_logs))
         .route("/v1/logs/follow", get(handlers::follow_logs))

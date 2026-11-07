@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 use tokio::sync::{mpsc, oneshot};
-use vigil_types::api::{CheckInfo, CheckStatus};
+use vigil_types::api::{CheckInfo, CheckRefresh, CheckStatus};
 use vigil_types::plan::{CheckConfig, ServiceConfig};
 
 use crate::metrics::MetricsStore;
@@ -53,7 +53,40 @@ pub enum Cmd {
     /// other files): replaces the actor's client and keeps its status
     /// and failure count.
     SetHttpClient(reqwest::Client),
+    /// Run the probe now and count it like a scheduled run
+    /// (`POST /v1/checks/refresh`).
+    Refresh(oneshot::Sender<CheckRefresh>),
     Shutdown,
+}
+
+/// Run a check that has no actor (`startup: disabled`) once, for
+/// `POST /v1/checks/refresh`. Nothing is counted or reported: the result
+/// shows only this run (`down` with 1 failure, or `up`).
+pub async fn run_once_detached(
+    name: String,
+    config: CheckConfig,
+    http: Option<reqwest::Client>,
+    service_configs: Arc<IndexMap<String, ServiceConfig>>,
+) -> CheckRefresh {
+    let timeout_dur = actor::timeout_of(&config);
+    let result = probe::perform(&config, timeout_dur, http.as_ref(), &service_configs).await;
+    let error = result.err();
+    CheckRefresh {
+        info: CheckInfo {
+            name,
+            level: config.level(),
+            status: if error.is_some() {
+                CheckStatus::Down
+            } else {
+                CheckStatus::Up
+            },
+            failures: u32::from(error.is_some()),
+            threshold: config.threshold.unwrap_or(actor::DEFAULT_THRESHOLD),
+            next_run_in_secs: None,
+            last_error: error.clone(),
+        },
+        error,
+    }
 }
 
 pub struct CheckEvent {

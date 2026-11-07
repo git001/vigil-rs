@@ -12,11 +12,47 @@ pub enum ChecksCmd {
         /// Filter by check name(s).
         names: Vec<String>,
     },
+    /// Run a check now and print the result. The run counts like a
+    /// scheduled one. Exit code 0 when it passed, 1 when it failed.
+    #[command(name = "run")]
+    Run {
+        /// The check to run.
+        name: String,
+    },
 }
 
 pub async fn run(client: &VigilClient, sub: ChecksCmd) -> anyhow::Result<()> {
-    let ChecksCmd::List { names } = sub;
-    let checks = client.list_checks(&names).await?;
+    match sub {
+        ChecksCmd::List { names } => list(client, &names).await,
+        ChecksCmd::Run { name } => run_check(client, &name).await,
+    }
+}
+
+/// `vigil checks run NAME`: `NAME: passed (…)` on stdout; on a failure
+/// `NAME: failed (…)`, then an error with the reason (exit code 1).
+async fn run_check(client: &VigilClient, name: &str) -> anyhow::Result<()> {
+    let result = client.refresh_check(name).await?;
+    let info = &result.info;
+    let state = format!(
+        "status {}, failures {}/{}",
+        format!("{:?}", info.status).to_lowercase(),
+        info.failures,
+        info.threshold
+    );
+    match result.error {
+        None => {
+            println!("{name}: passed ({state})");
+            Ok(())
+        }
+        Some(reason) => {
+            println!("{name}: failed ({state})");
+            anyhow::bail!("check {name} failed: {reason}")
+        }
+    }
+}
+
+async fn list(client: &VigilClient, names: &[String]) -> anyhow::Result<()> {
+    let checks = client.list_checks(names).await?;
     if checks.is_empty() {
         println!("No checks.");
         return Ok(());

@@ -84,6 +84,7 @@ vigild --layers-dir /etc/vigil/layers --socket /run/vigil/vigild.sock
 # Default: connect via Unix socket
 vigil services list
 vigil checks list
+vigil checks run myservice-alive   # run a check now; exit code 1 when it fails
 vigil logs -f
 vigil services start myservice
 vigil services restart myservice

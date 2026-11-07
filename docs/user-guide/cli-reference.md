@@ -209,6 +209,24 @@ postgres-ready           ready    down   3/3        2s         exit status 2: lo
 cut to 60 characters. `GET /v1/checks` has the full text (`last-error`). See
 [Why a check fails](configuration.md#why-a-check-fails).
 
+#### `checks run NAME`
+
+Run a check now (`POST /v1/checks/refresh`) and print the result. The run
+counts like a scheduled one (failures, threshold, status, alerts); a check
+with `startup: disabled` runs once without changing any state.
+
+```bash
+vigil checks run postgres-ready
+```
+
+```
+postgres-ready: failed (status down, failures 3/3)
+Error: check postgres-ready failed: exit status 2: localhost:5432 - no response
+```
+
+Exit code 0 when the check passed (`postgres-ready: passed (status up,
+failures 0/3)`), 1 when it failed or does not exist.
+
 ---
 
 ### `logs [SERVICE...] [-n N] [-f]`

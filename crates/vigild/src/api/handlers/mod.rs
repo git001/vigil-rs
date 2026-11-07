@@ -73,7 +73,7 @@ pub(super) fn parse_services(q: &LogsQuery) -> Vec<String> {
 
 pub(crate) use admin::replan;
 pub(crate) use alerts::list_alerts;
-pub(crate) use checks::list_checks;
+pub(crate) use checks::{list_checks, refresh_check};
 pub(crate) use identities::{add_identities, daemon_action, list_identities, remove_identities};
 pub(crate) use logs::{follow_logs, get_logs};
 pub(crate) use metrics::get_metrics;

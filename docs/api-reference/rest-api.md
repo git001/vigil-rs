@@ -25,7 +25,7 @@ levels are ordered from least to most privileged:
 | `open` | No credentials needed | `GET /v1/system-info`, `GET /v1/checks` |
 | `metrics` | Basic Auth, local UID, or TLS client cert | `GET /v1/metrics` |
 | `read` | — | All other `GET` endpoints |
-| `write` | — | `POST /v1/services`, `POST /v1/replan` |
+| `write` | — | `POST /v1/services`, `POST /v1/checks/refresh`, `POST /v1/replan` |
 | `admin` | — | `POST /v1/vigild`, all `/v1/identities` endpoints |
 
 Each endpoint table below lists its **required level**.
@@ -313,7 +313,17 @@ List health checks and their current status.
       "level": "alive",
       "status": "up",
       "failures": 0,
-      "threshold": 3
+      "threshold": 3,
+      "next-run-in-secs": 7
+    },
+    {
+      "name": "db-ready",
+      "level": "ready",
+      "status": "down",
+      "failures": 3,
+      "threshold": 3,
+      "next-run-in-secs": 2,
+      "last-error": "connect localhost:5432: Connection refused (os error 111)"
     }
   ]
 }
@@ -321,12 +331,69 @@ List health checks and their current status.
 
 **Check status values:** `up` | `down`
 
+`next-run-in-secs` is absent during the initial `delay`. `last-error` is why
+the last run failed, until a run passes; see [Why a check
+fails](../user-guide/configuration.md#why-a-check-fails).
+
 **Example:**
 
 ```bash
 curl --unix-socket /run/vigil/vigild.sock http://localhost/v1/checks
 curl --unix-socket /run/vigil/vigild.sock \
   "http://localhost/v1/checks?names=myapp-alive"
+```
+
+---
+
+### `POST /v1/checks/refresh`
+
+**Required access level:** `write`
+
+Run a check now and return its state after the run. Same path and body as
+Pebble. The run counts like a scheduled one: failures, `threshold`, status
+and alerts. A check with `startup: disabled` runs once without changing any
+state; the result then shows only that run.
+
+**Request body:**
+
+```json
+{"name": "db-ready"}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | The check to run. Unknown fields are rejected. |
+
+**Response** `200 OK`
+
+```json
+{
+  "type": "sync",
+  "status-code": 200,
+  "status": "OK",
+  "result": {
+    "info": {
+      "name": "db-ready",
+      "level": "ready",
+      "status": "down",
+      "failures": 3,
+      "threshold": 3,
+      "next-run-in-secs": 7,
+      "last-error": "connect localhost:5432: Connection refused (os error 111)"
+    },
+    "error": "connect localhost:5432: Connection refused (os error 111)"
+  }
+}
+```
+
+`error` is why this run failed; it is absent when the run passed. An unknown
+check is `404 Not Found`.
+
+**Example:**
+
+```bash
+curl --unix-socket /run/vigil/vigild.sock -X POST \
+  -d '{"name": "db-ready"}' http://localhost/v1/checks/refresh
 ```
 
 ---

@@ -50,6 +50,13 @@ pub enum Cmd {
         names: Vec<String>,
         reply: oneshot::Sender<Vec<CheckInfo>>,
     },
+    /// Run a check now (`POST /v1/checks/refresh`). `None`: no check of
+    /// that name in the plan. The overlord only hands the request on; the
+    /// reply comes from the check, so a slow probe never blocks it.
+    RefreshCheck {
+        name: String,
+        reply: oneshot::Sender<Option<vigil_types::api::CheckRefresh>>,
+    },
     GetAlerts {
         names: Vec<String>,
         reply: oneshot::Sender<Vec<AlertInfo>>,

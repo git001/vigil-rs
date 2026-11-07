@@ -1,4 +1,4 @@
-vtest "why a check fails: last-error in GET /v1/checks, vigil checks list, the log and the alert"
+vtest "why a check fails: last-error in GET /v1/checks, vigil checks list/run, the log and the alert"
 
 shell { mkdir -p ${tmpdir}/layers }
 
@@ -57,6 +57,21 @@ shell {
 	grep -F 'check is down' ${tmpdir}/vigild.log | grep -qF 'error="exit status 2: migration 42 pending'
 }
 
+# vigil checks run: runs it now, exit code 1 and the reason on a failure.
+shell {
+	if ${vigil} --socket ${tmpdir}/vigild.sock checks run migrate-done > ${tmpdir}/run.out 2> ${tmpdir}/run.err; then
+		echo "checks run should fail"; exit 1
+	fi
+	grep -qF 'migrate-done: failed (status down' ${tmpdir}/run.out
+	grep -qF 'check migrate-done failed: exit status 2: migration 42 pending' ${tmpdir}/run.err
+}
+
+# An unknown check: the API answers 404, the CLI fails.
+shell {
+	! ${vigil} --socket ${tmpdir}/vigild.sock checks run no-such-check 2> ${tmpdir}/run404.err
+	grep -qF 'Error: check "no-such-check" not found' ${tmpdir}/run404.err
+}
+
 # The alert message carries the reason.
 shell {
 	for i in $(seq 1 40); do
@@ -76,6 +91,12 @@ shell {
 	done
 	grep -q '"status":"up"' ${tmpdir}/checks2.json
 	! grep -q '"last-error"' ${tmpdir}/checks2.json
+}
+
+# vigil checks run on a passing check: exit code 0.
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock checks run migrate-done > ${tmpdir}/run2.out
+	grep -qF 'migrate-done: passed (status up, failures 0/1)' ${tmpdir}/run2.out
 }
 
 shell {

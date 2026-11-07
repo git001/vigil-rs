@@ -198,6 +198,25 @@ pub struct CheckInfo {
     pub last_error: Option<String>,
 }
 
+/// Body of `POST /v1/checks/refresh` (Pebble's shape).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct CheckRefreshRequest {
+    /// The check to run now.
+    pub name: String,
+}
+
+/// Result of `POST /v1/checks/refresh`: the check after the run, and why
+/// the run failed.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub struct CheckRefresh {
+    pub info: CheckInfo,
+    /// Why this run failed; absent when it passed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Alerts
 // ---------------------------------------------------------------------------

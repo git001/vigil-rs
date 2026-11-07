@@ -42,6 +42,7 @@ impl Overlord {
                 let infos = self.query_checks(&names).await;
                 let _ = reply.send(infos);
             }
+            Cmd::RefreshCheck { name, reply } => self.refresh_check(name, reply),
             Cmd::GetAlerts { names, reply } => {
                 let infos = self.query_alerts(&names);
                 let _ = reply.send(infos);
@@ -190,7 +191,7 @@ impl Overlord {
             .collect()
     }
 
-    async fn query_checks(&self, names: &[String]) -> Vec<vigil_types::api::CheckInfo> {
+    pub(super) async fn query_checks(&self, names: &[String]) -> Vec<vigil_types::api::CheckInfo> {
         let mut infos = Vec::new();
         for (name, entry) in &self.checks {
             if names.is_empty() || names.contains(name) {
@@ -208,6 +209,41 @@ impl Overlord {
             }
         }
         infos
+    }
+
+    /// Hand a refresh to the check's actor, or run a check without one
+    /// (`startup: disabled`) once in a task of its own. Never waits for the
+    /// probe.
+    pub(super) fn refresh_check(
+        &self,
+        name: String,
+        reply: oneshot::Sender<Option<vigil_types::api::CheckRefresh>>,
+    ) {
+        let Some(config) = self.plan.checks.get(&name) else {
+            let _ = reply.send(None);
+            return;
+        };
+        if let Some(entry) = self.checks.get(&name) {
+            let tx = entry.handle.tx.clone();
+            tokio::spawn(async move {
+                let (inner_tx, inner_rx) = oneshot::channel();
+                if tx.send(check::Cmd::Refresh(inner_tx)).await.is_ok()
+                    && let Ok(result) = inner_rx.await
+                {
+                    let _ = reply.send(Some(result));
+                }
+                // Otherwise the actor stopped meanwhile (replan): dropping
+                // `reply` makes the request fail.
+            });
+            return;
+        }
+        let config = config.clone();
+        let http = self.check_clients.get(&name).cloned();
+        let svc_configs = std::sync::Arc::new(self.plan.services.clone());
+        tokio::spawn(async move {
+            let result = check::run_once_detached(name, config, http, svc_configs).await;
+            let _ = reply.send(Some(result));
+        });
     }
 
     fn query_alerts(&self, names: &[String]) -> Vec<AlertInfo> {

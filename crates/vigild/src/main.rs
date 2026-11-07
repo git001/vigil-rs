@@ -47,6 +47,7 @@ enum LogFormat {
     "  POST   /v1/services               start / stop / restart services\n",
     "  GET    /v1/changes/{id}           inspect a change record\n",
     "  GET    /v1/checks[?names=]        list health checks\n",
+    "  POST   /v1/checks/refresh         run a check now\n",
     "  GET    /v1/alerts[?names=]        list alert configurations and check status\n",
     "  GET    /v1/logs[?services=&n=]    tail service stdout/stderr\n",
     "  GET    /v1/logs/follow[?services=] stream logs as SSE\n",

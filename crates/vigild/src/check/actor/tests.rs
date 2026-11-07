@@ -319,3 +319,87 @@ async fn failure_reason_is_reported_and_cleared_by_a_pass() {
     assert_eq!(get_status(&tx).await.last_error, None);
     let _ = tx.send(Cmd::Shutdown).await;
 }
+
+async fn refresh(tx: &mpsc::Sender<Cmd>) -> vigil_types::api::CheckRefresh {
+    let (reply_tx, reply_rx) = oneshot::channel();
+    tx.send(Cmd::Refresh(reply_tx)).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), reply_rx)
+        .await
+        .expect("refresh timed out")
+        .unwrap()
+}
+
+// A refresh during the initial delay runs at once and counts like a
+// scheduled run: failures, threshold, Down, an event with the reason.
+#[tokio::test]
+async fn refresh_runs_now_and_counts_like_a_scheduled_run() {
+    let config = CheckConfig {
+        delay: Some("1h".to_string()),
+        threshold: Some(2),
+        exec: Some(ExecCheck {
+            command: "echo not ready; exit 1".to_string(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let (tx, mut event_rx) = spawn_actor(config, CheckStatus::Up);
+
+    let first = refresh(&tx).await;
+    assert_eq!(first.error.as_deref(), Some("exit status 1: not ready"));
+    assert_eq!(first.info.status, CheckStatus::Up);
+    assert_eq!(first.info.failures, 1);
+    // The first run reports the initial status.
+    let ev = event_rx.recv().await.unwrap();
+    assert_eq!(ev.status, CheckStatus::Up);
+
+    let second = refresh(&tx).await;
+    assert_eq!(second.info.status, CheckStatus::Down);
+    assert_eq!(second.info.failures, 2);
+    assert_eq!(
+        second.info.last_error.as_deref(),
+        Some("exit status 1: not ready")
+    );
+    let ev = event_rx.recv().await.unwrap();
+    assert_eq!(ev.status, CheckStatus::Down);
+    assert_eq!(ev.error.as_deref(), Some("exit status 1: not ready"));
+
+    // GetStatus sees the same state.
+    assert_eq!(get_status(&tx).await.failures, 2);
+    let _ = tx.send(Cmd::Shutdown).await;
+}
+
+// A passing refresh after the delay resets the failures and has no error.
+#[tokio::test]
+async fn refresh_that_passes_has_no_error() {
+    let (tx, _event_rx) = spawn_actor(exec_cfg("true", 3), CheckStatus::Up);
+    let result = refresh(&tx).await;
+    assert_eq!(result.error, None);
+    assert_eq!(result.info.status, CheckStatus::Up);
+    assert_eq!(result.info.failures, 0);
+    let _ = tx.send(Cmd::Shutdown).await;
+}
+
+// A check without an actor (startup: disabled) runs once, detached: the
+// result shows only that run.
+#[tokio::test]
+async fn detached_run_reports_only_this_run() {
+    let config = exec_cfg("echo nope >&2; exit 4", 3);
+    let result =
+        crate::check::run_once_detached("off".into(), config, None, Arc::new(IndexMap::new()))
+            .await;
+    assert_eq!(result.error.as_deref(), Some("exit status 4: nope"));
+    assert_eq!(result.info.status, CheckStatus::Down);
+    assert_eq!(result.info.failures, 1);
+    assert_eq!(result.info.threshold, 3);
+
+    let ok = crate::check::run_once_detached(
+        "off".into(),
+        exec_cfg("true", 3),
+        None,
+        Arc::new(IndexMap::new()),
+    )
+    .await;
+    assert_eq!(ok.error, None);
+    assert_eq!(ok.info.status, CheckStatus::Up);
+    assert_eq!(ok.info.failures, 0);
+}

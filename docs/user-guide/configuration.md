@@ -261,7 +261,7 @@ A `oneshot` service is `starting` while it runs. When it exits successfully
 (see `success-exit-codes`) it ends in the state **`done`** and is not
 restarted; services ordered after it (`after`, `requires`, `before`) start
 only then. A failure goes through `on-failure` as usual (default `restart`
-with backoff, so a migration is retried). `vigil start <name>` runs it again;
+with backoff, so a migration is retried). `vigil services start <name>` runs it again;
 `replan` does not (a finished migration is not repeated on every config
 change).
 
@@ -300,7 +300,7 @@ services:
   patterns, use 5 or 6 fields.
 - `startup: enabled` **arms** the schedule; the job does not run when vigild
   starts, only at the scheduled times. With `startup: disabled` the schedule
-  is not armed. `vigil start <name>` always runs the job once by hand.
+  is not armed. `vigil services start <name>` always runs the job once by hand.
 - A run that is still active when the next one is due is **skipped** (no
   overlapping runs).
 - Default `on-failure` for scheduled jobs is `ignore`: a failed run is
@@ -1074,6 +1074,12 @@ The reason of the last failed run is also:
 - in the alert message of a check that went down: `check db-ready failed:
   connect 127.0.0.1:5432: Connection refused (os error 111)`.
 
+To try a check at once instead of waiting for its period, run `vigil checks
+run db-ready` (`POST /v1/checks/refresh`). It prints the reason and exits
+with 1 when the check fails, so it fits scripts; the run counts like a
+scheduled one. A check with `startup: disabled` runs once without changing
+any state, which helps to test a check before enabling it.
+
 ---
 
 ## Alerts
@@ -1703,7 +1709,7 @@ identity "log-relay" (layer "001-auth"): password-hash-file: reading "/run/secre
 | `open` | `GET /v1/system-info`, `GET /v1/checks`, API docs — no authentication required |
 | `metrics` | `GET /v1/metrics` (Prometheus/OpenMetrics) |
 | `read` | All other `GET` endpoints |
-| `write` | `read` + service/check control (`POST /v1/services`, `POST /v1/checks`) |
+| `write` | `read` + service/check control (`POST /v1/services`, `POST /v1/checks/refresh`) |
 | `admin` | `write` + identity management (`POST /v1/identities`, `DELETE /v1/identities`) |
 
 ### Default access (caller without a matching identity)
