@@ -18,6 +18,7 @@ use super::notify::{NotifyMsg, NotifySocket};
 use super::{Cmd, Context, DEFAULT_BACKOFF_DELAY, Event, EventKind, ExitCodeMode};
 
 mod backoff;
+mod exit;
 mod handlers;
 mod health;
 mod oneshot;
