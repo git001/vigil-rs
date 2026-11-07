@@ -1232,24 +1232,80 @@ async fn autostart_defers_a_service_until_its_dependency_runs() {
     assert_eq!(ov.pending_autostart, ["app"]);
 }
 
+/// Plan for the autostart tests: `on` enabled, `off` disabled, `cron`
+/// enabled but scheduled, `late` enabled but `after: [blocker]`, which is
+/// disabled and never ready.
+fn autostart_overlord() -> Overlord {
+    let mut ov = make_overlord(
+        &[
+            ("on", &[], &[], &[]),
+            ("off", &[], &[], &[]),
+            ("cron", &[], &[], &[]),
+            ("late", &["blocker"], &[], &[]),
+            ("blocker", &[], &[], &[]),
+        ],
+        &[],
+    );
+    for name in ["on", "cron", "late"] {
+        ov.plan.services.get_mut(name).unwrap().startup = Some(Startup::Enabled);
+    }
+    ov.plan.services.get_mut("cron").unwrap().schedule = Some("0 3 * * *".into());
+    ov
+}
+
+/// Wait briefly, then report whether a command reached the stub.
+async fn got_command(rx: &mut mpsc::UnboundedReceiver<String>) -> bool {
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    rx.try_recv().is_ok()
+}
+
 #[tokio::test]
-async fn autostart_action_without_names_enables_and_starts_every_service() {
-    let mut ov = make_overlord(&[("a", &[], &[], &[]), ("b", &[], &[], &[])], &[]);
-    let mut a = stub_actor(&mut ov, "a");
-    let mut b = stub_actor(&mut ov, "b");
+async fn autostart_action_without_names_starts_what_startup_starts() {
+    let mut ov = autostart_overlord();
+    let mut on = stub_actor(&mut ov, "on");
+    let mut off = stub_actor(&mut ov, "off");
+    let mut cron = stub_actor(&mut ov, "cron");
+    let mut late = stub_actor(&mut ov, "late");
     let change = services_action(&mut ov, vigil_types::api::ServiceAction::Autostart, vec![]).await;
     assert_eq!(change.kind, "autostart");
     assert_eq!(change.status, vigil_types::api::ChangeStatus::Done);
-    assert_eq!(next_seen(&mut a).await, "start");
-    assert_eq!(next_seen(&mut b).await, "start");
-    for cfg in ov.plan.services.values() {
-        assert_eq!(cfg.startup, Some(Startup::Enabled));
-    }
+    assert_eq!(next_seen(&mut on).await, "start");
+    assert!(!got_command(&mut off).await, "disabled service started");
+    assert!(!got_command(&mut cron).await, "scheduled job started");
+    assert!(
+        !got_command(&mut late).await,
+        "started before its after dependency"
+    );
+    assert_eq!(ov.pending_autostart, ["late"]);
+    // The plan is not changed: off stays disabled.
+    assert_eq!(ov.plan.services["off"].startup(), Startup::Disabled);
 
     let (reply, rx) = tokio::sync::oneshot::channel();
     ov.handle_cmd(super::Cmd::GetChanges { id: None, reply })
         .await;
     assert_eq!(rx.await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn autostart_action_with_names_starts_only_those_it_covers() {
+    let mut ov = autostart_overlord();
+    let mut on = stub_actor(&mut ov, "on");
+    let mut off = stub_actor(&mut ov, "off");
+    let names = ["on", "off", "cron", "nope"].map(String::from).to_vec();
+    let change = services_action(&mut ov, vigil_types::api::ServiceAction::Autostart, names).await;
+    assert_eq!(next_seen(&mut on).await, "start");
+    assert!(!got_command(&mut off).await, "disabled service started");
+    assert_eq!(change.status, vigil_types::api::ChangeStatus::Error);
+    let err = change.err.unwrap();
+    for want in [
+        "off: startup is not enabled",
+        "cron: scheduled; its schedule starts it",
+        "nope: not in the plan",
+    ] {
+        assert!(err.contains(want), "{want}: {err}");
+    }
+    assert!(!err.starts_with("on:") && !err.contains("; on:"), "{err}");
+    assert_eq!(ov.plan.services["off"].startup(), Startup::Disabled);
 }
 
 #[tokio::test]

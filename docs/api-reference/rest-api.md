@@ -202,7 +202,7 @@ Pass an empty `services` array to act on all services.
 | `start` | Start the specified services |
 | `stop` | Stop the specified services |
 | `restart` | Stop then start the specified services |
-| `autostart` | Start all services with `startup: enabled` |
+| `autostart` | Start the services vigild starts at startup: `startup: enabled`, not scheduled, no oneshot that has already run; each once its `after` dependencies are ready. With `services`, only those; a listed service that autostart does not cover (disabled, scheduled, unknown) is reported in `err`. The plan is not changed. |
 | `replan` | Alias for `POST /v1/replan` |
 
 **Response** `200 OK`

@@ -6,7 +6,7 @@
 use chrono::Utc;
 use tokio::sync::oneshot;
 use vigil_types::api::{AlertInfo, ChangeInfo, ChangeStatus, ServiceInfo, SystemInfo};
-use vigil_types::plan::{OnExit, Startup};
+use vigil_types::plan::OnExit;
 
 use crate::check;
 use crate::service::Cmd as SvcCmd;
@@ -72,6 +72,11 @@ impl Overlord {
     ) -> anyhow::Result<ChangeInfo> {
         use vigil_types::api::ServiceAction;
 
+        if action == ServiceAction::Autostart {
+            let (targets, errors) = self.autostart_action(names).await;
+            return Ok(self.record_change(action, &targets, errors));
+        }
+
         let targets: Vec<String> = if names.is_empty() {
             self.plan.services.keys().cloned().collect()
         } else {
@@ -84,19 +89,47 @@ impl Overlord {
                 ServiceAction::Start => self.svc_cmd(name, SvcCmd::Start).await,
                 ServiceAction::Stop => self.svc_cmd(name, SvcCmd::Stop).await,
                 ServiceAction::Restart => self.svc_cmd(name, SvcCmd::Restart).await,
-                ServiceAction::Autostart => {
-                    if let Some(svc) = self.plan.services.get_mut(name) {
-                        svc.startup = Some(Startup::Enabled);
-                    }
-                    self.svc_cmd(name, SvcCmd::Start).await
-                }
                 ServiceAction::Replan => self.reload_layers().await,
+                ServiceAction::Autostart => unreachable!("handled above"),
             };
             if let Err(e) = res {
                 errors.push(format!("{name}: {e:#}"));
             }
         }
 
+        Ok(self.record_change(action, &targets, errors))
+    }
+
+    /// `autostart`: the services the startup autostart covers (`startup:
+    /// enabled`, not scheduled, no finished oneshot), each started once its
+    /// `after` dependencies are ready. Without names all of them; with names
+    /// only those, and each name autostart does not cover is an error. The
+    /// plan is not changed.
+    async fn autostart_action(&mut self, names: Vec<String>) -> (Vec<String>, Vec<String>) {
+        let (targets, mut errors) = if names.is_empty() {
+            (self.autostart_names(), Vec::new())
+        } else {
+            let mut targets = Vec::new();
+            let mut errors = Vec::new();
+            for name in names {
+                match self.autostart_skip_reason(&name) {
+                    None => targets.push(name),
+                    Some(why) => errors.push(format!("{name}: {why}")),
+                }
+            }
+            (targets, errors)
+        };
+        errors.extend(self.start_or_defer(targets.clone()).await);
+        (targets, errors)
+    }
+
+    /// Record a finished change (all service actions are synchronous).
+    fn record_change(
+        &mut self,
+        action: vigil_types::api::ServiceAction,
+        targets: &[String],
+        errors: Vec<String>,
+    ) -> ChangeInfo {
         self.change_counter += 1;
         let now = Utc::now();
         let (status, err_msg) = if errors.is_empty() {
@@ -114,7 +147,7 @@ impl Overlord {
             err: err_msg,
         };
         self.changes.push(change.clone());
-        Ok(change)
+        change
     }
 
     fn get_service_infos(&self, names: &[String]) -> Vec<ServiceInfo> {

@@ -132,26 +132,54 @@ impl Overlord {
         }
     }
 
+    /// Start every service autostart covers (at startup, on replan).
     pub(super) async fn autostart(&mut self) {
-        let names: Vec<String> = self
-            .plan
-            .services
-            .iter()
-            // Scheduled jobs are started by their schedule, not at startup.
-            .filter(|(_, c)| c.startup() == Startup::Enabled && c.schedule.is_none())
-            // A finished oneshot is not run again by a replan.
-            .filter(|(n, _)| {
-                self.services
-                    .get(*n)
-                    .is_none_or(|e| e.snapshot.state != ServiceState::Done)
-            })
-            .map(|(n, _)| n.clone())
-            .collect();
+        let names = self.autostart_names();
+        self.start_or_defer(names).await;
+    }
 
+    /// The services autostart covers, in plan order.
+    pub(super) fn autostart_names(&self) -> Vec<String> {
+        self.plan
+            .services
+            .keys()
+            .filter(|n| self.autostart_skip_reason(n).is_none())
+            .cloned()
+            .collect()
+    }
+
+    /// Why autostart leaves `name` alone; `None` if it starts it.
+    pub(super) fn autostart_skip_reason(&self, name: &str) -> Option<&'static str> {
+        let Some(cfg) = self.plan.services.get(name) else {
+            return Some("not in the plan");
+        };
+        if cfg.startup() != Startup::Enabled {
+            return Some("startup is not enabled");
+        }
+        // Scheduled jobs are started by their schedule, not at startup.
+        if cfg.schedule.is_some() {
+            return Some("scheduled; its schedule starts it");
+        }
+        // A finished oneshot is not run again by a replan.
+        if self
+            .services
+            .get(name)
+            .is_some_and(|e| e.snapshot.state == ServiceState::Done)
+        {
+            return Some("oneshot has already run");
+        }
+        None
+    }
+
+    /// Start each service now, or queue it until its `after` dependencies
+    /// are ready. Returns the start errors as `name: error`.
+    pub(super) async fn start_or_defer(&mut self, names: Vec<String>) -> Vec<String> {
+        let mut errors = Vec::new();
         for name in names {
             if self.after_deps_running(&name) {
                 if let Err(e) = self.svc_cmd(&name, SvcCmd::Start).await {
                     error!(service = %name, error = %e, "autostart failed");
+                    errors.push(format!("{name}: {e:#}"));
                 }
             } else {
                 info!(service = %name, "deferring autostart: waiting for dependencies to become ready");
@@ -160,6 +188,7 @@ impl Overlord {
                 }
             }
         }
+        errors
     }
 
     /// Returns `true` if all ordering dependencies of `name` are ready

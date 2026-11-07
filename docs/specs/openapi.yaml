@@ -90,7 +90,7 @@ paths:
         - `start` — start the named services (or all if empty)
         - `stop` — stop the named services
         - `restart` — restart the named services
-        - `autostart` — mark services as enabled and start them
+        - `autostart` — start the services vigild starts at startup (`startup: enabled`, not scheduled), or only the named ones among them; the plan is not changed
         - `replan` — reload layers and apply changes (equivalent to `POST /v1/replan`)
       requestBody:
         required: true
