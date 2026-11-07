@@ -242,3 +242,67 @@ fn record_oneshot_run_counts_by_result() {
     );
     assert!(out.contains(r#"vigil_service_last_run_success{service="job"} 0"#));
 }
+
+#[test]
+fn check_run_histograms_by_result_and_dropped_with_the_check() {
+    use std::time::Duration;
+    let m = MetricsStore::new();
+    m.set_checks(&[("api", Alive)]);
+    m.record_check_run(
+        "api",
+        Alive,
+        true,
+        Duration::from_millis(30),
+        Some(Duration::from_millis(4)),
+    );
+    m.record_check_run("api", Alive, false, Duration::from_secs(3), None);
+    let out = m.render();
+    let success = r#"check="api",level="alive",result="success""#;
+    let error = r#"check="api",level="alive",result="error""#;
+    assert!(
+        out.contains(&format!(
+            "vigil_check_duration_seconds_count{{{success}}} 1"
+        )),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!("vigil_check_duration_seconds_sum{{{error}}} 3.0")),
+        "{out}"
+    );
+    // 30 ms lands in the 0.05 bucket, not in 0.025.
+    assert!(
+        out.contains(&format!(
+            r#"vigil_check_duration_seconds_bucket{{le="0.025",{success}}} 0"#
+        )),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!(
+            r#"vigil_check_duration_seconds_bucket{{le="0.05",{success}}} 1"#
+        )),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!(
+            r#"vigil_check_duration_seconds_bucket{{le="60.0",{error}}} 1"#
+        )),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!(
+            "vigil_check_connect_duration_seconds_count{{{success}}} 1"
+        )),
+        "{out}"
+    );
+    // The failed run had no connection: no connect series for it.
+    assert!(
+        !out.contains(&format!(
+            "vigil_check_connect_duration_seconds_count{{{error}}}"
+        )),
+        "{out}"
+    );
+
+    m.set_checks(&[]);
+    let out = m.render();
+    assert!(!out.contains(r#"check="api""#), "{out}");
+}

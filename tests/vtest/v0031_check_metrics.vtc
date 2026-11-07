@@ -1,4 +1,4 @@
-vtest "Check metrics: level label, vigil_health per level, outages and time down"
+vtest "Check metrics: level label, vigil_health per level, outages, time down and run durations"
 
 # vigild loads the static layer directory and logs to stdout, the terminal
 # of p1; -expect-text waits there for a line. A wide terminal keeps long log
@@ -45,6 +45,19 @@ client c3 -connect ${tmpdir}/vigild.sock {
 	expect resp.body ~ "vigil_check_up.check=.db.,level=.ready.. 1"
 	expect resp.body ~ "vigil_check_down_count_total.check=.db.,level=.ready.. 1\n"
 	expect resp.body ~ "vigil_check_down_seconds_total.check=.db.,level=.ready.. [1-9]"
+} -run
+
+# Every run went into vigil_check_duration_seconds, by result: app passed,
+# db failed (and passed once at the end). Exec checks have no connection,
+# so there is no connect histogram.
+client c4 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /v1/metrics -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "vigil_check_duration_seconds_count.check=.app.,level=.alive.,result=.success.. [1-9]"
+	expect resp.body ~ "vigil_check_duration_seconds_count.check=.db.,level=.ready.,result=.error.. [1-9]"
+	expect resp.body ~ "vigil_check_duration_seconds_count.check=.db.,level=.ready.,result=.success.. [1-9]"
+	expect resp.body !~ "vigil_check_connect_duration_seconds_count"
 } -run
 
 process p1 -kill TERM

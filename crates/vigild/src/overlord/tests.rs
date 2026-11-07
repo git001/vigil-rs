@@ -1414,8 +1414,7 @@ async fn sync_actors_hands_the_new_http_client_to_unchanged_checks() {
     };
     ov.plan.checks.insert("web".into(), web.clone());
     ov.plan.checks.insert("cmd".into(), exec.clone());
-    ov.check_clients
-        .insert("web".into(), reqwest::Client::builder().build().unwrap());
+    ov.check_clients = crate::check::prepare_checks(&ov.plan.checks).unwrap();
 
     let mut rxs = Vec::new();
     for (name, config) in [("web", web), ("cmd", exec)] {

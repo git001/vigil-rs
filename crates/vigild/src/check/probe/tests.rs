@@ -8,7 +8,6 @@ use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper_util::rt::TokioIo;
 use indexmap::IndexMap;
-use reqwest::Client as HttpClient;
 use tower::Service;
 use vigil_types::plan::{CheckConfig, HttpCheck, ProxyConfig, TlsConfig};
 
@@ -78,7 +77,7 @@ fn make_check(url: String) -> HttpCheck {
 }
 
 /// The client `prepare_checks` builds for `check`.
-fn client(check: &HttpCheck) -> HttpClient {
+fn client(check: &HttpCheck) -> super::CheckClient {
     super::http::client(check).unwrap()
 }
 
@@ -324,6 +323,7 @@ async fn http_check_without_a_client_fails() {
     assert!(
         !perform(&config, Duration::from_secs(1), None, &empty_svc_configs())
             .await
+            .result
             .is_ok()
     );
 }
@@ -557,6 +557,7 @@ async fn no_check_configured_returns_true() {
     let config = CheckConfig::default();
     let result = perform(&config, Duration::from_secs(5), None, &empty_svc_configs())
         .await
+        .result
         .is_ok();
     assert!(result);
 }
@@ -579,6 +580,7 @@ async fn tcp_check_via_perform_dispatcher() {
     };
     let result = perform(&config, Duration::from_secs(5), None, &empty_svc_configs())
         .await
+        .result
         .is_ok();
     assert!(result);
 }
@@ -599,6 +601,7 @@ async fn tcp_check_default_host_via_perform() {
     };
     let result = perform(&config, Duration::from_secs(5), None, &empty_svc_configs())
         .await
+        .result
         .is_ok();
     assert!(result);
 }
@@ -823,4 +826,136 @@ fn closed_port() -> u16 {
         .local_addr()
         .unwrap()
         .port()
+}
+
+// ------------------------------------------------------------------
+// Connect time (vigil_check_connect_duration_seconds)
+// ------------------------------------------------------------------
+
+fn http_config(check: HttpCheck) -> CheckConfig {
+    CheckConfig {
+        http: Some(check),
+        ..Default::default()
+    }
+}
+
+// The client keeps no idle connection: every run connects and is measured.
+#[tokio::test]
+async fn http_connect_is_measured_on_every_run() {
+    let app = Router::new().route("/ok", get(|| async { StatusCode::OK }));
+    let port = spawn_http_server(app).await;
+    let check = make_check(format!("http://127.0.0.1:{port}/ok"));
+    let client = client(&check);
+    let config = http_config(check);
+    for _ in 0..2 {
+        let probe = perform(
+            &config,
+            Duration::from_secs(5),
+            Some(&client),
+            &empty_svc_configs(),
+        )
+        .await;
+        assert!(probe.result.is_ok());
+        let connect = probe.connect.expect("connect time");
+        assert!(connect < Duration::from_secs(5), "{connect:?}");
+    }
+}
+
+// https: the connect includes the TLS handshake.
+#[tokio::test]
+async fn https_connect_is_measured() {
+    init_crypto();
+    let app = Router::new().route("/", get(|| async { StatusCode::OK }));
+    let (port, _cert_der) = spawn_tls_server(app).await;
+    let mut check = make_check(format!("https://localhost:{port}/"));
+    check.tls = Some(TlsConfig {
+        insecure: true,
+        ..Default::default()
+    });
+    let client = client(&check);
+    let probe = perform(
+        &http_config(check),
+        Duration::from_secs(5),
+        Some(&client),
+        &empty_svc_configs(),
+    )
+    .await;
+    assert!(probe.result.is_ok());
+    assert!(probe.connect.is_some());
+}
+
+// No connection came up: nothing to measure. A failed run does not keep the
+// time of an earlier one.
+#[tokio::test]
+async fn refused_connection_has_no_connect_time() {
+    let app = Router::new().route("/ok", get(|| async { StatusCode::OK }));
+    let port = spawn_http_server(app).await;
+    let check = make_check(format!("http://127.0.0.1:{port}/ok"));
+    let client = client(&check);
+    let ok = perform(
+        &http_config(check),
+        Duration::from_secs(5),
+        Some(&client),
+        &empty_svc_configs(),
+    )
+    .await;
+    assert!(ok.connect.is_some());
+
+    // The same client against a closed port.
+    let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let closed_port = closed.local_addr().unwrap().port();
+    drop(closed);
+    let refused = make_check(format!("http://127.0.0.1:{closed_port}/ok"));
+    let probe = perform(
+        &http_config(refused),
+        Duration::from_secs(5),
+        Some(&client),
+        &empty_svc_configs(),
+    )
+    .await;
+    assert!(probe.result.is_err());
+    assert_eq!(probe.connect, None);
+}
+
+#[tokio::test]
+async fn tcp_connect_time_only_on_success_and_none_for_exec() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let tcp = |port| CheckConfig {
+        tcp: Some(TcpCheck {
+            host: Some("127.0.0.1".to_string()),
+            port,
+        }),
+        ..Default::default()
+    };
+    let probe = perform(
+        &tcp(port),
+        Duration::from_secs(5),
+        None,
+        &empty_svc_configs(),
+    )
+    .await;
+    assert!(probe.result.is_ok());
+    assert!(probe.connect.is_some());
+    drop(listener);
+    let probe = perform(
+        &tcp(port),
+        Duration::from_secs(5),
+        None,
+        &empty_svc_configs(),
+    )
+    .await;
+    assert!(probe.result.is_err());
+    assert_eq!(probe.connect, None);
+
+    let exec = CheckConfig {
+        exec: Some(vigil_types::plan::ExecCheck {
+            command: "true".into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let probe = perform(&exec, Duration::from_secs(5), None, &empty_svc_configs()).await;
+    assert!(probe.result.is_ok());
+    assert_eq!(probe.connect, None);
 }

@@ -43,6 +43,13 @@ to `startup: disabled` or gives another `level` loses its series.
 | `vigil_check_failure_count_total{check,level}` | counter | Runs that failed, also those below `threshold`. |
 | `vigil_check_down_count_total{check,level}` | counter | Outages: how often the check went from up to down. One outage counts once, however many runs fail during it. |
 | `vigil_check_down_seconds_total{check,level}` | counter | Time the check spent down. It grows at each run while the check is down and when it recovers, so it lags behind by up to one `period`. |
+| `vigil_check_duration_seconds{check,level,result}` | histogram | How long a run took, from its start to its result. `result` is `success` or `error`. A run that times out counts with the check's `timeout`. |
+| `vigil_check_connect_duration_seconds{check,level,result}` | histogram | How long the connection took to come up. http: DNS, TCP connect, TLS handshake and a proxy tunnel; tcp: the connect. Exec checks and runs whose connection never came up have no value. |
+
+The histograms have the buckets 1ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms,
+500ms, 1s, 2.5s, 5s, 10s, 30s and 60s, and the series `_bucket`, `_sum` and
+`_count`. An HTTP check opens a new connection on every run, so each run
+has a connect time.
 
 ## Services
 
@@ -107,6 +114,21 @@ Failed runs that have not (yet) made a check down, an early warning:
 ```promql
 increase(vigil_check_failure_count_total[15m]) > 0 and on (check, instance) vigil_check_up == 1
 ```
+
+How long the runs of each check take, the 95th percentile over 5 minutes:
+
+```promql
+histogram_quantile(0.95, sum by (check, le) (rate(vigil_check_duration_seconds_bucket[5m])))
+```
+
+The connect alone (a slow DNS or TLS handshake):
+
+```promql
+histogram_quantile(0.95, sum by (check, le) (rate(vigil_check_connect_duration_seconds_bucket[5m])))
+```
+
+Runs that time out are counted with the check's `timeout`, so a 95th
+percentile at the timeout means at least 5 % of the runs ran out of time.
 
 A service restarts often:
 

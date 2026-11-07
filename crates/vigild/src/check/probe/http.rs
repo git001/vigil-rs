@@ -3,23 +3,24 @@
 
 use std::time::Duration;
 
-use reqwest::Client as HttpClient;
 use tokio::time::timeout;
 use tracing::debug;
 use vigil_types::plan::HttpCheck;
 
-use super::{ProbeResult, timed_out};
+use super::{CheckClient, ProbeResult, timed_out};
 
 /// The client of an HTTP check: its redirect policy, `tls:` and `proxy:`.
 /// Reads the `tls:` files: built once when the layers are loaded, off the
 /// async runtime.
-pub(crate) fn client(check: &HttpCheck) -> anyhow::Result<HttpClient> {
-    let builder = HttpClient::builder().redirect(if check.no_follow_redirects {
+pub(crate) fn client(check: &HttpCheck) -> anyhow::Result<CheckClient> {
+    let builder = reqwest::Client::builder().redirect(if check.no_follow_redirects {
         reqwest::redirect::Policy::none()
     } else {
         reqwest::redirect::Policy::default()
     });
-    crate::tls::build_http_client(builder, check.tls.as_ref(), check.proxy.as_ref())
+    let builder =
+        crate::tls::configure_http_client(builder, check.tls.as_ref(), check.proxy.as_ref())?;
+    Ok(CheckClient::build(builder)?)
 }
 
 /// The innermost source of `e`: `Connection refused (os error 111)`,
@@ -36,11 +37,11 @@ fn root_cause(e: &(dyn std::error::Error + 'static)) -> String {
 }
 
 pub(super) async fn probe_http(
-    client: &HttpClient,
+    client: &CheckClient,
     check: &HttpCheck,
     timeout_dur: Duration,
 ) -> ProbeResult {
-    let mut req = client.get(&check.url);
+    let mut req = client.http.get(&check.url);
     for (name, value) in &check.headers {
         req = req.header(name.as_str(), value.as_str());
     }

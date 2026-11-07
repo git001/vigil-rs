@@ -1004,6 +1004,12 @@ The check passes if the HTTP response status is 2xx (default), or one of the
 codes listed in `success-statuses`. The `url` field supports `http://` and
 `https://`.
 
+Every run opens a new connection (DNS, TCP, TLS handshake) and closes it
+afterwards: the check tests that a client can connect, not only that an
+open connection still answers. The time this takes is the metric
+`vigil_check_connect_duration_seconds`, see
+[Metrics](../operator-guide/metrics.md).
+
 | Field | Default | Description |
 |-------|---------|-------------|
 | `url` | — | HTTP or HTTPS URL to request |

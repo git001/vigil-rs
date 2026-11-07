@@ -25,7 +25,7 @@ pub fn validate_period(cfg: &CheckConfig) -> anyhow::Result<()> {
 }
 
 /// The HTTP clients of the HTTP checks, by check name.
-pub type PreparedChecks = IndexMap<String, reqwest::Client>;
+pub type PreparedChecks = IndexMap<String, probe::CheckClient>;
 
 /// Build the client of every HTTP check (its `tls:` and `proxy:`), once
 /// when the layers are loaded: an unreadable `tls.ca` or a bad proxy URL is
@@ -52,7 +52,7 @@ pub enum Cmd {
     /// The HTTP client built by a replan (it re-reads `tls.ca` and the
     /// other files): replaces the actor's client and keeps its status
     /// and failure count.
-    SetHttpClient(reqwest::Client),
+    SetHttpClient(probe::CheckClient),
     /// Run the probe now and count it like a scheduled run
     /// (`POST /v1/checks/refresh`).
     Refresh(oneshot::Sender<CheckRefresh>),
@@ -65,12 +65,12 @@ pub enum Cmd {
 pub async fn run_once_detached(
     name: String,
     config: CheckConfig,
-    http: Option<reqwest::Client>,
+    http: Option<probe::CheckClient>,
     service_configs: Arc<IndexMap<String, ServiceConfig>>,
 ) -> CheckRefresh {
     let timeout_dur = actor::timeout_of(&config);
-    let result = probe::perform(&config, timeout_dur, http.as_ref(), &service_configs).await;
-    let error = result.err();
+    let probe = probe::perform(&config, timeout_dur, http.as_ref(), &service_configs).await;
+    let error = probe.result.err();
     CheckRefresh {
         info: CheckInfo {
             name,
@@ -106,7 +106,7 @@ pub struct Handle {
 pub fn spawn(
     name: String,
     config: CheckConfig,
-    http: Option<reqwest::Client>,
+    http: Option<probe::CheckClient>,
     service_configs: Arc<IndexMap<String, ServiceConfig>>,
     event_tx: mpsc::Sender<CheckEvent>,
     metrics: Arc<MetricsStore>,

@@ -11,7 +11,7 @@ use prometheus_client::{
 };
 
 mod check;
-use check::{CheckLabel, KnownChecks, LevelLabel};
+use check::{CheckLabel, DurationFamily, KnownChecks, LevelLabel, duration_family};
 
 // ---------------------------------------------------------------------------
 // Label types
@@ -77,6 +77,8 @@ where
 /// - `vigil_check_down_count{check,level}` counter (outages: up → down)
 /// - `vigil_check_down_seconds{check,level}` counter (time spent down)
 /// - `vigil_health{level}`                gauge (0/1, as `GET /v1/health?level=`)
+/// - `vigil_check_duration_seconds{check,level,result}` histogram (probe run)
+/// - `vigil_check_connect_duration_seconds{check,level,result}` histogram (http/tcp connect)
 /// - `vigil_services_count`               gauge (total number of configured services)
 /// - `vigil_service_info{service}`        gauge always 1 — enumerates service names
 /// - `vigil_alert_fire_count{alert}`      counter — incremented each time an alert fires
@@ -94,6 +96,8 @@ pub struct MetricsStore {
     check_down_count: Family<CheckLabel, Counter>,
     check_down_seconds: Family<CheckLabel, Counter<f64, AtomicU64>>,
     health: Family<LevelLabel, Gauge>,
+    check_duration: DurationFamily,
+    check_connect_duration: DurationFamily,
     known_checks: KnownChecks,
     alert_fire_count: Family<AlertLabel, Counter>,
     service_last_exit_code: Family<ServiceLabel, Gauge>,
@@ -160,6 +164,24 @@ impl MetricsStore {
                 "vigil_health",
                 "Whether GET /v1/health?level= answers healthy (1) or not (0)",
             ),
+            check_duration: {
+                let family = duration_family();
+                r.register(
+                    "vigil_check_duration_seconds",
+                    "Duration of a probe run, from its start to its result (at most the check's timeout)",
+                    family.clone(),
+                );
+                family
+            },
+            check_connect_duration: {
+                let family = duration_family();
+                r.register(
+                    "vigil_check_connect_duration_seconds",
+                    "Time until the connection of a probe was up (http: DNS, TCP and TLS; tcp: the connect)",
+                    family.clone(),
+                );
+                family
+            },
             known_checks: Default::default(),
             alert_fire_count: reg(
                 &mut r,

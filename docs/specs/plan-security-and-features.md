@@ -902,6 +902,14 @@ grows at each run while down and on recovery (lags by up to one period).
 `vigil_health` is computed by the overlord from the last observed status
 of every running check, on every check event and every plan. vtest v0031.
 
+Done, part 2 (histograms): `CheckClient` (check/probe/connect_timer.rs)
+wraps the reqwest client of an HTTP check with a tower layer around the
+connector that stores the time of the last connect;
+`pool_max_idle_per_host(0)` makes every run connect. tcp measures the
+successful connect itself. The actor records the run duration capped at the
+timeout. The TLS certificate expiry metric was dropped (user decision
+2026-11-07): it needs an X.509 parser, and none is in the workspace.
+
 ### Not taken from the comparison
 
 Pebble's exec and files API (Juju-specific, large attack surface) and

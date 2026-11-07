@@ -19,6 +19,16 @@ pub fn build_http_client(
     tls: Option<&TlsConfig>,
     proxy: Option<&ProxyConfig>,
 ) -> anyhow::Result<reqwest::Client> {
+    Ok(configure_http_client(builder, tls, proxy)?.build()?)
+}
+
+/// Like [`build_http_client`], but return the builder, for callers that
+/// add more before building.
+pub fn configure_http_client(
+    builder: reqwest::ClientBuilder,
+    tls: Option<&TlsConfig>,
+    proxy: Option<&ProxyConfig>,
+) -> anyhow::Result<reqwest::ClientBuilder> {
     let builder = match tls {
         Some(t) => ClientTls {
             insecure: t.insecure,
@@ -43,5 +53,5 @@ pub fn build_http_client(
         }
         None => builder.no_proxy(),
     };
-    Ok(builder.build()?)
+    Ok(builder)
 }

@@ -22,4 +22,4 @@ pub use acceptor::{acceptor_from_der, acceptor_from_der_mtls, load_or_generate};
 // ---------------------------------------------------------------------------
 // Proxy-aware reqwest client builder
 // ---------------------------------------------------------------------------
-pub use proxy::build_http_client;
+pub use proxy::{build_http_client, configure_http_client};

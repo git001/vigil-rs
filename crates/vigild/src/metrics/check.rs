@@ -11,7 +11,11 @@
 
 use std::collections::HashMap;
 
+use std::time::Duration;
+
 use prometheus_client::encoding::EncodeLabelSet;
+use prometheus_client::metrics::family::Family;
+use prometheus_client::metrics::histogram::Histogram;
 use vigil_types::plan::CheckLevel;
 
 use super::MetricsStore;
@@ -21,6 +25,34 @@ pub(super) struct CheckLabel {
     check: String,
     /// `alive` or `ready`.
     level: String,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub(super) struct CheckResultLabel {
+    check: String,
+    /// `alive` or `ready`.
+    level: String,
+    /// `success` or `error`.
+    result: String,
+}
+
+/// Buckets of the check duration histograms: 1 ms to 60 s.
+const DURATION_BUCKETS: [f64; 14] = [
+    0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0,
+];
+
+pub(super) type DurationFamily = Family<CheckResultLabel, Histogram, fn() -> Histogram>;
+
+pub(super) fn duration_family() -> DurationFamily {
+    Family::new_with_constructor(|| Histogram::new(DURATION_BUCKETS.into_iter()))
+}
+
+fn result_label(check: &str, level: CheckLevel, success: bool) -> CheckResultLabel {
+    CheckResultLabel {
+        check: check.to_owned(),
+        level: level_str(level).to_owned(),
+        result: if success { "success" } else { "error" }.to_owned(),
+    }
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
@@ -63,6 +95,11 @@ impl MetricsStore {
             self.check_failure_count.remove(&l);
             self.check_down_count.remove(&l);
             self.check_down_seconds.remove(&l);
+            for success in [true, false] {
+                let r = result_label(&name, level, success);
+                self.check_duration.remove(&r);
+                self.check_connect_duration.remove(&r);
+            }
         }
         *known = checks
             .iter()
@@ -105,6 +142,31 @@ impl MetricsStore {
     pub fn add_check_down_seconds(&self, check: &str, level: CheckLevel, seconds: f64) {
         if let Some(l) = self.known(check, level) {
             self.check_down_seconds.get_or_create(&l).inc_by(seconds);
+        }
+    }
+
+    /// One probe run: how long it took (`duration`, at most the check's
+    /// timeout) and how long its connection took to come up (`connect`,
+    /// http and tcp).
+    pub fn record_check_run(
+        &self,
+        check: &str,
+        level: CheckLevel,
+        success: bool,
+        duration: Duration,
+        connect: Option<Duration>,
+    ) {
+        if self.known(check, level).is_none() {
+            return;
+        }
+        let l = result_label(check, level, success);
+        self.check_duration
+            .get_or_create(&l)
+            .observe(duration.as_secs_f64());
+        if let Some(c) = connect {
+            self.check_connect_duration
+                .get_or_create(&l)
+                .observe(c.as_secs_f64());
         }
     }
 

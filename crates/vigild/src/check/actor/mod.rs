@@ -7,7 +7,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use indexmap::IndexMap;
-use reqwest::Client as HttpClient;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{MissedTickBehavior, interval};
 use tracing::{debug, info, warn};
@@ -17,13 +16,13 @@ use vigil_types::plan::{CheckConfig, CheckLevel, ServiceConfig};
 use crate::duration::parse_duration;
 use crate::metrics::MetricsStore;
 
-use super::probe::{ProbeResult, perform};
+use super::probe::{CheckClient, ProbeResult, perform};
 use super::{CheckEvent, Cmd};
 
 /// A check's config and the HTTP client built for it when loading.
 pub(super) struct Setup {
     pub config: CheckConfig,
-    pub http: Option<HttpClient>,
+    pub http: Option<CheckClient>,
 }
 
 pub(super) const DEFAULT_PERIOD: Duration = Duration::from_secs(10);
@@ -62,7 +61,7 @@ pub(super) fn timeout_of(config: &CheckConfig) -> Duration {
 struct Checker {
     name: String,
     config: CheckConfig,
-    http: Option<HttpClient>,
+    http: Option<CheckClient>,
     service_configs: Arc<IndexMap<String, ServiceConfig>>,
     event_tx: mpsc::Sender<CheckEvent>,
     metrics: Arc<MetricsStore>,
@@ -86,13 +85,19 @@ impl Checker {
         let name = self.name.clone();
         let level = self.config.level();
         let probe_started = std::time::Instant::now();
-        let result = perform(
+        let probe = perform(
             &self.config,
             self.timeout_dur,
             self.http.as_ref(),
             &self.service_configs,
         )
         .await;
+        // A probe that ran out of time took its timeout; the exec output
+        // drain after a kill does not count.
+        let duration = probe_started.elapsed().min(self.timeout_dur);
+        let result = probe.result;
+        self.metrics
+            .record_check_run(&name, level, result.is_ok(), duration, probe.connect);
         let first = std::mem::replace(&mut self.first_run, false);
         match &result {
             Err(reason) => {

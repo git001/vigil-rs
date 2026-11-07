@@ -459,3 +459,40 @@ async fn outage_counts_once_and_its_time_is_added_on_recovery() {
     assert!((0.2..5.0).contains(&down), "down seconds: {down}");
     let _ = tx.send(Cmd::Shutdown).await;
 }
+
+// A probe that runs out of time counts with the check's timeout in
+// vigil_check_duration_seconds (result="error"), not with the time the
+// kill and the output drain took on top.
+#[tokio::test]
+async fn timed_out_run_counts_the_timeout() {
+    let config = CheckConfig {
+        delay: Some("1h".to_string()),
+        timeout: Some("200ms".to_string()),
+        exec: Some(ExecCheck {
+            command: "sleep 5".to_string(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let metrics = MetricsStore::new();
+    metrics.set_checks(&[("test-check", vigil_types::plan::CheckLevel::Alive)]);
+    let (tx, _event_rx) = spawn_actor_with_metrics(config, CheckStatus::Up, Arc::clone(&metrics));
+    let run = refresh(&tx).await;
+    assert_eq!(run.error.as_deref(), Some("timed out after 200ms"));
+    let labels = r#"{check="test-check",level="alive",result="error"}"#;
+    assert_eq!(
+        metric_value(
+            &metrics,
+            &format!("vigil_check_duration_seconds_sum{labels}")
+        ),
+        Some(0.2)
+    );
+    assert_eq!(
+        metric_value(
+            &metrics,
+            &format!("vigil_check_duration_seconds_count{labels}")
+        ),
+        Some(1.0)
+    );
+    let _ = tx.send(Cmd::Shutdown).await;
+}
