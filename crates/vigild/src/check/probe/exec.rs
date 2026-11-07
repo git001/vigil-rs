@@ -4,18 +4,25 @@
 use std::time::Duration;
 
 use indexmap::IndexMap;
-use tokio::time::timeout;
+use std::os::fd::OwnedFd;
+use std::process::Stdio;
+
+use tokio::io::AsyncReadExt;
+use tokio::net::unix::pipe;
+use tokio::time::{timeout, timeout_at};
 use tracing::{debug, warn};
 use vigil_types::plan::{ExecCheck, ServiceConfig};
 
 use crate::process_util::{EnvPolicy, apply_credentials, apply_env, resolve_credentials};
 use crate::template::{EnvLayer, Renderer, child_env, off_runtime};
 
+use super::{ProbeResult, timed_out};
+
 pub(super) async fn probe_exec(
     exec: &ExecCheck,
     timeout_dur: Duration,
     service_configs: &IndexMap<String, ServiceConfig>,
-) -> bool {
+) -> ProbeResult {
     // Resolve service-context: inherit env/user/group/working-dir from the
     // named service, then let check-specific settings override.
     let ctx_svc = exec
@@ -44,7 +51,7 @@ pub(super) async fn probe_exec(
         Ok(c) => c,
         Err(e) => {
             warn!(%e, "exec check: failed to resolve user/group");
-            return false;
+            return Err(format!("user/group: {e:#}"));
         }
     };
 
@@ -53,7 +60,7 @@ pub(super) async fn probe_exec(
         Ok(p) => p,
         Err(e) => {
             warn!(%e, "exec check: invalid pass-env settings");
-            return false;
+            return Err(format!("pass-env: {e:#}"));
         }
     };
     // Service context first (env-file, environment), the check's
@@ -81,7 +88,7 @@ pub(super) async fn probe_exec(
         Ok(env) => env,
         Err(e) => {
             warn!(error = %e, "exec check: cannot build environment");
-            return false;
+            return Err(format!("environment: {e:#}"));
         }
     };
 
@@ -92,37 +99,54 @@ pub(super) async fn probe_exec(
         cmd.current_dir(dir);
     }
     apply_credentials(&mut cmd, creds);
-    cmd.stdout(std::process::Stdio::null());
-    cmd.stderr(std::process::Stdio::null());
+    // stdout and stderr share one pipe, so the tail keeps their order. It
+    // is only reported when the check fails.
+    let (reader, writer) = match pipe_pair() {
+        Ok(p) => p,
+        Err(e) => return Err(format!("cannot create the output pipe: {e}")),
+    };
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(writer.0);
+    cmd.stderr(writer.1);
     // Own process group: a timed-out check is killed with everything it
     // started (e.g. both sides of `curl … | grep …`).
     cmd.process_group(0);
 
     let spawned_at = std::time::Instant::now();
-    let mut child = match cmd.spawn() {
+    let spawned = cmd.spawn();
+    // Drop our copies of the write end, or the pipe never reports EOF.
+    drop(cmd);
+    let mut child = match spawned {
         Ok(c) => c,
         Err(e) => {
             debug!(command = %exec.command, error = %e, "exec probe: process did not start");
-            return false;
+            return Err(format!("cannot start sh: {e}"));
         }
     };
-    match timeout(
-        timeout_dur,
-        crate::reaper::wait_child(&mut child, spawned_at),
+
+    let mut output = OutputTail::default();
+    let mut reader = Some(reader);
+    let deadline = tokio::time::Instant::now() + timeout_dur;
+    let waited = timeout_at(
+        deadline,
+        wait_and_read(&mut child, spawned_at, &mut reader, &mut output),
     )
-    .await
-    {
+    .await;
+    let result = match waited {
         Ok(Ok(status)) => {
-            let passed = status.success();
-            debug!(command = %exec.command, exit_code = ?status.code(), passed, "exec probe");
-            passed
+            // Output still in the pipe after the exit; a background process
+            // that keeps the pipe open must not stall the check.
+            if let Some(r) = reader.as_mut() {
+                let _ = timeout(OUTPUT_DRAIN, output.read_to_end(r)).await;
+            }
+            if status.success() {
+                Ok(())
+            } else {
+                Err(output.append_to(exit_reason(status)))
+            }
         }
-        Ok(Err(e)) => {
-            debug!(command = %exec.command, error = %e, "exec probe: waiting failed");
-            false
-        }
+        Ok(Err(e)) => Err(format!("waiting for the command failed: {e}")),
         Err(_) => {
-            debug!(command = %exec.command, "exec probe timed out, killing it");
             if let Some(pid) = child.id() {
                 let _ = nix::sys::signal::killpg(
                     nix::unistd::Pid::from_raw(pid as i32),
@@ -131,7 +155,93 @@ pub(super) async fn probe_exec(
             }
             // Reap it; SIGKILL cannot be ignored, so this returns at once.
             let _ = crate::reaper::wait_child(&mut child, spawned_at).await;
-            false
+            Err(output.append_to(timed_out(timeout_dur)))
+        }
+    };
+    debug!(command = %exec.command, error = result.as_ref().err(), "exec probe");
+    result
+}
+
+/// How much of a failed exec check's output is kept: its last 4 KiB.
+const OUTPUT_TAIL: usize = 4096;
+/// How long output is still read after the command exited.
+const OUTPUT_DRAIN: Duration = Duration::from_millis(200);
+
+/// The read end of the output pipe and two write ends (stdout, stderr).
+fn pipe_pair() -> std::io::Result<(pipe::Receiver, (Stdio, Stdio))> {
+    let (r, w) = std::io::pipe()?;
+    let w2 = w.try_clone()?;
+    let reader = pipe::Receiver::from_owned_fd(OwnedFd::from(r))?;
+    Ok((reader, (Stdio::from(w), Stdio::from(w2))))
+}
+
+/// Wait for the child and read its output meanwhile. Sets `reader` to
+/// `None` once the pipe reported EOF or an error.
+async fn wait_and_read(
+    child: &mut tokio::process::Child,
+    spawned_at: std::time::Instant,
+    reader: &mut Option<pipe::Receiver>,
+    output: &mut OutputTail,
+) -> std::io::Result<std::process::ExitStatus> {
+    let wait = crate::reaper::wait_child(child, spawned_at);
+    tokio::pin!(wait);
+    let mut buf = [0u8; 1024];
+    loop {
+        let Some(r) = reader.as_mut() else {
+            return wait.await;
+        };
+        tokio::select! {
+            status = &mut wait => return status,
+            n = r.read(&mut buf) => match n {
+                Ok(0) | Err(_) => *reader = None,
+                Ok(n) => output.push(&buf[..n]),
+            },
+        }
+    }
+}
+
+/// `exit status 2`, or `killed by signal 9`.
+fn exit_reason(status: std::process::ExitStatus) -> String {
+    use std::os::unix::process::ExitStatusExt;
+    match (status.code(), status.signal()) {
+        (Some(code), _) => format!("exit status {code}"),
+        (None, Some(sig)) => format!("killed by signal {sig}"),
+        (None, None) => format!("{status}"),
+    }
+}
+
+/// The last [`OUTPUT_TAIL`] bytes of a command's output.
+#[derive(Default)]
+struct OutputTail {
+    buf: Vec<u8>,
+    truncated: bool,
+}
+
+impl OutputTail {
+    fn push(&mut self, data: &[u8]) {
+        self.buf.extend_from_slice(data);
+        if self.buf.len() > OUTPUT_TAIL {
+            let cut = self.buf.len() - OUTPUT_TAIL;
+            self.buf.drain(..cut);
+            self.truncated = true;
+        }
+    }
+
+    async fn read_to_end(&mut self, r: &mut pipe::Receiver) {
+        let mut buf = [0u8; 1024];
+        while let Ok(n @ 1..) = r.read(&mut buf).await {
+            self.push(&buf[..n]);
+        }
+    }
+
+    /// `reason: output`, the output trimmed; `reason` alone without output.
+    fn append_to(&self, reason: String) -> String {
+        let text = String::from_utf8_lossy(&self.buf);
+        let text = text.trim();
+        match (text.is_empty(), self.truncated) {
+            (true, _) => reason,
+            (false, false) => format!("{reason}: {text}"),
+            (false, true) => format!("{reason}: …{text}"),
         }
     }
 }

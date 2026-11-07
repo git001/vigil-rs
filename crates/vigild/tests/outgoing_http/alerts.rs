@@ -19,7 +19,7 @@ async fn alert_down_fires_webhook_post() {
         .await;
 
     let mut sender = sender_with_url(&mock_server.uri());
-    sender.handle_check_event("my-check", CheckStatus::Down);
+    sender.handle_check_event("my-check", CheckStatus::Down, None);
 
     wait_for_requests(&mock_server, 1, Duration::from_millis(500)).await;
     mock_server.verify().await;
@@ -38,7 +38,7 @@ async fn alert_first_up_does_not_fire_webhook() {
         .await;
 
     let mut sender = sender_with_url(&mock_server.uri());
-    sender.handle_check_event("my-check", CheckStatus::Up);
+    sender.handle_check_event("my-check", CheckStatus::Up, None);
 
     // Brief wait to confirm nothing arrives.
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -58,8 +58,8 @@ async fn alert_recovery_fires_after_down() {
         .await;
 
     let mut sender = sender_with_url(&mock_server.uri());
-    sender.handle_check_event("my-check", CheckStatus::Down);
-    sender.handle_check_event("my-check", CheckStatus::Up);
+    sender.handle_check_event("my-check", CheckStatus::Down, None);
+    sender.handle_check_event("my-check", CheckStatus::Up, None);
 
     wait_for_requests(&mock_server, 2, Duration::from_millis(500)).await;
     mock_server.verify().await;
@@ -78,8 +78,8 @@ async fn alert_duplicate_status_does_not_fire_twice() {
         .await;
 
     let mut sender = sender_with_url(&mock_server.uri());
-    sender.handle_check_event("my-check", CheckStatus::Down);
-    sender.handle_check_event("my-check", CheckStatus::Down);
+    sender.handle_check_event("my-check", CheckStatus::Down, None);
+    sender.handle_check_event("my-check", CheckStatus::Down, None);
 
     wait_for_requests(&mock_server, 1, Duration::from_millis(500)).await;
     mock_server.verify().await;
@@ -98,7 +98,7 @@ async fn alert_webhook_body_contains_check_name() {
         .await;
 
     let mut sender = sender_with_url(&mock_server.uri());
-    sender.handle_check_event("my-check", CheckStatus::Down);
+    sender.handle_check_event("my-check", CheckStatus::Down, None);
 
     wait_for_requests(&mock_server, 1, Duration::from_millis(500)).await;
     mock_server.verify().await;
@@ -117,7 +117,7 @@ async fn alert_webhook_body_indicates_down_status() {
         .await;
 
     let mut sender = sender_with_url(&mock_server.uri());
-    sender.handle_check_event("my-check", CheckStatus::Down);
+    sender.handle_check_event("my-check", CheckStatus::Down, None);
 
     wait_for_requests(&mock_server, 1, Duration::from_millis(500)).await;
     mock_server.verify().await;
@@ -143,7 +143,7 @@ async fn alert_custom_header_is_sent() {
     alerts.insert("my-alert".to_string(), cfg);
     sender.update_alerts(prepared(alerts));
     sender.spawn_worker();
-    sender.handle_check_event("my-check", CheckStatus::Down);
+    sender.handle_check_event("my-check", CheckStatus::Down, None);
 
     wait_for_requests(&mock_server, 1, Duration::from_millis(500)).await;
     mock_server.verify().await;
@@ -168,7 +168,7 @@ async fn alert_retries_on_server_error_and_eventually_succeeds() {
         .await;
 
     let mut sender = sender_with_url(&mock_server.uri());
-    sender.handle_check_event("my-check", CheckStatus::Down);
+    sender.handle_check_event("my-check", CheckStatus::Down, None);
 
     // Default backoff: 1s before first retry — wait long enough for retry.
     wait_for_requests(&mock_server, 2, Duration::from_millis(3000)).await;
@@ -193,7 +193,7 @@ async fn alert_not_triggered_for_unrelated_check() {
 
     let mut sender = sender_with_url(&mock_server.uri());
     // "other-check" is not in the alert's on_check list
-    sender.handle_check_event("other-check", CheckStatus::Down);
+    sender.handle_check_event("other-check", CheckStatus::Down, None);
 
     // Brief wait to confirm nothing arrives.
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -219,7 +219,7 @@ async fn cloudevents_are_sent_with_their_content_type() {
     alerts.insert("my-alert".to_string(), cfg);
     sender.update_alerts(prepared(alerts));
     sender.spawn_worker();
-    sender.handle_check_event("my-check", CheckStatus::Down);
+    sender.handle_check_event("my-check", CheckStatus::Down, None);
 
     wait_for_requests(&mock_server, 1, Duration::from_millis(500)).await;
     mock_server.verify().await;

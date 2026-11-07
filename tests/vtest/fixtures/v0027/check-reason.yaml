@@ -1,0 +1,21 @@
+# A check that fails with output until the marker file exists, and an alert
+# that reports it. vigild gets CHECK_MARKER and WEBHOOK_URL from the test.
+checks:
+  migrate-done:
+    level: ready
+    startup: enabled
+    delay: 0s
+    period: 1s
+    timeout: 2s
+    threshold: 1
+    exec:
+      command: 'test -f "$CHECK_MARKER" || { echo "migration 42 pending"; echo "see /var/log/migrate.log" >&2; exit 2; }'
+      pass-env-glob: [CHECK_MARKER]
+
+alerts:
+  ops:
+    url: "env:WEBHOOK_URL"
+    pass-env-glob: [WEBHOOK_URL]
+    format: webhook
+    on-check: [migrate-done]
+    retry-attempts: 1

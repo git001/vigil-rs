@@ -192,6 +192,10 @@ pub struct CheckInfo {
     /// Seconds until the next scheduled check run. `null` during initial delay.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_run_in_secs: Option<u64>,
+    /// Why the last run failed, e.g. `HTTP 503 Service Unavailable` or
+    /// `exit status 1: <output>`. Absent once a run passes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

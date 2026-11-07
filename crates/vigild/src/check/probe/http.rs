@@ -8,6 +8,8 @@ use tokio::time::timeout;
 use tracing::debug;
 use vigil_types::plan::HttpCheck;
 
+use super::{ProbeResult, timed_out};
+
 /// The client of an HTTP check: its redirect policy, `tls:` and `proxy:`.
 /// Reads the `tls:` files: built once when the layers are loaded, off the
 /// async runtime.
@@ -20,33 +22,45 @@ pub(crate) fn client(check: &HttpCheck) -> anyhow::Result<HttpClient> {
     crate::tls::build_http_client(builder, check.tls.as_ref(), check.proxy.as_ref())
 }
 
+/// The innermost source of `e`: `Connection refused (os error 111)`,
+/// `invalid peer certificate: UnknownIssuer`, `failed to lookup address
+/// information: …`. reqwest's and hyper's wrappers around it ("error
+/// sending request for url (…)", "client error (Connect)") add nothing the
+/// check's URL does not say.
+fn root_cause(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut cause = e;
+    while let Some(source) = cause.source() {
+        cause = source;
+    }
+    cause.to_string()
+}
+
 pub(super) async fn probe_http(
     client: &HttpClient,
     check: &HttpCheck,
     timeout_dur: Duration,
-) -> bool {
+) -> ProbeResult {
     let mut req = client.get(&check.url);
     for (name, value) in &check.headers {
         req = req.header(name.as_str(), value.as_str());
     }
-    match timeout(timeout_dur, req.send()).await {
+    let result = match timeout(timeout_dur, req.send()).await {
         Ok(Ok(resp)) => {
-            let code = resp.status().as_u16();
+            let status = resp.status();
             let passed = if check.success_statuses.is_empty() {
-                resp.status().is_success()
+                status.is_success()
             } else {
-                check.success_statuses.contains(&code)
+                check.success_statuses.contains(&status.as_u16())
             };
-            debug!(url = %check.url, status = code, passed, "http probe");
-            passed
+            if passed {
+                Ok(())
+            } else {
+                Err(format!("HTTP {status}"))
+            }
         }
-        Ok(Err(e)) => {
-            debug!(url = %check.url, error = %e, "http probe failed");
-            false
-        }
-        Err(_) => {
-            debug!(url = %check.url, "http probe timed out");
-            false
-        }
-    }
+        Ok(Err(e)) => Err(format!("GET {}: {}", check.url, root_cause(&e))),
+        Err(_) => Err(format!("GET {}: {}", check.url, timed_out(timeout_dur))),
+    };
+    debug!(url = %check.url, error = result.as_ref().err(), "http probe");
+    result
 }

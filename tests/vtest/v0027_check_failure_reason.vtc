@@ -1,0 +1,88 @@
+vtest "why a check fails: last-error in GET /v1/checks, vigil checks list, the log and the alert"
+
+shell { mkdir -p ${tmpdir}/layers }
+
+# HTTP server (helpers/http_capture.py) that records the alert bodies.
+shell {
+	${vtestdir}/helpers/http_capture.py ${tmpdir}/webhook_port.txt ${tmpdir}/received.json \
+		> /dev/null 2>&1 &
+	echo $! > ${tmpdir}/webhook_server.pid
+	for i in $(seq 1 50); do
+		test -s ${tmpdir}/webhook_port.txt && break
+		sleep 0.1
+	done
+	test -s ${tmpdir}/webhook_port.txt
+}
+
+# vigild's log goes to a file: the reason must be in the "check failed" line.
+shell {
+	env CHECK_MARKER=${tmpdir}/check_marker \
+		WEBHOOK_URL=http://127.0.0.1:$(cat ${tmpdir}/webhook_port.txt)/webhook NO_COLOR=1 \
+		${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock \
+		> ${tmpdir}/vigild.log 2>&1 &
+	echo $! > ${tmpdir}/vigild.pid
+	for i in $(seq 1 50); do
+		test -S ${tmpdir}/vigild.sock && break
+		sleep 0.1
+	done
+	test -S ${tmpdir}/vigild.sock
+}
+
+# Layer fixtures/v0027/check-reason.yaml: migrate-done fails with output
+# until the marker exists.
+shell {
+	cp ${vtestdir}/fixtures/v0027/check-reason.yaml ${tmpdir}/layers/
+	${vigil} --socket ${tmpdir}/vigild.sock replan
+}
+
+# GET /v1/checks: last-error has the exit status and both output lines.
+shell {
+	for i in $(seq 1 40); do
+		curl -s --unix-socket ${tmpdir}/vigild.sock http://localhost/v1/checks > ${tmpdir}/checks.json
+		grep -q '"last-error"' ${tmpdir}/checks.json && break
+		sleep 0.2
+	done
+	grep -qF '"last-error":"exit status 2: migration 42 pending\nsee /var/log/migrate.log"' ${tmpdir}/checks.json
+}
+
+# vigil checks list: the first line of the reason, with … for the rest.
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock checks list > ${tmpdir}/checks.txt
+	grep -qF 'exit status 2: migration 42 pending …' ${tmpdir}/checks.txt
+}
+
+# The log: "check failed" and "check is down" carry the reason, quoted.
+shell {
+	grep -F 'check failed' ${tmpdir}/vigild.log | grep -qF 'error="exit status 2: migration 42 pending\nsee /var/log/migrate.log"'
+	grep -F 'check is down' ${tmpdir}/vigild.log | grep -qF 'error="exit status 2: migration 42 pending'
+}
+
+# The alert message carries the reason.
+shell {
+	for i in $(seq 1 40); do
+		grep -q '"status":"down"' ${tmpdir}/received.json 2>/dev/null && break
+		sleep 0.2
+	done
+	grep -qF '"message":"check migrate-done failed: exit status 2: migration 42 pending\nsee /var/log/migrate.log"' ${tmpdir}/received.json
+}
+
+# A pass clears last-error.
+shell {
+	touch ${tmpdir}/check_marker
+	for i in $(seq 1 40); do
+		curl -s --unix-socket ${tmpdir}/vigild.sock http://localhost/v1/checks > ${tmpdir}/checks2.json
+		grep -q '"status":"up"' ${tmpdir}/checks2.json && break
+		sleep 0.2
+	done
+	grep -q '"status":"up"' ${tmpdir}/checks2.json
+	! grep -q '"last-error"' ${tmpdir}/checks2.json
+}
+
+shell {
+	kill $(cat ${tmpdir}/webhook_server.pid) 2>/dev/null || true
+	kill $(cat ${tmpdir}/vigild.pid) 2>/dev/null || true
+	for i in $(seq 1 50); do
+		kill -0 $(cat ${tmpdir}/vigild.pid) 2>/dev/null || break
+		sleep 0.1
+	done
+}

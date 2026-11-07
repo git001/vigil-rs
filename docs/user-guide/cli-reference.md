@@ -197,13 +197,17 @@ vigil checks list myapp-alive
 Example output:
 
 ```
-Check                    Level    Status Failures
-----------------------------------------------------
-myapp-alive              alive    up     0/3
-postgres-ready           ready    up     0/3
+Check                    Level    Status Failures   Next run   Last error
+------------------------------------------------------------------------------------------
+myapp-alive              alive    up     0/3        7s
+postgres-ready           ready    down   3/3        2s         exit status 2: localhost:5432 - no response
 ```
 
 **Status values:** `up` (healthy) | `down` (failed `threshold` times)
+
+**Last error:** why the last run failed, until a run passes: the first line,
+cut to 60 characters. `GET /v1/checks` has the full text (`last-error`). See
+[Why a check fails](configuration.md#why-a-check-fails).
 
 ---
 

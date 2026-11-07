@@ -151,11 +151,13 @@ impl Overlord {
         }
         if self.check_quiet(&event.check) {
             self.alert_sender
-                .hold_check_event(&event.check, event.status);
+                .hold_check_event(&event.check, event.status, event.error.as_deref());
         } else {
-            let fired = self
-                .alert_sender
-                .handle_check_event(&event.check, event.status);
+            let fired = self.alert_sender.handle_check_event(
+                &event.check,
+                event.status,
+                event.error.as_deref(),
+            );
             self.count_fired(&fired);
         }
 

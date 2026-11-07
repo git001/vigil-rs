@@ -91,7 +91,11 @@ async fn http_2xx_passes() {
     let app = Router::new().route("/ok", get(|| async { StatusCode::OK }));
     let port = spawn_http_server(app).await;
     let check = make_check(format!("http://127.0.0.1:{port}/ok"));
-    assert!(probe_http(&client(&check), &check, Duration::from_secs(5)).await);
+    assert!(
+        probe_http(&client(&check), &check, Duration::from_secs(5))
+            .await
+            .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -99,7 +103,11 @@ async fn http_4xx_fails() {
     let app = Router::new().route("/nf", get(|| async { StatusCode::NOT_FOUND }));
     let port = spawn_http_server(app).await;
     let check = make_check(format!("http://127.0.0.1:{port}/nf"));
-    assert!(!probe_http(&client(&check), &check, Duration::from_secs(5)).await);
+    assert!(
+        !probe_http(&client(&check), &check, Duration::from_secs(5))
+            .await
+            .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -107,7 +115,11 @@ async fn http_5xx_fails() {
     let app = Router::new().route("/err", get(|| async { StatusCode::INTERNAL_SERVER_ERROR }));
     let port = spawn_http_server(app).await;
     let check = make_check(format!("http://127.0.0.1:{port}/err"));
-    assert!(!probe_http(&client(&check), &check, Duration::from_secs(5)).await);
+    assert!(
+        !probe_http(&client(&check), &check, Duration::from_secs(5))
+            .await
+            .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -120,12 +132,20 @@ async fn success_statuses_override_default() {
     // 301 passes when explicitly listed
     let mut check = make_check(format!("http://127.0.0.1:{port}/redir"));
     check.success_statuses = vec![301];
-    assert!(probe_http(&client(&check), &check, Duration::from_secs(5)).await);
+    assert!(
+        probe_http(&client(&check), &check, Duration::from_secs(5))
+            .await
+            .is_ok()
+    );
 
     // 200 fails when not in the explicit list
     let mut check2 = make_check(format!("http://127.0.0.1:{port}/nf"));
     check2.success_statuses = vec![301];
-    assert!(!probe_http(&client(&check2), &check2, Duration::from_secs(5)).await);
+    assert!(
+        !probe_http(&client(&check2), &check2, Duration::from_secs(5))
+            .await
+            .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -144,13 +164,21 @@ async fn custom_headers_are_forwarded() {
     let url = format!("http://127.0.0.1:{port}/hdr");
 
     let without = make_check(url.clone());
-    assert!(!probe_http(&client(&without), &without, Duration::from_secs(5)).await);
+    assert!(
+        !probe_http(&client(&without), &without, Duration::from_secs(5))
+            .await
+            .is_ok()
+    );
 
     let mut with_hdr = make_check(url);
     with_hdr
         .headers
         .insert("x-vigil-test".to_string(), "yes".to_string());
-    assert!(probe_http(&client(&with_hdr), &with_hdr, Duration::from_secs(5)).await);
+    assert!(
+        probe_http(&client(&with_hdr), &with_hdr, Duration::from_secs(5))
+            .await
+            .is_ok()
+    );
 }
 
 // ------------------------------------------------------------------
@@ -163,7 +191,15 @@ async fn self_signed_rejected_by_default() {
     let app = Router::new().route("/", get(|| async { StatusCode::OK }));
     let (port, _cert_der) = spawn_tls_server(app).await;
     let check = make_check(format!("https://localhost:{port}/"));
-    assert!(!probe_http(&client(&check), &check, Duration::from_secs(5)).await);
+    let err = probe_http(&client(&check), &check, Duration::from_secs(5))
+        .await
+        .unwrap_err();
+    // The reason names the certificate problem, not only "error sending
+    // request".
+    assert_eq!(
+        err,
+        format!("GET https://localhost:{port}/: invalid peer certificate: UnknownIssuer")
+    );
 }
 
 #[tokio::test]
@@ -176,7 +212,11 @@ async fn insecure_accepts_self_signed() {
         insecure: true,
         ..Default::default()
     });
-    assert!(probe_http(&client(&check), &check, Duration::from_secs(5)).await);
+    assert!(
+        probe_http(&client(&check), &check, Duration::from_secs(5))
+            .await
+            .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -194,7 +234,9 @@ async fn ca_cert_accepts_self_signed() {
         ca: vec![tmp_path.clone()],
         ..Default::default()
     });
-    let result = probe_http(&client(&check), &check, Duration::from_secs(5)).await;
+    let result = probe_http(&client(&check), &check, Duration::from_secs(5))
+        .await
+        .is_ok();
     let _ = std::fs::remove_file(&tmp_path);
     assert!(result);
 }
@@ -246,19 +288,31 @@ async fn proxy_is_used_unless_no_proxy_matches() {
     let proxy_port = spawn_proxy().await;
     // Only reachable through the proxy.
     let mut check = make_check("http://vigil-check.invalid/healthz".to_string());
-    assert!(!probe_http(&client(&check), &check, Duration::from_secs(5)).await);
+    assert!(
+        !probe_http(&client(&check), &check, Duration::from_secs(5))
+            .await
+            .is_ok()
+    );
 
     check.proxy = Some(ProxyConfig {
         url: format!("http://127.0.0.1:{proxy_port}"),
         no_proxy: None,
     });
-    assert!(probe_http(&client(&check), &check, Duration::from_secs(5)).await);
+    assert!(
+        probe_http(&client(&check), &check, Duration::from_secs(5))
+            .await
+            .is_ok()
+    );
 
     check.proxy = Some(ProxyConfig {
         url: format!("http://127.0.0.1:{proxy_port}"),
         no_proxy: Some(".invalid".into()),
     });
-    assert!(!probe_http(&client(&check), &check, Duration::from_secs(5)).await);
+    assert!(
+        !probe_http(&client(&check), &check, Duration::from_secs(5))
+            .await
+            .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -267,7 +321,11 @@ async fn http_check_without_a_client_fails() {
         http: Some(make_check("http://127.0.0.1:1/".to_string())),
         ..Default::default()
     };
-    assert!(!perform(&config, Duration::from_secs(1), None, &empty_svc_configs()).await);
+    assert!(
+        !perform(&config, Duration::from_secs(1), None, &empty_svc_configs())
+            .await
+            .is_ok()
+    );
 }
 
 // ------------------------------------------------------------------
@@ -281,7 +339,11 @@ async fn tcp_check_success() {
     tokio::spawn(async move {
         let _ = listener.accept().await;
     });
-    assert!(probe_tcp("127.0.0.1", port, Duration::from_secs(5)).await);
+    assert!(
+        probe_tcp("127.0.0.1", port, Duration::from_secs(5))
+            .await
+            .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -292,7 +354,11 @@ async fn tcp_check_connection_refused() {
     let sock = tokio::net::TcpSocket::new_v4().unwrap();
     sock.bind("127.0.0.1:0".parse().unwrap()).unwrap();
     let port = sock.local_addr().unwrap().port();
-    assert!(!probe_tcp("127.0.0.1", port, Duration::from_millis(500)).await);
+    assert!(
+        !probe_tcp("127.0.0.1", port, Duration::from_millis(500))
+            .await
+            .is_ok()
+    );
     drop(sock);
 }
 
@@ -320,25 +386,31 @@ fn exec(command: &str) -> vigil_types::plan::ExecCheck {
 
 #[tokio::test]
 async fn exec_check_true_succeeds() {
-    let ok = probe_exec(&exec("true"), Duration::from_secs(5), &empty_svc_configs()).await;
+    let ok = probe_exec(&exec("true"), Duration::from_secs(5), &empty_svc_configs())
+        .await
+        .is_ok();
     assert!(ok);
 }
 
 #[tokio::test]
 async fn exec_check_false_fails() {
-    let ok = probe_exec(&exec("false"), Duration::from_secs(5), &empty_svc_configs()).await;
+    let ok = probe_exec(&exec("false"), Duration::from_secs(5), &empty_svc_configs())
+        .await
+        .is_ok();
     assert!(!ok);
 }
 
 #[tokio::test]
 async fn exec_check_timeout_returns_false() {
-    let ok = probe_exec(
-        &exec("sleep 30"),
-        Duration::from_millis(100),
+    let err = probe_exec(
+        &exec("echo started; sleep 30"),
+        Duration::from_millis(300),
         &empty_svc_configs(),
     )
-    .await;
-    assert!(!ok);
+    .await
+    .unwrap_err();
+    // The reason keeps what the command printed before it was killed.
+    assert_eq!(err, "timed out after 300ms: started");
 }
 
 #[tokio::test]
@@ -351,13 +423,13 @@ async fn timed_out_exec_check_is_killed_with_its_children() {
         p = pids.display()
     );
     let started = std::time::Instant::now();
-    let ok = probe_exec(
+    let result = probe_exec(
         &exec(&cmd),
         Duration::from_millis(300),
         &empty_svc_configs(),
     )
     .await;
-    assert!(!ok);
+    assert_eq!(result, Err("timed out after 300ms".to_string()));
     assert!(
         started.elapsed() < Duration::from_secs(5),
         "returned at once"
@@ -380,7 +452,9 @@ async fn exec_check_env_var_inherited() {
     let mut e = exec("test \"$VIGIL_TEST_VAR\" = hello");
     e.environment
         .insert("VIGIL_TEST_VAR".to_string(), "hello".to_string());
-    let ok = probe_exec(&e, Duration::from_secs(5), &empty_svc_configs()).await;
+    let ok = probe_exec(&e, Duration::from_secs(5), &empty_svc_configs())
+        .await
+        .is_ok();
     assert!(ok);
 }
 
@@ -388,7 +462,9 @@ async fn exec_check_env_var_inherited() {
 async fn exec_check_working_dir() {
     let mut e = exec("test -d .");
     e.working_dir = Some("/tmp".to_string());
-    let ok = probe_exec(&e, Duration::from_secs(5), &empty_svc_configs()).await;
+    let ok = probe_exec(&e, Duration::from_secs(5), &empty_svc_configs())
+        .await
+        .is_ok();
     assert!(ok);
 }
 
@@ -396,7 +472,9 @@ async fn exec_check_working_dir() {
 async fn exec_check_invalid_working_dir_fails() {
     let mut e = exec("true");
     e.working_dir = Some("/nonexistent_dir_xyz_abc".to_string());
-    let ok = probe_exec(&e, Duration::from_secs(5), &empty_svc_configs()).await;
+    let ok = probe_exec(&e, Duration::from_secs(5), &empty_svc_configs())
+        .await
+        .is_ok();
     assert!(!ok);
 }
 
@@ -405,13 +483,16 @@ async fn exec_nonexistent_command_returns_false() {
     // A command that cannot be spawned (the shell will exit non-zero for a
     // missing binary invoked via "sh -c", but the outer sh exits with 127).
     // We test an absolute path that does not exist so sh exits non-zero.
-    let ok = probe_exec(
+    let err = probe_exec(
         &exec("/nonexistent/binary_xyz_abc --flag"),
         Duration::from_secs(5),
         &empty_svc_configs(),
     )
-    .await;
-    assert!(!ok);
+    .await
+    .unwrap_err();
+    // sh's own message on stderr is part of the reason.
+    assert!(err.starts_with("exit status 127: "), "{err}");
+    assert!(err.contains("/nonexistent/binary_xyz_abc"), "{err}");
 }
 
 #[tokio::test]
@@ -428,7 +509,7 @@ async fn exec_inherits_service_env() {
     let mut e = exec("test \"$VIGIL_SVC_VAR\" = from_service");
     e.service_context = Some("my-svc".to_string());
 
-    let ok = probe_exec(&e, Duration::from_secs(5), &svcs).await;
+    let ok = probe_exec(&e, Duration::from_secs(5), &svcs).await.is_ok();
     assert!(ok);
 }
 
@@ -446,7 +527,7 @@ async fn exec_check_env_overrides_service_env() {
     e.service_context = Some("my-svc".to_string());
     e.environment.insert("FOO".to_string(), "check".to_string());
 
-    let ok = probe_exec(&e, Duration::from_secs(5), &svcs).await;
+    let ok = probe_exec(&e, Duration::from_secs(5), &svcs).await.is_ok();
     assert!(ok);
 }
 
@@ -457,7 +538,9 @@ async fn exec_nonexistent_service_context_falls_back_gracefully() {
     let mut e = exec("true");
     e.service_context = Some("no-such-service".to_string());
 
-    let ok = probe_exec(&e, Duration::from_secs(5), &empty_svc_configs()).await;
+    let ok = probe_exec(&e, Duration::from_secs(5), &empty_svc_configs())
+        .await
+        .is_ok();
     assert!(ok);
 }
 
@@ -472,7 +555,9 @@ use vigil_types::plan::TcpCheck;
 async fn no_check_configured_returns_true() {
     // When all of http/tcp/exec are None the dispatcher should return true.
     let config = CheckConfig::default();
-    let result = perform(&config, Duration::from_secs(5), None, &empty_svc_configs()).await;
+    let result = perform(&config, Duration::from_secs(5), None, &empty_svc_configs())
+        .await
+        .is_ok();
     assert!(result);
 }
 
@@ -482,7 +567,7 @@ async fn tcp_check_via_perform_dispatcher() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        let _ = listener.accept().await;
+        let _ = listener.accept().await.is_ok();
     });
 
     let config = CheckConfig {
@@ -492,7 +577,9 @@ async fn tcp_check_via_perform_dispatcher() {
         }),
         ..Default::default()
     };
-    let result = perform(&config, Duration::from_secs(5), None, &empty_svc_configs()).await;
+    let result = perform(&config, Duration::from_secs(5), None, &empty_svc_configs())
+        .await
+        .is_ok();
     assert!(result);
 }
 
@@ -503,14 +590,16 @@ async fn tcp_check_default_host_via_perform() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        let _ = listener.accept().await;
+        let _ = listener.accept().await.is_ok();
     });
 
     let config = CheckConfig {
         tcp: Some(TcpCheck { host: None, port }),
         ..Default::default()
     };
-    let result = perform(&config, Duration::from_secs(5), None, &empty_svc_configs()).await;
+    let result = perform(&config, Duration::from_secs(5), None, &empty_svc_configs())
+        .await
+        .is_ok();
     assert!(result);
 }
 
@@ -525,20 +614,28 @@ async fn exec_check_does_not_inherit_vigild_env_by_default() {
     }
     let hidden = exec(r#"[ -z "$CARGO_MANIFEST_DIR" ] && [ -n "$PATH" ]"#);
     assert!(
-        probe_exec(&hidden, Duration::from_secs(5), &empty_svc_configs()).await,
+        probe_exec(&hidden, Duration::from_secs(5), &empty_svc_configs())
+            .await
+            .is_ok(),
         "variable leaked into the probe (or PATH missing)"
     );
 
     let mut allowed = exec(r#"[ -n "$CARGO_MANIFEST_DIR" ]"#);
     allowed.pass_env_glob = vec!["CARGO_*".to_string()];
     assert!(
-        probe_exec(&allowed, Duration::from_secs(5), &empty_svc_configs()).await,
+        probe_exec(&allowed, Duration::from_secs(5), &empty_svc_configs())
+            .await
+            .is_ok(),
         "pass-env-glob did not pass the variable"
     );
 
     let mut all = exec(r#"[ -n "$CARGO_MANIFEST_DIR" ]"#);
     all.pass_env = Some(true);
-    assert!(probe_exec(&all, Duration::from_secs(5), &empty_svc_configs()).await);
+    assert!(
+        probe_exec(&all, Duration::from_secs(5), &empty_svc_configs())
+            .await
+            .is_ok()
+    );
 }
 
 /// The probe inherits the service context's pass-env lists.
@@ -557,7 +654,7 @@ async fn exec_check_uses_service_context_pass_env() {
     );
     let mut e = exec(r#"[ -n "$CARGO_MANIFEST_DIR" ]"#);
     e.service_context = Some("app".to_string());
-    assert!(probe_exec(&e, Duration::from_secs(5), &svcs).await);
+    assert!(probe_exec(&e, Duration::from_secs(5), &svcs).await.is_ok());
 }
 
 /// The service context's env-file and `environment` templates are resolved
@@ -589,9 +686,141 @@ async fn exec_check_renders_service_context_templates_and_env_file() {
     e.service_context = Some("app".to_string());
     e.environment
         .insert("WHO".into(), "{{ env.DB_USER }}-check".into());
-    assert!(probe_exec(&e, Duration::from_secs(5), &svcs).await);
+    assert!(probe_exec(&e, Duration::from_secs(5), &svcs).await.is_ok());
 
     // a missing env file fails the probe (no panic, no values logged)
     svcs["app"].env_file = vec![dir.path().join("nope").display().to_string()];
-    assert!(!probe_exec(&e, Duration::from_secs(5), &svcs).await);
+    assert!(!probe_exec(&e, Duration::from_secs(5), &svcs).await.is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// Failure reasons
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn exec_failure_reason_has_exit_status_and_output() {
+    let err = probe_exec(
+        &exec("echo to-stdout; echo to-stderr >&2; exit 2"),
+        Duration::from_secs(5),
+        &empty_svc_configs(),
+    )
+    .await
+    .unwrap_err();
+    // stdout and stderr share one pipe: both, in order.
+    assert_eq!(err, "exit status 2: to-stdout\nto-stderr");
+}
+
+#[tokio::test]
+async fn exec_failure_without_output_is_the_exit_status() {
+    let result = probe_exec(
+        &exec("exit 3"),
+        Duration::from_secs(5),
+        &empty_svc_configs(),
+    )
+    .await;
+    assert_eq!(result, Err("exit status 3".to_string()));
+}
+
+#[tokio::test]
+async fn exec_killed_by_signal_names_the_signal() {
+    let result = probe_exec(
+        &exec("kill -9 $$"),
+        Duration::from_secs(5),
+        &empty_svc_configs(),
+    )
+    .await;
+    assert_eq!(result, Err("killed by signal 9".to_string()));
+}
+
+#[tokio::test]
+async fn exec_failure_keeps_only_the_tail_of_long_output() {
+    // 10000 bytes of 'x', then a final line: only the last 4 KiB stay.
+    let err = probe_exec(
+        &exec("head -c 10000 /dev/zero | tr '\\0' x; echo; echo last-line; exit 1"),
+        Duration::from_secs(5),
+        &empty_svc_configs(),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.starts_with("exit status 1: …x"), "{}", &err[..40]);
+    assert!(err.ends_with("x\nlast-line"), "{err}");
+    assert!(err.len() < 4200, "{}", err.len());
+}
+
+#[tokio::test]
+async fn exec_success_with_output_is_ok() {
+    let result = probe_exec(
+        &exec("echo fine"),
+        Duration::from_secs(5),
+        &empty_svc_configs(),
+    )
+    .await;
+    assert_eq!(result, Ok(()));
+}
+
+#[tokio::test]
+async fn exec_background_process_holding_the_pipe_does_not_stall() {
+    // The command exits at once but leaves a child that keeps stdout open.
+    let started = std::time::Instant::now();
+    let err = probe_exec(
+        &exec("sleep 5 & echo bye; exit 1"),
+        Duration::from_secs(3),
+        &empty_svc_configs(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err, "exit status 1: bye");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn http_failure_reason_has_the_status() {
+    let app = Router::new().route("/health", get(|| async { StatusCode::SERVICE_UNAVAILABLE }));
+    let port = spawn_http_server(app).await;
+    let check = make_check(format!("http://127.0.0.1:{port}/health"));
+    let err = probe_http(&client(&check), &check, Duration::from_secs(5))
+        .await
+        .unwrap_err();
+    assert_eq!(err, "HTTP 503 Service Unavailable");
+}
+
+#[tokio::test]
+async fn http_connection_refused_reason() {
+    let port = closed_port();
+    let check = make_check(format!("http://127.0.0.1:{port}/health"));
+    let err = probe_http(&client(&check), &check, Duration::from_secs(5))
+        .await
+        .unwrap_err();
+    assert!(
+        err.starts_with(&format!("GET http://127.0.0.1:{port}/health: ")),
+        "{err}"
+    );
+    assert!(err.to_lowercase().contains("connection refused"), "{err}");
+    assert!(!err.contains("error sending request"), "{err}");
+}
+
+#[tokio::test]
+async fn tcp_connection_refused_reason() {
+    let port = closed_port();
+    let err = probe_tcp("127.0.0.1", port, Duration::from_secs(5))
+        .await
+        .unwrap_err();
+    assert!(
+        err.starts_with(&format!("connect 127.0.0.1:{port}: ")),
+        "{err}"
+    );
+    assert!(err.to_lowercase().contains("connection refused"), "{err}");
+}
+
+/// A port nothing listens on: bound, then released.
+fn closed_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
 }

@@ -666,6 +666,17 @@ components:
           type: integer
           description: Number of failures required to declare the check down.
           example: 3
+        next-run-in-secs:
+          type: integer
+          description: Seconds until the next run; absent during the initial delay.
+          example: 7
+        last-error:
+          type: string
+          description: >
+            Why the last run failed, e.g. `HTTP 503 Service Unavailable` or
+            `exit status 1: <output>` (exec checks add the last 4 KiB of their
+            output). Absent once a run passes.
+          example: "HTTP 503 Service Unavailable"
       required: [name, level, status, failures, threshold]
 
     ChecksResponse:

@@ -281,3 +281,41 @@ async fn set_http_client_during_the_delay_is_used_by_the_first_probe() {
     );
     let _ = tx.send(Cmd::Shutdown).await;
 }
+
+// A failed run's reason is in the Down event and in `last-error`; the next
+// pass clears it.
+#[tokio::test]
+async fn failure_reason_is_reported_and_cleared_by_a_pass() {
+    let dir = tempfile::tempdir().unwrap();
+    let ready = dir.path().join("ready");
+    let cmd = format!(
+        "test -e {} || {{ echo database not ready; exit 1; }}",
+        ready.display()
+    );
+    let (tx, mut event_rx) = spawn_actor(exec_cfg(&cmd, 1), CheckStatus::Up);
+
+    let down = tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
+        .await
+        .expect("timed out")
+        .unwrap();
+    assert_eq!(down.status, CheckStatus::Down);
+    assert_eq!(
+        down.error.as_deref(),
+        Some("exit status 1: database not ready")
+    );
+    let info = get_status(&tx).await;
+    assert_eq!(
+        info.last_error.as_deref(),
+        Some("exit status 1: database not ready")
+    );
+
+    std::fs::write(&ready, "").unwrap();
+    let up = tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
+        .await
+        .expect("timed out")
+        .unwrap();
+    assert_eq!(up.status, CheckStatus::Up);
+    assert_eq!(up.error, None);
+    assert_eq!(get_status(&tx).await.last_error, None);
+    let _ = tx.send(Cmd::Shutdown).await;
+}

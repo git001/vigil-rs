@@ -62,6 +62,8 @@ pub struct CheckEvent {
     /// Set for every successful probe: when that probe started. Used for
     /// `ready: check`; status-only events (first run, Down) carry `None`.
     pub passed_at: Option<std::time::Instant>,
+    /// Why the check is down: set on the event that reports `Down`.
+    pub error: Option<String>,
 }
 
 pub struct Handle {

@@ -118,8 +118,9 @@ pub fn prepare_alerts(
 /// (the Overlord event loop) is never blocked by retries or slow endpoints.
 pub struct AlertSender {
     alerts: Vec<AlertEntry>,
-    /// Last known status per check name (sent or not).
-    observed: HashMap<String, CheckStatus>,
+    /// Last known status per check name (sent or not), with the reason of
+    /// a `Down`.
+    observed: HashMap<String, (CheckStatus, Option<String>)>,
     /// Last firing event sent per `(source, name)`; absent = nothing open.
     open: HashMap<(AlertSource, String), String>,
     /// Sends delivery jobs to the background worker.
@@ -226,29 +227,40 @@ impl AlertSender {
 
     /// Return the last observed status for `check`, if any.
     pub fn check_status(&self, check: &str) -> Option<CheckStatus> {
-        self.observed.get(check).copied()
+        self.observed.get(check).map(|(status, _)| *status)
     }
 
     /// Record a check status and report it (on a change).
     ///
     /// Returns the names of alerts that fired (for metrics accounting).
-    pub fn handle_check_event(&mut self, check: &str, status: CheckStatus) -> Vec<String> {
-        self.observed.insert(check.to_owned(), status);
-        self.send(AlertEvent::check(check, status))
+    /// `error` is why a `Down` check failed; it goes into the message.
+    pub fn handle_check_event(
+        &mut self,
+        check: &str,
+        status: CheckStatus,
+        error: Option<&str>,
+    ) -> Vec<String> {
+        self.observed
+            .insert(check.to_owned(), (status, error.map(str::to_owned)));
+        self.send(AlertEvent::check(check, status, error))
     }
 
     /// Only record a check status: the check belongs to a service that is
     /// not healthy. [`Self::recheck`] reports it once the service is.
-    pub fn hold_check_event(&mut self, check: &str, status: CheckStatus) {
-        self.observed.insert(check.to_owned(), status);
+    pub fn hold_check_event(&mut self, check: &str, status: CheckStatus, error: Option<&str>) {
+        self.observed
+            .insert(check.to_owned(), (status, error.map(str::to_owned)));
     }
 
     /// Report the current status of `check` (after its service became
     /// healthy): a down check that was held back fires now, one that
     /// recovered meanwhile ends an alert sent before, if any.
     pub fn recheck(&mut self, check: &str) -> Vec<String> {
-        match self.observed.get(check).copied() {
-            Some(status) => self.send(AlertEvent::check(check, status)),
+        match self.observed.get(check) {
+            Some((status, error)) => {
+                let ev = AlertEvent::check(check, *status, error.as_deref());
+                self.send(ev)
+            }
             None => vec![],
         }
     }

@@ -717,6 +717,16 @@ and an exec check's output is dropped.
 - `GET /v1/checks` gets `last-error` (the reason of the last failed run,
   cleared by a pass); `vigil checks list` shows it.
 
+Done: probes return `Result<(), String>`. HTTP reasons are `HTTP <status>`
+or `GET <url>: <innermost cause>` (reqwest's "error sending request" wrapper
+dropped), TCP `connect <addr>: <error>`, exec `exit status N` / `killed by
+signal N` / `timed out after …` plus the output tail. stdout and stderr
+share one pipe; output still in the pipe is read for at most 200 ms after
+the exit, so a background process holding it open cannot stall the check.
+The log quotes the reason (`error="…"`), so multi-line output stays on one
+log line. A held-back down check keeps its reason for the recheck alert.
+vtest v0027.
+
 ### 5b: run a check now
 
 - `POST /v1/checks/refresh {"name": "db-ready"}` (Pebble's path and body):

@@ -87,6 +87,7 @@ pub(super) async fn run(
                             failures: 0,
                             threshold: config.threshold.unwrap_or(DEFAULT_THRESHOLD),
                             next_run_in_secs: None,
+                            last_error: None,
                         });
                     }
                 },
@@ -98,6 +99,7 @@ pub(super) async fn run(
     let mut failures: u32 = 0;
     let mut status = initial_status;
     let mut first_run = true;
+    let mut last_error: Option<String> = None;
     metrics.set_check_up(&name, status == CheckStatus::Up);
 
     let mut tick = interval(period);
@@ -124,6 +126,7 @@ pub(super) async fn run(
                         failures,
                         threshold,
                         next_run_in_secs,
+                        last_error: last_error.clone(),
                     });
                 }
             },
@@ -131,9 +134,30 @@ pub(super) async fn run(
             _ = tick.tick() => {
                 last_tick_at = tokio::time::Instant::now();
                 let probe_started = std::time::Instant::now();
-                let ok = perform(&config, timeout_dur, http.as_ref(), &service_configs).await;
+                let result = perform(&config, timeout_dur, http.as_ref(), &service_configs).await;
                 let first = std::mem::replace(&mut first_run, false);
-                if ok {
+                if let Err(reason) = result {
+                    metrics.record_check_failure(&name);
+                    failures += 1;
+                    warn!(check = %name, failures, threshold, error = ?reason, "check failed");
+                    let down = failures >= threshold && status == CheckStatus::Up;
+                    if down {
+                        info!(check = %name, error = ?reason, "check is down");
+                        status = CheckStatus::Down;
+                        metrics.set_check_up(&name, false);
+                    }
+                    let error = (status == CheckStatus::Down).then(|| reason.clone());
+                    last_error = Some(reason);
+                    // A Down transition is reported; on the first run the
+                    // current status is reported anyway, so AlertSender
+                    // knows the initial state.
+                    if down || first {
+                        let _ = event_tx
+                            .send(CheckEvent { check: name.clone(), status, passed_at: None, error })
+                            .await;
+                    }
+                } else {
+                    last_error = None;
                     metrics.record_check_success(&name);
                     if status == CheckStatus::Down {
                         info!(check = %name, "check recovered");
@@ -145,26 +169,13 @@ pub(super) async fn run(
                     // covers recovery and the initial status. Alerts only
                     // fire on status changes.
                     let _ = event_tx
-                        .send(CheckEvent { check: name.clone(), status, passed_at: Some(probe_started) })
+                        .send(CheckEvent {
+                            check: name.clone(),
+                            status,
+                            passed_at: Some(probe_started),
+                            error: None,
+                        })
                         .await;
-                } else {
-                    metrics.record_check_failure(&name);
-                    failures += 1;
-                    warn!(check = %name, failures, threshold, "check failed");
-                    if failures >= threshold && status == CheckStatus::Up {
-                        info!(check = %name, "check is down");
-                        status = CheckStatus::Down;
-                        metrics.set_check_up(&name, false);
-                        let _ = event_tx
-                            .send(CheckEvent { check: name.clone(), status, passed_at: None })
-                            .await;
-                    } else if first {
-                        // On the first run, always report the current status
-                        // so AlertSender knows the initial state.
-                        let _ = event_tx
-                            .send(CheckEvent { check: name.clone(), status, passed_at: None })
-                            .await;
-                    }
                 }
             }
         }

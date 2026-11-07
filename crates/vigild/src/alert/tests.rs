@@ -52,30 +52,30 @@ fn make_sender(check: &str) -> AlertSender {
 #[tokio::test]
 async fn first_up_suppressed() {
     let mut s = make_sender("web");
-    s.handle_check_event("web", CheckStatus::Up);
+    s.handle_check_event("web", CheckStatus::Up, None);
     assert_eq!(s.check_status("web"), Some(CheckStatus::Up));
 }
 
 #[tokio::test]
 async fn first_down_is_not_suppressed() {
     let mut s = make_sender("web");
-    s.handle_check_event("web", CheckStatus::Down);
+    s.handle_check_event("web", CheckStatus::Down, None);
     assert_eq!(s.check_status("web"), Some(CheckStatus::Down));
 }
 
 #[tokio::test]
 async fn duplicate_status_suppressed() {
     let mut s = make_sender("web");
-    s.handle_check_event("web", CheckStatus::Down);
-    s.handle_check_event("web", CheckStatus::Down);
+    s.handle_check_event("web", CheckStatus::Down, None);
+    s.handle_check_event("web", CheckStatus::Down, None);
     assert_eq!(s.check_status("web"), Some(CheckStatus::Down));
 }
 
 #[tokio::test]
 async fn down_then_up_transition() {
     let mut s = make_sender("web");
-    s.handle_check_event("web", CheckStatus::Down);
-    s.handle_check_event("web", CheckStatus::Up);
+    s.handle_check_event("web", CheckStatus::Down, None);
+    s.handle_check_event("web", CheckStatus::Up, None);
     assert_eq!(s.check_status("web"), Some(CheckStatus::Up));
 }
 
@@ -88,7 +88,7 @@ async fn unknown_check_returns_none() {
 #[tokio::test]
 async fn alert_only_fires_for_subscribed_check() {
     let mut s = make_sender("db");
-    s.handle_check_event("web", CheckStatus::Down);
+    s.handle_check_event("web", CheckStatus::Down, None);
     assert_eq!(s.check_status("web"), Some(CheckStatus::Down));
     assert_eq!(s.check_status("db"), None);
 }
@@ -177,7 +177,10 @@ async fn sources_are_independent_and_need_a_subscription() {
 
     // Subscribed to the check "app", not to the service "app".
     assert!(s.send(service_event("backoff")).is_empty());
-    assert_eq!(s.handle_check_event("app", CheckStatus::Down), ["ops"]);
+    assert_eq!(
+        s.handle_check_event("app", CheckStatus::Down, None),
+        ["ops"]
+    );
     let layers = AlertEvent::firing(AlertSource::Vigild, "layers", "invalid", "bad yaml");
     assert_eq!(s.send(layers), ["ops"]);
 }
@@ -187,17 +190,36 @@ async fn held_check_events_are_reported_by_recheck() {
     let mut s = make_sender("web");
 
     // Held down, then reported: fires.
-    s.hold_check_event("web", CheckStatus::Down);
+    s.hold_check_event("web", CheckStatus::Down, None);
     assert_eq!(s.check_status("web"), Some(CheckStatus::Down));
     assert_eq!(s.recheck("web"), ["web"]);
 
     // Held up after a reported down: the recheck resolves it.
-    s.hold_check_event("web", CheckStatus::Up);
+    s.hold_check_event("web", CheckStatus::Up, None);
     assert_eq!(s.recheck("web"), ["web"]);
 
     // Down and up again while held: nothing to report.
-    s.hold_check_event("web", CheckStatus::Down);
-    s.hold_check_event("web", CheckStatus::Up);
+    s.hold_check_event("web", CheckStatus::Down, None);
+    s.hold_check_event("web", CheckStatus::Up, None);
     assert!(s.recheck("web").is_empty());
     assert!(s.recheck("never-seen").is_empty());
+}
+
+// A down check held back (its service was not healthy yet) keeps its
+// reason: the alert sent by the recheck carries it.
+#[tokio::test]
+async fn held_check_keeps_its_reason_for_the_recheck() {
+    let mut s = make_sender("db-ready");
+    let mut rx = s.delivery_rx.take().unwrap();
+    s.hold_check_event(
+        "db-ready",
+        CheckStatus::Down,
+        Some("exit status 2: no route"),
+    );
+    assert_eq!(s.recheck("db-ready"), ["db-ready"]);
+    let job = rx.try_recv().unwrap();
+    assert_eq!(
+        job.body["message"],
+        "check db-ready failed: exit status 2: no route"
+    );
 }

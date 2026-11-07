@@ -1027,8 +1027,11 @@ exec:
   service-context: myservice
 ```
 
-The check passes if the command exits with code 0. stdout and stderr are
-suppressed (they do not appear in container logs).
+The check passes if the command exits with code 0. stdout and stderr do not
+appear in the container log. vigild keeps the last 4 KiB of both (in the
+order they were written) and adds them to the reason of a failed run, see
+[Why a check fails](#why-a-check-fails); the output of a passing run is
+dropped.
 
 `service-context` inherits the environment variables (including `env-file`),
 user, group, and working directory from the named service, which must exist. Individual fields
@@ -1046,6 +1049,30 @@ Exec checks follow the same environment rules as services (see
 accept `pass-env`, `pass-env-glob` and `pass-env-regex` as well. The check's
 `pass-env` overrides the service context's; the glob and regex lists are
 combined with the service context's lists.
+
+### Why a check fails
+
+Every failed run has a reason. vigild logs it at `warn` with each failure,
+and again when the check goes down:
+
+```
+WARN check failed check=db-ready failures=1 threshold=3 error="connect 127.0.0.1:5432: Connection refused (os error 111)"
+INFO check is down check=db-ready error="connect 127.0.0.1:5432: Connection refused (os error 111)"
+```
+
+| Probe | Example reasons |
+|---|---|
+| `http` | `HTTP 503 Service Unavailable` (a status that is not a success), `GET http://localhost:8080/healthz: Connection refused (os error 111)`, `GET https://api.internal/healthz: invalid peer certificate: UnknownIssuer`, `GET http://localhost:8080/healthz: timed out after 3s` |
+| `tcp` | `connect localhost:5432: Connection refused (os error 111)`, `connect db:5432: timed out after 3s` |
+| `exec` | `exit status 1: <output>`, `killed by signal 9`, `timed out after 3s: <output so far>` |
+
+The reason of the last failed run is also:
+
+- in `GET /v1/checks` as `last-error`, until a run passes;
+- in the `Last error` column of `vigil checks list` (first line, cut to 60
+  characters);
+- in the alert message of a check that went down: `check db-ready failed:
+  connect 127.0.0.1:5432: Connection refused (os error 111)`.
 
 ---
 
@@ -1083,7 +1110,9 @@ only after a problem was sent.
 | Down → Down | **No** — deduplicated |
 | Up → Up | **No** — deduplicated |
 
-Event names: `failed` (down) and `recovered` (up).
+Event names: `failed` (down) and `recovered` (up). The message of `failed`
+carries the reason of the run that took the check down, see [Why a check
+fails](#why-a-check-fails).
 
 ### Service events
 
@@ -1381,7 +1410,7 @@ Default payload (no `body-template`):
   "name": "website-alive",
   "event": "failed",
   "status": "down",
-  "message": "check website-alive failed",
+  "message": "check website-alive failed: HTTP 503 Service Unavailable",
   "check": "website-alive",
   "timestamp": "2026-03-21T12:00:00Z",
   "labels": { "env": "production" },
@@ -1415,7 +1444,7 @@ for the full variable reference.
 ```json
 [{
   "labels":      { "alertname": "website-alive", "source": "check", "check": "website-alive", "env": "production" },
-  "annotations": { "event": "failed", "message": "check website-alive failed", "runbook": "https://wiki.example.com/…" },
+  "annotations": { "event": "failed", "message": "check website-alive failed: HTTP 503 Service Unavailable", "runbook": "https://wiki.example.com/…" },
   "startsAt":    "2026-03-21T12:00:00Z",
   "endsAt":      "0001-01-01T00:00:00Z"
 }]
@@ -1441,7 +1470,7 @@ resolved event (`recovered`) has the same labels as the problem it ends.
     "name": "website-alive",
     "event": "failed",
     "status": "down",
-    "message": "check website-alive failed",
+    "message": "check website-alive failed: HTTP 503 Service Unavailable",
     "check": "website-alive",
     "labels": { "env": "production" },
     "info":   { "k8s_namespace": "prod" }

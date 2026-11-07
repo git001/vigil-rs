@@ -19,7 +19,7 @@ fn empty_cfg() -> AlertConfig {
 #[test]
 fn format_webhook_has_expected_keys() {
     let cfg = empty_cfg();
-    let v = format_webhook(&AlertEvent::check("web", CheckStatus::Down), &cfg);
+    let v = format_webhook(&AlertEvent::check("web", CheckStatus::Down, None), &cfg);
     assert_eq!(v["check"], "web");
     assert_eq!(v["status"], "down");
     assert!(v["timestamp"].is_string());
@@ -28,7 +28,7 @@ fn format_webhook_has_expected_keys() {
 #[test]
 fn format_alertmanager_down_has_zero_ends_at() {
     let cfg = empty_cfg();
-    let v = format_alertmanager(&AlertEvent::check("web", CheckStatus::Down), &cfg);
+    let v = format_alertmanager(&AlertEvent::check("web", CheckStatus::Down, None), &cfg);
     let alert = &v[0];
     assert_eq!(alert["endsAt"], "0001-01-01T00:00:00Z");
     assert_eq!(alert["labels"]["alertname"], "web");
@@ -37,7 +37,7 @@ fn format_alertmanager_down_has_zero_ends_at() {
 #[test]
 fn format_alertmanager_up_has_zero_starts_at() {
     let cfg = empty_cfg();
-    let v = format_alertmanager(&AlertEvent::check("web", CheckStatus::Up), &cfg);
+    let v = format_alertmanager(&AlertEvent::check("web", CheckStatus::Up, None), &cfg);
     let alert = &v[0];
     assert_eq!(alert["startsAt"], "0001-01-01T00:00:00Z");
 }
@@ -45,7 +45,7 @@ fn format_alertmanager_up_has_zero_starts_at() {
 #[test]
 fn format_cloudevents_down_type() {
     let cfg = empty_cfg();
-    let v = format_cloudevents(&AlertEvent::check("web", CheckStatus::Down), &cfg);
+    let v = format_cloudevents(&AlertEvent::check("web", CheckStatus::Down, None), &cfg);
     assert_eq!(v["type"], "io.vigil.check.failed");
     assert_eq!(v["specversion"], "1.0");
 }
@@ -53,14 +53,14 @@ fn format_cloudevents_down_type() {
 #[test]
 fn format_cloudevents_up_type() {
     let cfg = empty_cfg();
-    let v = format_cloudevents(&AlertEvent::check("web", CheckStatus::Up), &cfg);
+    let v = format_cloudevents(&AlertEvent::check("web", CheckStatus::Up, None), &cfg);
     assert_eq!(v["type"], "io.vigil.check.recovered");
 }
 
 #[test]
 fn format_otlp_logs_down_severity() {
     let cfg = empty_cfg();
-    let v = format_otlp_logs(&AlertEvent::check("web", CheckStatus::Down), &cfg);
+    let v = format_otlp_logs(&AlertEvent::check("web", CheckStatus::Down, None), &cfg);
     let record = &v["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0];
     assert_eq!(record["severityNumber"], 17);
     assert_eq!(record["severityText"], "ERROR");
@@ -69,7 +69,7 @@ fn format_otlp_logs_down_severity() {
 #[test]
 fn format_otlp_logs_up_severity() {
     let cfg = empty_cfg();
-    let v = format_otlp_logs(&AlertEvent::check("web", CheckStatus::Up), &cfg);
+    let v = format_otlp_logs(&AlertEvent::check("web", CheckStatus::Up, None), &cfg);
     let record = &v["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0];
     assert_eq!(record["severityNumber"], 9);
     assert_eq!(record["severityText"], "INFO");
@@ -81,7 +81,7 @@ fn format_otlp_logs_up_severity() {
 fn template_slack_like_down() {
     let mut cfg = empty_cfg();
     cfg.body_template = Some(r#"{"text": "Check {{ check }} is {{ status }}"}"#.to_string());
-    let v = format_payload(&AlertEvent::check("web", CheckStatus::Down), &cfg);
+    let v = format_payload(&AlertEvent::check("web", CheckStatus::Down, None), &cfg);
     assert_eq!(v["text"], "Check web is down");
 }
 
@@ -89,7 +89,7 @@ fn template_slack_like_down() {
 fn template_slack_like_up() {
     let mut cfg = empty_cfg();
     cfg.body_template = Some(r#"{"text": "{{ check }} recovered"}"#.to_string());
-    let v = format_payload(&AlertEvent::check("db", CheckStatus::Up), &cfg);
+    let v = format_payload(&AlertEvent::check("db", CheckStatus::Up, None), &cfg);
     assert_eq!(v["text"], "db recovered");
 }
 
@@ -103,7 +103,7 @@ fn template_with_labels_and_info() {
         r#"{"env": "{{ labels.env }}", "team": "{{ info.team }}", "s": "{{ status }}"}"#
             .to_string(),
     );
-    let v = format_payload(&AlertEvent::check("my-check", CheckStatus::Up), &cfg);
+    let v = format_payload(&AlertEvent::check("my-check", CheckStatus::Up, None), &cfg);
     assert_eq!(v["env"], "prod");
     assert_eq!(v["team"], "platform");
     assert_eq!(v["s"], "up");
@@ -113,7 +113,7 @@ fn template_with_labels_and_info() {
 fn template_timestamp_is_string() {
     let mut cfg = empty_cfg();
     cfg.body_template = Some(r#"{"ts": "{{ timestamp }}"}"#.to_string());
-    let v = format_payload(&AlertEvent::check("web", CheckStatus::Down), &cfg);
+    let v = format_payload(&AlertEvent::check("web", CheckStatus::Down, None), &cfg);
     assert!(
         v["ts"].as_str().unwrap().contains('T'),
         "timestamp should be RFC3339"
@@ -125,9 +125,9 @@ fn template_conditional_color() {
     let mut cfg = empty_cfg();
     cfg.body_template =
         Some(r#"{"color": "{% if status == 'down' %}red{% else %}green{% endif %}"}"#.to_string());
-    let down = format_payload(&AlertEvent::check("web", CheckStatus::Down), &cfg);
+    let down = format_payload(&AlertEvent::check("web", CheckStatus::Down, None), &cfg);
     assert_eq!(down["color"], "red");
-    let up = format_payload(&AlertEvent::check("web", CheckStatus::Up), &cfg);
+    let up = format_payload(&AlertEvent::check("web", CheckStatus::Up, None), &cfg);
     assert_eq!(up["color"], "green");
 }
 
@@ -135,7 +135,7 @@ fn template_conditional_color() {
 fn template_invalid_jinja_falls_back_to_default() {
     let mut cfg = empty_cfg();
     cfg.body_template = Some("{{ unclosed".to_string()); // invalid syntax
-    let v = format_payload(&AlertEvent::check("web", CheckStatus::Down), &cfg);
+    let v = format_payload(&AlertEvent::check("web", CheckStatus::Down, None), &cfg);
     // Falls back to default webhook payload
     assert_eq!(v["check"], "web");
     assert_eq!(v["status"], "down");
@@ -145,7 +145,7 @@ fn template_invalid_jinja_falls_back_to_default() {
 fn template_invalid_json_output_falls_back_to_default() {
     let mut cfg = empty_cfg();
     cfg.body_template = Some("not json at all — {{ check }}".to_string());
-    let v = format_payload(&AlertEvent::check("web", CheckStatus::Down), &cfg);
+    let v = format_payload(&AlertEvent::check("web", CheckStatus::Down, None), &cfg);
     assert_eq!(v["check"], "web");
     assert_eq!(v["status"], "down");
 }
@@ -155,7 +155,7 @@ fn template_ignored_for_alertmanager_format() {
     let mut cfg = empty_cfg();
     cfg.format = Some(AlertFormat::Alertmanager);
     cfg.body_template = Some(r#"{"text": "should be ignored"}"#.to_string());
-    let v = format_payload(&AlertEvent::check("web", CheckStatus::Down), &cfg);
+    let v = format_payload(&AlertEvent::check("web", CheckStatus::Down, None), &cfg);
     // Must use alertmanager format, not the template
     assert!(v.is_array());
     assert_eq!(v[0]["labels"]["alertname"], "web");
@@ -166,7 +166,7 @@ fn template_ignored_for_cloudevents_format() {
     let mut cfg = empty_cfg();
     cfg.format = Some(AlertFormat::CloudEvents);
     cfg.body_template = Some(r#"{"text": "should be ignored"}"#.to_string());
-    let v = format_payload(&AlertEvent::check("web", CheckStatus::Down), &cfg);
+    let v = format_payload(&AlertEvent::check("web", CheckStatus::Down, None), &cfg);
     assert_eq!(v["specversion"], "1.0");
 }
 
@@ -175,7 +175,7 @@ fn template_ignored_for_otlp_format() {
     let mut cfg = empty_cfg();
     cfg.format = Some(AlertFormat::OtlpLogs);
     cfg.body_template = Some(r#"{"text": "should be ignored"}"#.to_string());
-    let v = format_payload(&AlertEvent::check("web", CheckStatus::Down), &cfg);
+    let v = format_payload(&AlertEvent::check("web", CheckStatus::Down, None), &cfg);
     assert!(v["resourceLogs"].is_array());
 }
 
@@ -203,7 +203,10 @@ fn webhook_service_event_has_no_check_field() {
 
 #[test]
 fn webhook_check_event_keeps_check_field() {
-    let v = format_webhook(&AlertEvent::check("web", CheckStatus::Up), &empty_cfg());
+    let v = format_webhook(
+        &AlertEvent::check("web", CheckStatus::Up, None),
+        &empty_cfg(),
+    );
     assert_eq!(v["check"], "web");
     assert_eq!(v["source"], "check");
     assert_eq!(v["event"], "recovered");
@@ -287,4 +290,23 @@ fn otlp_attributes_carry_labels_and_send_info_fields() {
     };
     assert_eq!(get("cluster"), Some("prod-eu-1".into()));
     assert_eq!(get("pod"), Some("api-7d9f-x2x4q".into()));
+}
+
+#[test]
+fn check_down_message_carries_the_reason() {
+    let ev = AlertEvent::check(
+        "db-ready",
+        CheckStatus::Down,
+        Some("HTTP 503 Service Unavailable"),
+    );
+    let v = format_webhook(&ev, &empty_cfg());
+    assert_eq!(
+        v["message"],
+        "check db-ready failed: HTTP 503 Service Unavailable"
+    );
+    let ev = AlertEvent::check("db-ready", CheckStatus::Down, None);
+    assert_eq!(
+        format_webhook(&ev, &empty_cfg())["message"],
+        "check db-ready failed"
+    );
 }

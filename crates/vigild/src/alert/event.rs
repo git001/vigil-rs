@@ -74,14 +74,13 @@ impl AlertEvent {
     }
 
     /// A check status change: `failed` for down, `recovered` for up.
-    pub fn check(name: &str, status: CheckStatus) -> Self {
+    pub fn check(name: &str, status: CheckStatus, error: Option<&str>) -> Self {
         if status == CheckStatus::Down {
-            Self::firing(
-                AlertSource::Check,
-                name,
-                "failed",
-                format!("check {name} failed"),
-            )
+            let message = match error {
+                Some(e) => format!("check {name} failed: {e}"),
+                None => format!("check {name} failed"),
+            };
+            Self::firing(AlertSource::Check, name, "failed", message)
         } else {
             Self::resolved(AlertSource::Check, name, format!("check {name} recovered"))
         }

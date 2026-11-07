@@ -33,7 +33,7 @@ async fn alertmanager_format_fires_on_down() {
     );
     sender.update_alerts(prepared(alerts));
     sender.spawn_worker();
-    sender.handle_check_event("my-check", CheckStatus::Down);
+    sender.handle_check_event("my-check", CheckStatus::Down, None);
 
     wait_for_requests(&mock_server, 1, Duration::from_millis(500)).await;
     mock_server.verify().await;
@@ -63,8 +63,8 @@ async fn alertmanager_format_fires_resolved_on_up() {
     sender.update_alerts(prepared(alerts));
     sender.spawn_worker();
 
-    sender.handle_check_event("my-check", CheckStatus::Down);
-    sender.handle_check_event("my-check", CheckStatus::Up);
+    sender.handle_check_event("my-check", CheckStatus::Down, None);
+    sender.handle_check_event("my-check", CheckStatus::Up, None);
 
     wait_for_requests(&mock_server, 2, Duration::from_millis(500)).await;
     let reqs = mock_server.received_requests().await.unwrap();

@@ -397,6 +397,7 @@ async fn on_check_failure_ignore_sends_no_command() {
         check: "my-check".to_string(),
         status: vigil_types::api::CheckStatus::Down,
         passed_at: None,
+        error: None,
     };
     ov.handle_check_event(event).await;
 
@@ -441,6 +442,7 @@ async fn on_check_failure_restart_sends_restart_command() {
         check: "my-check".to_string(),
         status: vigil_types::api::CheckStatus::Down,
         passed_at: None,
+        error: None,
     };
     ov.handle_check_event(event).await;
 
@@ -466,6 +468,7 @@ async fn check_event_up_does_not_trigger_action() {
         check: "my-check".to_string(),
         status: vigil_types::api::CheckStatus::Up,
         passed_at: None,
+        error: None,
     };
     ov.handle_check_event(event).await;
     assert!(
@@ -877,6 +880,7 @@ async fn check_pass_is_forwarded_only_to_starting_ready_check_services() {
         check: "c".into(),
         status: vigil_types::api::CheckStatus::Up,
         passed_at: Some(at),
+        error: None,
     })
     .await;
 
@@ -974,6 +978,7 @@ async fn check_event(ov: &mut Overlord, status: vigil_types::api::CheckStatus) {
         check: "web".into(),
         status,
         passed_at: None,
+        error: None,
     })
     .await;
 }
