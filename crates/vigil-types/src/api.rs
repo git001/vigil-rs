@@ -119,6 +119,10 @@ pub struct ServiceInfo {
     /// Next scheduled run (`schedule`); absent for unscheduled services.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_run: Option<DateTime<Utc>>,
+    /// Dependencies (`after`, `before`, `requires`) a service queued by
+    /// autostart still waits for before it starts; absent otherwise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waiting_for: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

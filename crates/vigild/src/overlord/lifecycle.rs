@@ -200,26 +200,50 @@ impl Overlord {
     /// - `requires: [X]` — same ordering constraint (plus a stop cascade at runtime)
     /// - `X before: [name]` — X declared it must start before name (reverse `after`)
     pub(super) fn after_deps_running(&self, name: &str) -> bool {
+        self.unmet_deps(name).is_empty()
+    }
+
+    /// The dependencies `name` still waits for before it starts.
+    ///
+    /// `after` and `before` only order services that are started anyway: a
+    /// dependency autostart does not start (disabled, scheduled) is ignored
+    /// unless it is starting right now, so it cannot block the service
+    /// forever. `requires` is a hard dependency: it is always waited for.
+    pub(super) fn unmet_deps(&self, name: &str) -> Vec<String> {
         let Some(config) = self.plan.services.get(name) else {
-            return true;
+            return Vec::new();
         };
-
-        // after: and requires: direct ordering deps
-        let direct_ok = config
-            .after
-            .iter()
-            .chain(config.requires.iter())
-            .all(|dep| self.dep_ready(dep));
-
-        // before: reverse — any service X where name ∈ X.before must be running first
-        let before_ok = self
+        // X before: [name] makes X an ordering dependency of name.
+        let reverse_before = self
             .plan
             .services
             .iter()
-            .filter(|(other, c)| *other != name && c.before.contains(&name.to_string()))
-            .all(|(dep, _)| self.dep_ready(dep));
+            .filter(|(other, c)| *other != name && c.before.iter().any(|b| b == name))
+            .map(|(other, _)| other);
+        let ordering = config.after.iter().chain(reverse_before);
 
-        direct_ok && before_ok
+        let mut unmet: Vec<String> = Vec::new();
+        for dep in ordering {
+            if !self.dep_ready(dep) && !self.ordering_dep_ignored(dep) && !unmet.contains(dep) {
+                unmet.push(dep.clone());
+            }
+        }
+        for dep in &config.requires {
+            if !self.dep_ready(dep) && !unmet.contains(dep) {
+                unmet.push(dep.clone());
+            }
+        }
+        unmet
+    }
+
+    /// An `after`/`before` dependency that will not come up by itself: not
+    /// started by autostart and not starting now.
+    fn ordering_dep_ignored(&self, dep: &str) -> bool {
+        self.autostart_skip_reason(dep).is_some()
+            && self
+                .services
+                .get(dep)
+                .is_none_or(|e| e.snapshot.state != ServiceState::Starting)
     }
 
     /// Check pending services and start any whose `after:` deps are now running.

@@ -163,6 +163,9 @@ until the service has exited once. The values are raw (before
 `next-run` is the next scheduled run of a `type: oneshot` service with a
 `schedule` (only while the schedule is armed, i.e. `startup: enabled`).
 
+`waiting-for` lists the dependencies (`after`, `before`, `requires`) a
+service queued by autostart still waits for; it is omitted otherwise.
+
 **Service status values:** `starting` | `active` | `inactive` | `backoff` |
 `error` | `done`. `done` (new in v4) means a `type: oneshot` service finished
 successfully. `starting` (new in v4) means the process runs but is not ready yet

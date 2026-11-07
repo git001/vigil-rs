@@ -150,7 +150,7 @@ impl Overlord {
         change
     }
 
-    fn get_service_infos(&self, names: &[String]) -> Vec<ServiceInfo> {
+    pub(super) fn get_service_infos(&self, names: &[String]) -> Vec<ServiceInfo> {
         self.services
             .values()
             .filter(|e| names.is_empty() || names.contains(&e.snapshot.name))
@@ -180,6 +180,11 @@ impl Overlord {
                     last_exit: e.snapshot.last_exit,
                     status_message: e.snapshot.status_message.clone(),
                     next_run: e.snapshot.next_run,
+                    waiting_for: if self.pending_autostart.contains(&e.snapshot.name) {
+                        self.unmet_deps(&e.snapshot.name)
+                    } else {
+                        Vec::new()
+                    },
                 }
             })
             .collect()

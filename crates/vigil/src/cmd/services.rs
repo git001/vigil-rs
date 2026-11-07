@@ -49,9 +49,10 @@ pub async fn run(client: &VigilClient, sub: ServicesCmd) -> anyhow::Result<()> {
                 return Ok(());
             }
             // Optional columns only appear when a service has a value:
-            // Next-Run (schedule) and Message (sd_notify STATUS=).
+            // Next-Run (schedule) and Message (sd_notify STATUS=, or the
+            // dependencies a queued service still waits for).
             let with_next = services.iter().any(|s| s.next_run.is_some());
-            let with_msg = services.iter().any(|s| s.status_message.is_some());
+            let with_msg = services.iter().any(|s| message(s).is_some());
             let header = format!(
                 "{:<24} {:<10} {:<10} {:<18} {:<18} {:<12} {:<10}",
                 "Service",
@@ -92,7 +93,7 @@ pub async fn run(client: &VigilClient, sub: ServicesCmd) -> anyhow::Result<()> {
                 }
                 if with_msg {
                     row.push(' ');
-                    row.push_str(svc.status_message.as_deref().unwrap_or("-"));
+                    row.push_str(message(&svc).as_deref().unwrap_or("-"));
                 }
                 println!("{}", row.trim_end());
             }
@@ -113,6 +114,14 @@ pub async fn run(client: &VigilClient, sub: ServicesCmd) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// The Message column: the service's sd_notify `STATUS=` text, else the
+/// dependencies it waits for before autostart starts it.
+fn message(svc: &vigil_types::api::ServiceInfo) -> Option<String> {
+    svc.status_message.clone().or_else(|| {
+        (!svc.waiting_for.is_empty()).then(|| format!("waiting for {}", svc.waiting_for.join(", ")))
+    })
 }
 
 /// `3`, `SIGTERM`, or `-` if the service has not exited yet.

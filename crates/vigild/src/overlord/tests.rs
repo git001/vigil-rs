@@ -122,13 +122,16 @@ fn after_dep_running_unblocks_service() {
 
 #[test]
 fn after_dep_inactive_blocks_service() {
-    let ov = make_overlord(
+    let mut ov = make_overlord(
         &[("dep", &[], &[], &[]), ("svc", &["dep"], &[], &[])],
         &[
             ("dep", ServiceState::Inactive),
             ("svc", ServiceState::Inactive),
         ],
     );
+    // An autostarted dependency that is not ready yet blocks (a disabled
+    // one would be ignored, see unmet_deps).
+    ov.plan.services.get_mut("dep").unwrap().startup = Some(Startup::Enabled);
     assert!(!ov.after_deps_running("svc"));
 }
 
@@ -156,13 +159,14 @@ fn before_dep_running_unblocks_service() {
 
 #[test]
 fn before_dep_inactive_blocks_service() {
-    let ov = make_overlord(
+    let mut ov = make_overlord(
         &[("gate", &[], &[], &["svc"]), ("svc", &[], &[], &[])],
         &[
             ("gate", ServiceState::Inactive),
             ("svc", ServiceState::Inactive),
         ],
     );
+    ov.plan.services.get_mut("gate").unwrap().startup = Some(Startup::Enabled);
     assert!(!ov.after_deps_running("svc"));
 }
 
@@ -1233,20 +1237,21 @@ async fn autostart_defers_a_service_until_its_dependency_runs() {
 }
 
 /// Plan for the autostart tests: `on` enabled, `off` disabled, `cron`
-/// enabled but scheduled, `late` enabled but `after: [blocker]`, which is
-/// disabled and never ready.
+/// enabled but scheduled, `late` enabled but `requires: [blocker]`, which is
+/// disabled and never ready, `ordered` enabled with `after: [blocker]`.
 fn autostart_overlord() -> Overlord {
     let mut ov = make_overlord(
         &[
             ("on", &[], &[], &[]),
             ("off", &[], &[], &[]),
             ("cron", &[], &[], &[]),
-            ("late", &["blocker"], &[], &[]),
+            ("late", &[], &["blocker"], &[]),
+            ("ordered", &["blocker"], &[], &[]),
             ("blocker", &[], &[], &[]),
         ],
         &[],
     );
-    for name in ["on", "cron", "late"] {
+    for name in ["on", "cron", "late", "ordered"] {
         ov.plan.services.get_mut(name).unwrap().startup = Some(Startup::Enabled);
     }
     ov.plan.services.get_mut("cron").unwrap().schedule = Some("0 3 * * *".into());
@@ -1266,6 +1271,7 @@ async fn autostart_action_without_names_starts_what_startup_starts() {
     let mut off = stub_actor(&mut ov, "off");
     let mut cron = stub_actor(&mut ov, "cron");
     let mut late = stub_actor(&mut ov, "late");
+    let mut ordered = stub_actor(&mut ov, "ordered");
     let change = services_action(&mut ov, vigil_types::api::ServiceAction::Autostart, vec![]).await;
     assert_eq!(change.kind, "autostart");
     assert_eq!(change.status, vigil_types::api::ChangeStatus::Done);
@@ -1274,9 +1280,24 @@ async fn autostart_action_without_names_starts_what_startup_starts() {
     assert!(!got_command(&mut cron).await, "scheduled job started");
     assert!(
         !got_command(&mut late).await,
-        "started before its after dependency"
+        "started before its required dependency"
     );
+    // after: on a service autostart does not start is only an ordering, and
+    // it is ignored instead of blocking forever.
+    assert_eq!(next_seen(&mut ordered).await, "start");
     assert_eq!(ov.pending_autostart, ["late"]);
+    // vigil services list shows what the queued service waits for.
+    let infos = ov.get_service_infos(&[]);
+    let waiting = |n: &str| {
+        infos
+            .iter()
+            .find(|i| i.name == n)
+            .unwrap()
+            .waiting_for
+            .clone()
+    };
+    assert_eq!(waiting("late"), ["blocker"]);
+    assert!(waiting("ordered").is_empty());
     // The plan is not changed: off stays disabled.
     assert_eq!(ov.plan.services["off"].startup(), Startup::Disabled);
 
@@ -1412,4 +1433,27 @@ async fn sync_actors_hands_the_new_http_client_to_unchanged_checks() {
     ov.checks.get_mut("web").unwrap().handle = check::Handle { tx };
     ov.sync_actors();
     assert!(ov.checks.contains_key("web"));
+}
+
+// after: on a service autostart does not start is still waited for while
+// that service is starting (someone started it by hand).
+#[tokio::test]
+async fn after_waits_for_a_disabled_dependency_that_is_starting() {
+    let mut ov = make_overlord(
+        &[("app", &["db"], &[], &[]), ("db", &[], &[], &[])],
+        &[("db", ServiceState::Starting)],
+    );
+    ov.plan.services.get_mut("app").unwrap().startup = Some(Startup::Enabled);
+    assert_eq!(ov.unmet_deps("app"), ["db"]);
+    ov.services.get_mut("db").unwrap().snapshot.state = ServiceState::Inactive;
+    assert!(
+        ov.unmet_deps("app").is_empty(),
+        "inactive and disabled: ignored"
+    );
+    // before: on the dependency side works the same way.
+    let mut ov = make_overlord(&[("app", &[], &[], &[]), ("db", &[], &[], &["app"])], &[]);
+    ov.plan.services.get_mut("app").unwrap().startup = Some(Startup::Enabled);
+    assert!(ov.unmet_deps("app").is_empty());
+    ov.plan.services.get_mut("db").unwrap().startup = Some(Startup::Enabled);
+    assert_eq!(ov.unmet_deps("app"), ["db"]);
 }

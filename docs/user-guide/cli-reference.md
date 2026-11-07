@@ -138,7 +138,8 @@ migrate                  enabled    inactive   ignore             ignore        
 `Last-Exit` is the exit code of the service's last process, the signal name
 if it was killed by a signal, or `-` if it has not exited yet. A `Next-Run`
 column (UTC) is added when a service has a `schedule`, a `Message` column when
-a service reported a `STATUS=` text via sd_notify.
+a service reported a `STATUS=` text via sd_notify or waits for a dependency
+before autostart starts it (`waiting for db`).
 
 **Status values:**
 

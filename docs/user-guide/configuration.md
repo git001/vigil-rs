@@ -520,6 +520,24 @@ exist in the merged plan.
   then, and the dependent keeps running. Use this for hard dependencies where
   the dependent service cannot function without the required one.
 
+The ordering applies when vigild starts services by itself: at startup, on
+replan and with the `autostart` action. `vigil services start` starts the
+named services at once.
+
+A dependency that autostart does not start (`startup: disabled`, or a
+`schedule`) behaves differently per key:
+
+- `after` / `before`: only an ordering among services that start anyway, so
+  the dependency is ignored and the service starts without it (unless the
+  dependency is starting right now, then it waits for it).
+- `requires`: a hard dependency, so the service waits until the dependency
+  is started and ready, for example by `vigil services start <dependency>`.
+  vigild does not start it on its own.
+
+vigild logs a warning for both cases when it loads the layers, and
+`vigil services list` shows `waiting for <dependency>` in the `Message`
+column of a waiting service.
+
 #### `ready` / `ready-check` / `ready-timeout`
 
 When a started service counts as ready. Until then its status is `starting`,

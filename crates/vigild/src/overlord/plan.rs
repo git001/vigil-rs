@@ -131,6 +131,9 @@ fn validate_service(plan: &Plan, name: &str, svc: &ServiceConfig) -> anyhow::Res
         tracing::warn!(service = %name, "{REDUNDANT_LISTS}");
     }
     validate_ready(plan, svc)?;
+    for warning in dependency_warnings(plan, name, svc) {
+        tracing::warn!(service = %name, "{warning}");
+    }
     validate_oneshot(svc)?;
     crate::template::check_service(svc)?;
     validate_watch_files(svc)?;
@@ -296,6 +299,53 @@ fn validate_oneshot(svc: &ServiceConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Why autostart does not start `svc`, judged from the plan alone.
+fn not_autostarted(svc: &ServiceConfig) -> Option<&'static str> {
+    if svc.startup() != vigil_types::plan::Startup::Enabled {
+        Some("startup is not enabled")
+    } else if svc.schedule.is_some() {
+        Some("it is scheduled")
+    } else {
+        None
+    }
+}
+
+/// Warnings for dependencies of an autostarted service that autostart does
+/// not start: an `after`/`before` ordering on them is ignored, a `requires`
+/// makes the service wait until they are started.
+fn dependency_warnings(plan: &Plan, name: &str, svc: &ServiceConfig) -> Vec<String> {
+    if not_autostarted(svc).is_some() {
+        return Vec::new();
+    }
+    let reverse_before = plan
+        .services
+        .iter()
+        .filter(|(other, c)| *other != name && c.before.iter().any(|b| b == name))
+        .map(|(other, _)| other);
+    let mut warnings = Vec::new();
+    let mut seen: Vec<&String> = Vec::new();
+    for dep in svc.after.iter().chain(reverse_before) {
+        if let Some(why) = plan.services.get(dep).and_then(not_autostarted)
+            && !seen.contains(&dep)
+        {
+            seen.push(dep);
+            warnings.push(format!(
+                "starts after {dep:?}, but autostart does not start {dep:?} ({why}): \
+                 the ordering is ignored"
+            ));
+        }
+    }
+    for dep in &svc.requires {
+        if let Some(why) = plan.services.get(dep).and_then(not_autostarted) {
+            warnings.push(format!(
+                "requires {dep:?}, but autostart does not start {dep:?} ({why}): \
+                 {name:?} waits until {dep:?} is started"
+            ));
+        }
+    }
+    warnings
+}
+
 fn validate_ready(plan: &Plan, svc: &ServiceConfig) -> anyhow::Result<()> {
     use vigil_types::plan::{ReadyMode, Startup};
 
@@ -420,6 +470,23 @@ mod tests {
         crate::alert::LoadEnv {
             parent: parent.iter().map(|(k, v)| (k.into(), v.into())).collect(),
         }
+    }
+
+    #[test]
+    fn dependency_warnings_name_ignored_orderings_and_waiting_requires() {
+        let layer: Layer = serde_yaml::from_str(
+            "services:\n  app:\n    command: sleep 9\n    startup: enabled\n    after: [db, cache]\n    requires: [db]\n  db:\n    command: sleep 9\n  cache:\n    command: sleep 9\n    startup: enabled\n  backup:\n    command: sleep 9\n    startup: enabled\n    schedule: \"0 3 * * *\"\n    before: [app]\n  idle:\n    command: sleep 9\n    after: [db]\n",
+        )
+        .unwrap();
+        let plan = Plan::from_layers(vec![layer]);
+        let w = dependency_warnings(&plan, "app", &plan.services["app"]);
+        assert_eq!(w.len(), 3, "{w:?}");
+        assert!(w[0].contains("after \"db\"") && w[0].contains("startup is not enabled"));
+        assert!(w[0].contains("the ordering is ignored"));
+        assert!(w[1].contains("after \"backup\"") && w[1].contains("it is scheduled"));
+        assert!(w[2].contains("requires \"db\"") && w[2].contains("\"app\" waits until \"db\""));
+        // A service autostart does not start itself gets no warnings.
+        assert!(dependency_warnings(&plan, "idle", &plan.services["idle"]).is_empty());
     }
 
     #[test]
