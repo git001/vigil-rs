@@ -4,23 +4,20 @@
 //! vigild HTTP client — public API surface.
 
 mod http_client;
+mod logs;
 mod transport;
 
 pub use http_client::HttpConfig;
 
 use std::path::PathBuf;
 
-use bytes::Bytes;
-use http_body_util::Full;
 use http_client::build_reqwest_client;
-use transport::{
-    Transport, drain_sse_buf, http_parse, http_parse_void, names_query, unix_send, unix_send_void,
-    unix_uri,
-};
+use hyper::Method;
+use transport::{Transport, names_query, parse, parse_void};
 use vigil_types::api::{
     AlertInfo, ChangeInfo, CheckInfo, CheckRefresh, CheckRefreshRequest, DaemonAction,
-    DaemonActionRequest, LogEntry, ServiceAction, ServiceInfo, ServicesAction, SignalsRequest,
-    SignalsResult, SystemInfo,
+    DaemonActionRequest, ServiceAction, ServiceInfo, ServicesAction, SignalsRequest, SignalsResult,
+    SystemInfo,
 };
 use vigil_types::identity::{
     AddIdentitiesRequest, Identity, IdentitySpec, RemoveIdentitiesRequest,
@@ -66,19 +63,8 @@ impl VigilClient {
     // -----------------------------------------------------------------------
 
     async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> anyhow::Result<T> {
-        match &self.transport {
-            Transport::Unix(c) => {
-                let req = hyper::Request::builder()
-                    .method("GET")
-                    .uri(unix_uri(path)?)
-                    .body(Full::default())?;
-                unix_send(c, req).await
-            }
-            Transport::Http { client, base_url } => {
-                let resp = client.get(format!("{}{}", base_url, path)).send().await?;
-                http_parse(resp).await
-            }
-        }
+        let (status, body) = self.transport.send(Method::GET, path, None).await?;
+        parse(status, &body)
     }
 
     async fn post<B: serde::Serialize, T: serde::de::DeserializeOwned>(
@@ -86,48 +72,14 @@ impl VigilClient {
         path: &str,
         body: &B,
     ) -> anyhow::Result<T> {
-        match &self.transport {
-            Transport::Unix(c) => {
-                let bytes = Bytes::from(serde_json::to_vec(body)?);
-                let req = hyper::Request::builder()
-                    .method("POST")
-                    .uri(unix_uri(path)?)
-                    .header("content-type", "application/json")
-                    .body(Full::new(bytes))?;
-                unix_send(c, req).await
-            }
-            Transport::Http { client, base_url } => {
-                let resp = client
-                    .post(format!("{}{}", base_url, path))
-                    .json(body)
-                    .send()
-                    .await?;
-                http_parse(resp).await
-            }
-        }
+        let (status, body) = self.send_json(Method::POST, path, body).await?;
+        parse(status, &body)
     }
 
     /// POST to an endpoint that returns no meaningful body (`ApiResult<()>`).
     async fn post_void<B: serde::Serialize>(&self, path: &str, body: &B) -> anyhow::Result<()> {
-        match &self.transport {
-            Transport::Unix(c) => {
-                let bytes = Bytes::from(serde_json::to_vec(body)?);
-                let req = hyper::Request::builder()
-                    .method("POST")
-                    .uri(unix_uri(path)?)
-                    .header("content-type", "application/json")
-                    .body(Full::new(bytes))?;
-                unix_send_void(c, req).await
-            }
-            Transport::Http { client, base_url } => {
-                let resp = client
-                    .post(format!("{}{}", base_url, path))
-                    .json(body)
-                    .send()
-                    .await?;
-                http_parse_void(resp).await
-            }
-        }
+        let (status, body) = self.send_json(Method::POST, path, body).await?;
+        parse_void(status, &body)
     }
 
     async fn delete<B: serde::Serialize, T: serde::de::DeserializeOwned>(
@@ -135,25 +87,18 @@ impl VigilClient {
         path: &str,
         body: &B,
     ) -> anyhow::Result<T> {
-        match &self.transport {
-            Transport::Unix(c) => {
-                let bytes = Bytes::from(serde_json::to_vec(body)?);
-                let req = hyper::Request::builder()
-                    .method("DELETE")
-                    .uri(unix_uri(path)?)
-                    .header("content-type", "application/json")
-                    .body(Full::new(bytes))?;
-                unix_send(c, req).await
-            }
-            Transport::Http { client, base_url } => {
-                let resp = client
-                    .delete(format!("{}{}", base_url, path))
-                    .json(body)
-                    .send()
-                    .await?;
-                http_parse(resp).await
-            }
-        }
+        let (status, body) = self.send_json(Method::DELETE, path, body).await?;
+        parse(status, &body)
+    }
+
+    async fn send_json<B: serde::Serialize>(
+        &self,
+        method: Method,
+        path: &str,
+        body: &B,
+    ) -> anyhow::Result<(hyper::StatusCode, bytes::Bytes)> {
+        let json = serde_json::to_vec(body)?;
+        self.transport.send(method, path, Some(json)).await
     }
 
     // -----------------------------------------------------------------------
@@ -211,90 +156,6 @@ impl VigilClient {
 
     pub async fn list_alerts(&self, names: &[String]) -> anyhow::Result<Vec<AlertInfo>> {
         self.get(&format!("/v1/alerts{}", names_query(names))).await
-    }
-
-    pub async fn list_logs(
-        &self,
-        services: &[String],
-        n: Option<usize>,
-    ) -> anyhow::Result<Vec<LogEntry>> {
-        let mut params = Vec::new();
-        if !services.is_empty() {
-            params.push(format!("services={}", services.join(",")));
-        }
-        if let Some(n) = n {
-            params.push(format!("n={}", n));
-        }
-        let query = if params.is_empty() {
-            String::new()
-        } else {
-            format!("?{}", params.join("&"))
-        };
-        self.get(&format!("/v1/logs{}", query)).await
-    }
-
-    /// Stream live log entries (SSE) — prints to stdout until EOF or Ctrl-C.
-    pub async fn follow_logs(&self, services: &[String]) -> anyhow::Result<()> {
-        let path = if services.is_empty() {
-            "/v1/logs/follow".to_string()
-        } else {
-            format!("/v1/logs/follow?services={}", services.join(","))
-        };
-
-        match &self.transport {
-            Transport::Unix(client) => {
-                let req = hyper::Request::builder()
-                    .method("GET")
-                    .uri(unix_uri(&path)?)
-                    .header("accept", "text/event-stream")
-                    .body(Full::default())?;
-
-                let resp = client.request(req).await?;
-                let status = resp.status();
-                if !status.is_success() {
-                    let body = resp.into_body();
-                    use http_body_util::BodyExt as _;
-                    let bytes = body.collect().await?.to_bytes();
-                    anyhow::bail!("HTTP {}: {}", status, String::from_utf8_lossy(&bytes));
-                }
-
-                let mut body = resp.into_body();
-                let mut buf = String::new();
-                loop {
-                    use http_body_util::BodyExt as _;
-                    match body.frame().await {
-                        Some(Ok(frame)) => {
-                            if let Some(chunk) = frame.data_ref() {
-                                buf.push_str(&String::from_utf8_lossy(chunk));
-                            }
-                            drain_sse_buf(&mut buf);
-                        }
-                        Some(Err(e)) => return Err(e.into()),
-                        None => break,
-                    }
-                }
-            }
-
-            Transport::Http { client, base_url } => {
-                let resp = client
-                    .get(format!("{}{}", base_url, path))
-                    .header("accept", "text/event-stream")
-                    .send()
-                    .await?;
-                let status = resp.status();
-                if !status.is_success() {
-                    anyhow::bail!("HTTP {}: {}", status, resp.text().await?);
-                }
-                let mut resp = resp;
-                let mut buf = String::new();
-                while let Some(chunk) = resp.chunk().await? {
-                    buf.push_str(&String::from_utf8_lossy(&chunk));
-                    drain_sse_buf(&mut buf);
-                }
-            }
-        }
-
-        Ok(())
     }
 
     pub async fn replan(&self) -> anyhow::Result<()> {

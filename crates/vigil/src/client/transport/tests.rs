@@ -168,52 +168,33 @@ fn unix_uri_with_query() {
 }
 
 // -----------------------------------------------------------------------
-// http_parse / http_parse_void tests
+// parse / parse_void tests
 // -----------------------------------------------------------------------
 
-/// Build a fake `reqwest::Response` from an `http::Response` (via hyper's
-/// re-export) so we can test `http_parse` / `http_parse_void` without a
-/// live server.  `reqwest::Response` implements `From<http::Response<T>>`
-/// when the body type implements `Into<reqwest::Body>`.
-fn make_resp(status: u16, body: &'static str) -> reqwest::Response {
-    let raw = hyper::http::Response::builder()
-        .status(status)
-        .header("content-type", "application/json")
-        .body(body)
-        .unwrap();
-    reqwest::Response::from(raw)
+fn status(code: u16) -> hyper::StatusCode {
+    hyper::StatusCode::from_u16(code).unwrap()
 }
 
-#[tokio::test]
-async fn http_parse_success() {
-    let resp = make_resp(
-        200,
-        r#"{"type":"sync","status-code":200,"status":"OK","result":42}"#,
-    );
-    let val: u32 = http_parse(resp).await.expect("http_parse should succeed");
+#[test]
+fn parse_success() {
+    let body = br#"{"type":"sync","status-code":200,"status":"OK","result":42}"#;
+    let val: u32 = parse(status(200), body).expect("parse should succeed");
     assert_eq!(val, 42);
 }
 
-#[tokio::test]
-async fn http_parse_error_message() {
-    let resp = make_resp(
-        400,
-        r#"{"type":"error","status-code":400,"status":"Bad Request","result":null,"message":"bad input"}"#,
-    );
-    let err = http_parse::<u32>(resp)
-        .await
-        .expect_err("should return Err for null result");
+#[test]
+fn parse_error_message() {
+    let body = br#"{"type":"error","status-code":400,"status":"Bad Request","result":null,"message":"bad input"}"#;
+    let err = parse::<u32>(status(400), body).expect_err("should return Err for null result");
     assert!(
         err.to_string().contains("bad input"),
         "error message should propagate: {err}"
     );
 }
 
-#[tokio::test]
-async fn http_parse_invalid_json_error() {
-    let resp = make_resp(200, "not json at all");
-    let err = http_parse::<u32>(resp)
-        .await
+#[test]
+fn parse_invalid_json_error() {
+    let err = parse::<u32>(status(200), b"not json at all")
         .expect_err("malformed JSON should return Err");
     assert!(
         err.to_string().contains("invalid response"),
@@ -221,34 +202,24 @@ async fn http_parse_invalid_json_error() {
     );
 }
 
-#[tokio::test]
-async fn http_parse_void_success() {
-    let resp = make_resp(200, "");
-    http_parse_void(resp)
-        .await
-        .expect("http_parse_void should return Ok for 2xx");
+#[test]
+fn parse_void_success() {
+    parse_void(status(200), b"").expect("parse_void should return Ok for 2xx");
 }
 
-#[tokio::test]
-async fn http_parse_void_error_message() {
-    let resp = make_resp(
-        500,
-        r#"{"type":"error","status-code":500,"status":"Internal Server Error","result":null,"message":"server exploded"}"#,
-    );
-    let err = http_parse_void(resp)
-        .await
-        .expect_err("non-2xx should return Err");
+#[test]
+fn parse_void_error_message() {
+    let body = br#"{"type":"error","status-code":500,"status":"Internal Server Error","result":null,"message":"server exploded"}"#;
+    let err = parse_void(status(500), body).expect_err("non-2xx should return Err");
     assert!(
         err.to_string().contains("server exploded"),
         "error message should propagate: {err}"
     );
 }
 
-#[tokio::test]
-async fn http_parse_void_invalid_json_error() {
-    let resp = make_resp(503, "garbage");
-    let err = http_parse_void(resp)
-        .await
+#[test]
+fn parse_void_invalid_json_error() {
+    let err = parse_void(status(503), b"garbage")
         .expect_err("malformed JSON on non-2xx should return Err");
     assert!(
         err.to_string().contains("invalid response"),
@@ -256,14 +227,11 @@ async fn http_parse_void_invalid_json_error() {
     );
 }
 
-#[tokio::test]
-async fn http_parse_void_fallback_http_status_message() {
+#[test]
+fn parse_void_fallback_http_status_message() {
     // result is null, message is None → falls back to "HTTP 400"
-    let resp = make_resp(
-        400,
-        r#"{"type":"error","status-code":400,"status":"Bad Request","result":null}"#,
-    );
-    let err = http_parse_void(resp).await.expect_err("should return Err");
+    let body = br#"{"type":"error","status-code":400,"status":"Bad Request","result":null}"#;
+    let err = parse_void(status(400), body).expect_err("should return Err");
     assert!(
         err.to_string().contains("400"),
         "fallback message should include HTTP status: {err}"

@@ -1,31 +1,33 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 vigil-rs contributors
 
+//! What vigild sends back: the response envelope, SSE log lines, and the
+//! `names=` query.
+
+use hyper::StatusCode;
 use vigil_types::api::{LogEntry, Response};
 
 // ---------------------------------------------------------------------------
-// HTTP send helpers
+// Response envelope
 // ---------------------------------------------------------------------------
 
-pub async fn http_parse<T: serde::de::DeserializeOwned>(
-    resp: reqwest::Response,
-) -> anyhow::Result<T> {
-    let status = resp.status();
-    let body = resp.bytes().await?;
-    let envelope: Response<T> = serde_json::from_slice(&body)
+/// The `result` of vigild's response envelope; its `message` as the error
+/// when there is none.
+pub fn parse<T: serde::de::DeserializeOwned>(status: StatusCode, body: &[u8]) -> anyhow::Result<T> {
+    let envelope: Response<T> = serde_json::from_slice(body)
         .map_err(|e| anyhow::anyhow!("invalid response (HTTP {}): {}", status, e))?;
     envelope
         .result
         .ok_or_else(|| anyhow::anyhow!("{}", envelope.message.unwrap_or_default()))
 }
 
-pub async fn http_parse_void(resp: reqwest::Response) -> anyhow::Result<()> {
-    if resp.status().is_success() {
+/// Like [`parse`] for endpoints without a result: a 2xx status is success
+/// (`serde_json` maps `null` to `None` for `Option<()>`).
+pub fn parse_void(status: StatusCode, body: &[u8]) -> anyhow::Result<()> {
+    if status.is_success() {
         return Ok(());
     }
-    let status = resp.status();
-    let body = resp.bytes().await?;
-    let envelope: Response<serde_json::Value> = serde_json::from_slice(&body)
+    let envelope: Response<serde_json::Value> = serde_json::from_slice(body)
         .map_err(|e| anyhow::anyhow!("invalid response (HTTP {}): {}", status, e))?;
     anyhow::bail!(
         "{}",
