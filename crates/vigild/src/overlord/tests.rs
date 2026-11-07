@@ -349,21 +349,6 @@ async fn state_changed_event_returns_none() {
 }
 
 // ------------------------------------------------------------------
-// fmt_on_exit
-// ------------------------------------------------------------------
-
-#[test]
-fn fmt_on_exit_all_variants() {
-    use super::handlers::fmt_on_exit;
-    use vigil_types::plan::OnExit;
-    assert_eq!(fmt_on_exit(OnExit::Restart), "restart");
-    assert_eq!(fmt_on_exit(OnExit::Ignore), "ignore");
-    assert_eq!(fmt_on_exit(OnExit::Shutdown), "shutdown");
-    assert_eq!(fmt_on_exit(OnExit::FailureShutdown), "failure-shutdown");
-    assert_eq!(fmt_on_exit(OnExit::SuccessShutdown), "success-shutdown");
-}
-
-// ------------------------------------------------------------------
 // stop_all — does not panic on empty overlord
 // ------------------------------------------------------------------
 

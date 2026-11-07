@@ -175,13 +175,8 @@ impl Actor {
         self.arm_healthy_deadline();
         self.metrics
             .set_service_active(&self.name, new_state == ServiceState::Active);
-        self.metrics.set_service_running(
-            &self.name,
-            matches!(
-                new_state,
-                ServiceState::Starting | ServiceState::Active | ServiceState::Stopping
-            ),
-        );
+        self.metrics
+            .set_service_running(&self.name, new_state.has_process());
         self.send_event(EventKind::StateChanged { new_state }).await;
     }
 }

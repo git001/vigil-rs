@@ -45,6 +45,12 @@ impl ServiceState {
     pub fn is_running(self) -> bool {
         matches!(self, ServiceState::Starting | ServiceState::Active)
     }
+
+    /// Whether a process of the service is alive: running, or being
+    /// stopped.
+    pub fn has_process(self) -> bool {
+        self.is_running() || self == ServiceState::Stopping
+    }
 }
 
 #[cfg(test)]
@@ -73,6 +79,17 @@ mod tests {
         );
         assert_eq!(ServiceState::Error.to_api_status(), ServiceStatus::Error);
         assert_eq!(ServiceState::Done.to_api_status(), ServiceStatus::Done);
+    }
+
+    #[test]
+    fn has_process_while_running_or_stopping() {
+        assert!(ServiceState::Starting.has_process());
+        assert!(ServiceState::Active.has_process());
+        assert!(ServiceState::Stopping.has_process());
+        assert!(!ServiceState::Inactive.has_process());
+        assert!(!ServiceState::Backoff.has_process());
+        assert!(!ServiceState::Error.has_process());
+        assert!(!ServiceState::Done.has_process());
     }
 
     #[test]

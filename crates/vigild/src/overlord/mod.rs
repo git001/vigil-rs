@@ -20,12 +20,14 @@ use crate::logs::LogStore;
 use crate::metrics::MetricsStore;
 use crate::service;
 
+mod actions;
 mod autostart;
 mod events;
 mod handlers;
 mod health_metric;
 mod lifecycle;
 pub mod plan;
+mod queries;
 mod restart;
 mod sync;
 #[cfg(test)]

@@ -148,6 +148,19 @@ pub enum OnExit {
     Ignore,
 }
 
+impl OnExit {
+    /// The name in the layer files (`failure-shutdown`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OnExit::Restart => "restart",
+            OnExit::Shutdown => "shutdown",
+            OnExit::FailureShutdown => "failure-shutdown",
+            OnExit::SuccessShutdown => "success-shutdown",
+            OnExit::Ignore => "ignore",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ServiceConfig {
@@ -332,6 +345,25 @@ pub(super) fn merge_service(base: &mut ServiceConfig, overlay: &ServiceConfig) {
     if let Some(o) = &overlay.watch_files {
         let w = base.watch_files.get_or_insert_with(WatchFiles::default);
         merge_opt!(w, o, [on_change, interval, paths]);
+    }
+}
+
+#[cfg(test)]
+mod on_exit_tests {
+    use super::OnExit;
+
+    #[test]
+    fn as_str_is_the_layer_name() {
+        for policy in [
+            OnExit::Restart,
+            OnExit::Shutdown,
+            OnExit::FailureShutdown,
+            OnExit::SuccessShutdown,
+            OnExit::Ignore,
+        ] {
+            let yaml = serde_yaml::to_string(&policy).unwrap();
+            assert_eq!(yaml.trim_end(), policy.as_str());
+        }
     }
 }
 
