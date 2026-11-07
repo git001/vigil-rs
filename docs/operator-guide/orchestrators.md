@@ -219,6 +219,17 @@ give vigild time for that before the kubelet restarts the whole container:
 `periodSeconds` x `failureThreshold` longer than the check's `period` x
 `threshold` plus the service's start.
 
+**Which checks belong to which probe.** A failed liveness probe restarts
+the container, so `level: alive` is only for checks of the app in this
+container (Tomcat, Keycloak, Spring Boot on `localhost`). Checks of
+dependencies (database, message broker, other services, external APIs) get
+`level: ready`: while one is down the pod gets no traffic but keeps
+running, and becomes ready again by itself. A dependency checked as `alive`
+(also by default, when `level` is not set) restarts every replica while the
+database is away and fixes nothing; vigild warns about such checks at load
+time. See [`level`](../user-guide/configuration.md#level) and the flow chart
+[check-levels.svg](../../images/check-levels.svg).
+
 ### Kubernetes pod log collector
 
 [`examples/kubernetes-pod-logs/`](../../examples/kubernetes-pod-logs/) is a

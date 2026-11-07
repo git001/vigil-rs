@@ -1,0 +1,153 @@
+// Check levels: which level a check gets, what GET /v1/health counts, and
+// what the Kubernetes probes do with the answer. It describes the behaviour
+// documented in configuration.md (section "level") and in
+// docs/operator-guide/orchestrators.md (probes).
+//
+// CI (.github/workflows/diagrams.yml) renders it to images/check-levels.svg,
+// which the docs link to. By hand:
+//   dot -Tsvg docs/user-guide/check-levels.dot -o images/check-levels.svg
+
+digraph check_levels {
+    graph [
+        label = "vigild: check levels, GET /v1/health and Kubernetes probes",
+        labelloc = t,
+        fontname = "Helvetica",
+        fontsize = 18,
+        rankdir = TB,
+        nodesep = 0.4,
+        ranksep = 0.5,
+        newrank = true
+    ];
+    node [fontname = "Helvetica", fontsize = 11, style = "rounded,filled", fillcolor = white];
+    edge [fontname = "Helvetica", fontsize = 10];
+
+    // ------------------------------------------------------------------
+    // 1. Which level?
+    // ------------------------------------------------------------------
+    subgraph cluster_choose {
+        label = "1. which level does the check get?";
+        style = "rounded";
+        color = "#2563eb";
+        fontcolor = "#1e3a8a";
+
+        q_target [shape = diamond, label = "what does the\ncheck probe?"];
+
+        own [shape = box, fillcolor = "#dcfce7",
+             label = "the app in this container\nlocalhost, 127.0.0.1, ::1\ne.g. Tomcat, Keycloak,\nSpring Boot liveness"];
+        exe [shape = box, fillcolor = "#f3f4f6",
+             label = "exec check\nvigild cannot tell:\ndecide by what it tests"];
+        dep [shape = box, fillcolor = "#fef3c7",
+             label = "a dependency on another host\ne.g. PostgreSQL, Kafka, Redis,\nanother service, an external API"];
+        { rank = same; own; exe; dep; }
+
+        lvl_alive [shape = box, fillcolor = "#bbf7d0", penwidth = 2,
+                   label = "level: alive\na restart can fix it"];
+        lvl_ready [shape = box, fillcolor = "#fde68a", penwidth = 2,
+                   label = "level: ready\na restart cannot fix it"];
+        { rank = same; lvl_alive; lvl_ready; }
+
+        q_target -> own [label = "own app"];
+        q_target -> exe [label = "a command"];
+        q_target -> dep [label = "dependency"];
+        own -> lvl_alive;
+        dep -> lvl_ready;
+        exe -> lvl_alive [style = dashed, label = "tests this\ncontainer"];
+        exe -> lvl_ready [style = dashed, label = "tests a\ndependency"];
+    }
+
+    pitfall [shape = note, fillcolor = "#fee2e2",
+             label = "level not set = alive (the default).\nAn alive http/tcp check of another host\ngets a load warning:\n\"… set level: ready for checks\nof dependencies\""];
+    { rank = same; pitfall; lvl_alive; }
+    pitfall -> lvl_alive [style = dotted, arrowhead = none, color = "#b91c1c"];
+
+    ocf [shape = box, fillcolor = "#dbeafe",
+         label = "vigild first: on-check-failure: restart\nrestarts that one service at once\n(useful only for checks of the own app)"];
+
+    // ------------------------------------------------------------------
+    // 2. GET /v1/health
+    // ------------------------------------------------------------------
+    subgraph cluster_health {
+        label = "2. GET /v1/health (access: open)";
+        style = "rounded";
+        color = "#7c3aed";
+        fontcolor = "#4c1d95";
+
+        h_alive [shape = box, fillcolor = "#ede9fe",
+                 label = "?level=alive\ncounts alive checks"];
+        h_ready [shape = box, fillcolor = "#ede9fe",
+                 label = "?level=ready\ncounts alive and ready checks"];
+        { rank = same; h_alive; h_ready; }
+
+        q_down [shape = diamond, label = "a counted\ncheck down?"];
+        not_counted [shape = box, style = "rounded,dashed",
+                     label = "not counted:\nstartup: disabled\n(in its delay: up)"];
+        { rank = same; q_down; not_counted; }
+
+        r200 [shape = box, fillcolor = "#dcfce7", label = "200\n{\"healthy\": true}"];
+        r502 [shape = box, fillcolor = "#fecaca", label = "502 Bad Gateway\n{\"healthy\": false}"];
+        { rank = same; r200; r502; }
+
+        h_alive -> q_down;
+        h_ready -> q_down;
+        not_counted -> q_down [style = dotted, arrowhead = none];
+        q_down -> r200 [label = "no"];
+        q_down -> r502 [label = "yes"];
+    }
+
+    lvl_alive -> h_alive [color = "#15803d", penwidth = 1.5];
+    lvl_alive -> h_ready [color = "#15803d", penwidth = 1.5];
+    lvl_ready -> h_ready [color = "#b45309", penwidth = 1.5];
+    lvl_alive -> ocf [style = dotted, label = "check down"];
+
+    // ------------------------------------------------------------------
+    // 3. Kubernetes
+    // ------------------------------------------------------------------
+    subgraph cluster_k8s {
+        label = "3. Kubernetes probes (kubelet)";
+        labelloc = b;
+        style = "rounded";
+        color = "#dc2626";
+        fontcolor = "#7f1d1d";
+
+        liveness [shape = box, fillcolor = "#fee2e2",
+                  label = "livenessProbe\n/v1/health?level=alive"];
+        readiness [shape = box, fillcolor = "#fef3c7",
+                   label = "readinessProbe\n/v1/health?level=ready"];
+        { rank = same; liveness; readiness; }
+
+        restart_ctr [shape = box, fillcolor = "#fecaca",
+                     label = "container restarted\n(all its services), after\nfailureThreshold x periodSeconds"];
+        unready [shape = box, fillcolor = "#fde68a",
+                 label = "pod not ready: no traffic\nfrom the Service; keeps running,\nready again on 200"];
+        { rank = same; restart_ctr; unready; }
+
+        liveness -> restart_ctr [label = "502"];
+        readiness -> unready [label = "502"];
+    }
+
+    r502 -> liveness [style = dashed];
+    r502 -> readiness [style = dashed];
+    ocf -> liveness [style = dotted, xlabel = "size the probe so\nthat this works first"];
+
+    wrong [shape = box, fillcolor = "#fecaca", style = "rounded,filled,bold", color = "#b91c1c",
+           label = "wrong: a dependency as alive\nthe database is down, every replica\nis restarted, nothing is fixed"];
+    { rank = same; wrong; restart_ctr; }
+    restart_ctr -> wrong [style = dotted, color = "#b91c1c", arrowhead = none];
+
+    // ------------------------------------------------------------------
+    // Legend
+    // ------------------------------------------------------------------
+    legend [shape = plaintext, fillcolor = none, fontsize = 10, label = <
+        <table border="1" color="gray60" cellborder="0" cellspacing="2" cellpadding="3" style="rounded">
+        <tr><td colspan="2" align="left"><font color="gray30">Legend</font></td></tr>
+        <tr><td align="left"><b>level: alive</b></td><td align="left">the own app; down = a restart of the container may help</td></tr>
+        <tr><td align="left"><b>level: ready</b></td><td align="left">a dependency; down = stop sending traffic, wait</td></tr>
+        <tr><td align="left"><b>?level=alive</b></td><td align="left">alive checks only</td></tr>
+        <tr><td align="left"><b>?level=ready</b></td><td align="left">alive and ready checks</td></tr>
+        <tr><td align="left"><b>?names=a,b</b></td><td align="left">only these checks; a name that is not a check is 404</td></tr>
+        </table>
+    >];
+    // Top right, next to the first question.
+    { rank = same; q_target; legend; }
+    q_target -> legend [style = invis, minlen = 4];
+}

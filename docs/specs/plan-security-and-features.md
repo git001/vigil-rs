@@ -766,6 +766,13 @@ initial `delay` counts as up. The kubernetes-pod-logs probes comment that
 vigild's own `on-check-failure: restart` acts first; orchestrators.md lost
 the `insecureSkipTLSVerify` probe field (not a Kubernetes field) and
 explains how to size the probe against a check's period x threshold.
+Added on request: a load warning for a running `alive` check (set or by
+default) whose http/tcp probe targets another host than this container
+(not localhost, *.localhost, loopback or unspecified); exec checks are not
+inspected. The three examples that watch https://example.com/ use
+`level: ready`. Flow chart `docs/user-guide/check-levels.dot` →
+`images/check-levels.svg` (which level, what /v1/health counts, what the
+probes do), linked from configuration.md (`level`) and orchestrators.md.
 
 ### 5d: send a signal to single services
 

@@ -222,7 +222,58 @@ fn validate_check(plan: &Plan, name: &str, check: &CheckConfig) -> anyhow::Resul
         }
         crate::template::check_exec_environment(&exec.environment)?;
     }
+    if let Some(warning) = level_warning(check) {
+        tracing::warn!(check = %name, "{warning}");
+    }
     Ok(())
+}
+
+/// A running `alive` check (explicit or by default) that probes another
+/// host: it most likely tests a dependency. When it is down, a liveness
+/// probe on `GET /v1/health?level=alive` restarts the container, which does
+/// not fix the dependency. Exec checks are not inspected.
+fn level_warning(check: &CheckConfig) -> Option<String> {
+    use vigil_types::plan::{CheckLevel, Startup};
+    if check.level() != CheckLevel::Alive || check.startup() != Startup::Enabled {
+        return None;
+    }
+    let target = if let Some(http) = &check.http {
+        let url = reqwest::Url::parse(&http.url).ok()?;
+        let host = url.host_str()?;
+        if is_local_host(host) {
+            return None;
+        }
+        host.to_owned()
+    } else if let Some(tcp) = &check.tcp {
+        let host = tcp.host.as_deref().unwrap_or("localhost");
+        if is_local_host(host) {
+            return None;
+        }
+        format!("{host}:{}", tcp.port)
+    } else {
+        return None;
+    };
+    let level = if check.level.is_some() {
+        "level: alive"
+    } else {
+        "level: alive (the default)"
+    };
+    Some(format!(
+        "{level}, but it probes {target:?}, not this container: while it is down, \
+         GET /v1/health?level=alive answers 502 and a liveness probe on it restarts \
+         the container, which does not fix a dependency; set level: ready for checks \
+         of dependencies"
+    ))
+}
+
+/// This container: a loopback or unspecified address (`[::1]` with or
+/// without brackets), `localhost` or a name under `.localhost` (RFC 6761).
+fn is_local_host(host: &str) -> bool {
+    if let Ok(ip) = host.trim_matches(['[', ']']).parse::<std::net::IpAddr>() {
+        return ip.is_loopback() || ip.is_unspecified();
+    }
+    let name = host.trim_end_matches('.').to_ascii_lowercase();
+    name == "localhost" || name.ends_with(".localhost")
 }
 
 fn validate_alert(alert: &AlertConfig) -> anyhow::Result<()> {
@@ -646,6 +697,54 @@ mod tests {
             err.contains("exec: service-context \"postgress\" is not a service"),
             "{err}"
         );
+    }
+
+    fn check_of(yaml: &str) -> CheckConfig {
+        let layer: Layer = serde_yaml::from_str(&format!("checks:\n  c:\n{yaml}")).unwrap();
+        Plan::from_layers(vec![layer]).checks["c"].clone()
+    }
+
+    #[test]
+    fn level_warning_for_alive_checks_of_other_hosts() {
+        // Another host: warned, naming the default level when it is not set.
+        let w = level_warning(&check_of(
+            "    startup: enabled\n    tcp:\n      host: postgres.db.svc.cluster.local\n      port: 5432\n",
+        ))
+        .unwrap();
+        assert!(
+            w.starts_with(
+                "level: alive (the default), but it probes \"postgres.db.svc.cluster.local:5432\""
+            ),
+            "{w}"
+        );
+        assert!(w.contains("set level: ready"), "{w}");
+        let w = level_warning(&check_of(
+            "    level: alive\n    startup: enabled\n    http:\n      url: https://auth.example.com/health\n",
+        ))
+        .unwrap();
+        assert!(
+            w.starts_with("level: alive, but it probes \"auth.example.com\""),
+            "{w}"
+        );
+    }
+
+    #[test]
+    fn no_level_warning_for_this_container_ready_disabled_or_exec() {
+        for yaml in [
+            // This container, by name and address.
+            "    startup: enabled\n    http:\n      url: http://localhost:8080/actuator/health/liveness\n",
+            "    startup: enabled\n    http:\n      url: http://127.0.0.1:9091/healthz\n",
+            "    startup: enabled\n    http:\n      url: http://[::1]:8080/\n",
+            "    startup: enabled\n    http:\n      url: http://app.localhost:8080/\n",
+            "    startup: enabled\n    tcp:\n      port: 5432\n",
+            "    startup: enabled\n    tcp:\n      host: 0.0.0.0\n      port: 5432\n",
+            // A dependency checked as ready, a disabled check, an exec check.
+            "    level: ready\n    startup: enabled\n    tcp:\n      host: db\n      port: 5432\n",
+            "    startup: disabled\n    tcp:\n      host: db\n      port: 5432\n",
+            "    startup: enabled\n    exec:\n      command: pg_isready -h db\n",
+        ] {
+            assert_eq!(level_warning(&check_of(yaml)), None, "{yaml}");
+        }
     }
 
     #[test]

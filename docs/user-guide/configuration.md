@@ -899,6 +899,48 @@ looks only at `alive` checks, `?level=ready` at both. Use it to point a
 Kubernetes liveness probe at the `alive` checks and the readiness probe at
 all of them.
 
+Choose the level by what a restart can fix:
+
+- **`alive`: the own app in this container**, e.g. Tomcat, Keycloak or
+  Spring Boot (`http://localhost:8080/actuator/health/liveness`). When it is
+  down, restarting the container may help.
+- **`ready`: a dependency on another host**, e.g. PostgreSQL, Kafka,
+  another service or an external API. When it is down, a restart fixes
+  nothing; with a liveness probe on `?level=alive` every replica would be
+  restarted while the database is away. As `ready`, the pod only stops
+  getting traffic and keeps running.
+
+```yaml
+checks:
+  app-alive:                 # own app: a restart can fix it
+    level: alive
+    startup: enabled
+    http:
+      url: http://localhost:8080/actuator/health/liveness
+  db-ready:                  # dependency: a restart cannot fix it
+    level: ready
+    startup: enabled
+    tcp:
+      host: postgres.db.svc.cluster.local
+      port: 5432
+```
+
+The default is `alive`. vigild warns at load time when a running `alive`
+check (set or by default) probes another host than this container
+(anything but `localhost`, `*.localhost`, a loopback or unspecified
+address):
+
+```
+WARN level: alive (the default), but it probes "postgres.db.svc.cluster.local:5432", not this container: while it is down, GET /v1/health?level=alive answers 502 and a liveness probe on it restarts the container, which does not fix a dependency; set level: ready for checks of dependencies check=db-ready
+```
+
+Exec checks are not inspected; give them the level of what they test. The
+same applies to [`on-check-failure: restart`](#on-check-failure): it helps
+for the own app, not for a dependency.
+
+Flow chart: [check-levels.svg](../../images/check-levels.svg) (which level,
+what `/v1/health` counts, what the probes do).
+
 #### `delay`
 
 Duration to wait after vigild starts before running the first check. Avoids

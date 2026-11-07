@@ -17,7 +17,10 @@ summary: website health check with multi-format alerting
 checks:
 
   website-alive:
-    level: alive
+    # An external site, not this container: level ready, so that a liveness
+    # probe on GET /v1/health?level=alive does not restart the container
+    # while the site is down.
+    level: ready
     startup: enabled
     delay: 5s
     period: 1m
