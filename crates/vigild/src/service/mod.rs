@@ -32,6 +32,9 @@ pub enum Cmd {
     Status(oneshot::Sender<Snapshot>),
     /// Forward a signal to the service's process group (if running).
     ForwardSignal(nix::sys::signal::Signal),
+    /// Send a signal to the service's process group (`POST /v1/signals`);
+    /// the reply says whether there was a process to send it to.
+    Signal(nix::sys::signal::Signal, oneshot::Sender<bool>),
     /// The plan changed (`replan`). The new config applies from the next
     /// start; a running process is left alone.
     UpdateConfig(Box<ServiceConfig>),

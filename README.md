@@ -31,7 +31,7 @@ socket for programmatic control.
 | **OpenAPI** | Auto-generated spec via utoipa; served at `/openapi.json` |
 | **TLS listener** | Optional HTTPS API (`--tls-addr`); auto-generates self-signed cert |
 | **Identity management** | Named principals with `metrics`/`read`/`write`/`admin` access levels (Unix UID, HTTP Basic, TLS client certificate); defined in layer files (password hash or CA from a file, e.g. a Kubernetes Secret) or added over the API |
-| **Signal forwarding** | SIGHUP / SIGUSR1 / SIGUSR2 forwarded to all running service process groups |
+| **Signal forwarding** | SIGHUP / SIGUSR1 / SIGUSR2 forwarded to all running service process groups; `vigil services signal SIGHUP nginx` for single services |
 | **Replan** | Hot-reload layer YAML files without restarting the daemon |
 | **mimalloc** | High-performance allocator enabled globally |
 
@@ -300,7 +300,8 @@ look alike, but they are not interchangeable (see below).
 | `/v1/health` endpoint | ✅ | ✅ (`404` for a name that is not a check) |
 | Log targets | ✅ Loki, OpenTelemetry, syslog | ndjson push per service (Unix/TCP), `vigil-log-relay` |
 | Alerting (webhook / Alertmanager / CloudEvents / OTLP) | ❌ | ✅ |
-| exec, files and signals API; notices | ✅ | ❌ |
+| Signals to single services (API) | ✅ | ✅ `POST /v1/signals` |
+| exec and files API; notices | ✅ | ❌ |
 | Asynchronous changes (`/v1/changes`, `/wait`) | ✅ | ❌ (service actions are synchronous) |
 | TLS API listener | ✅ `--https` | ✅ `--tls-addr`, optional mTLS |
 | Identities | API, persisted | API (in memory) and layer files |

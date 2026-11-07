@@ -43,6 +43,11 @@ impl Overlord {
                 let _ = reply.send(infos);
             }
             Cmd::RefreshCheck { name, reply } => self.refresh_check(name, reply),
+            Cmd::Signal {
+                signal,
+                services,
+                reply,
+            } => self.signal_services(signal, services, reply),
             Cmd::Health {
                 level,
                 names,
@@ -241,6 +246,67 @@ impl Overlord {
             .await
             .iter()
             .any(|c| counts(c.level) && c.status == CheckStatus::Down))
+    }
+
+    /// `POST /v1/signals`: check every name first, so that either all
+    /// services get the signal or none; then send it from a task of its own
+    /// (a busy service actor must not block the overlord). A process that
+    /// ended meanwhile is reported as not running.
+    pub(super) fn signal_services(
+        &self,
+        signal: nix::sys::signal::Signal,
+        services: Vec<String>,
+        reply: oneshot::Sender<Result<Vec<String>, super::SignalError>>,
+    ) {
+        use super::SignalError;
+        use crate::state::ServiceState;
+        if services.is_empty() {
+            let _ = reply.send(Err(SignalError::NoServices));
+            return;
+        }
+        let mut targets = Vec::with_capacity(services.len());
+        let mut not_running = Vec::new();
+        for name in &services {
+            let Some(entry) = self.services.get(name) else {
+                let _ = reply.send(Err(SignalError::NotFound(name.clone())));
+                return;
+            };
+            let running = matches!(
+                entry.snapshot.state,
+                ServiceState::Starting | ServiceState::Active | ServiceState::Stopping
+            );
+            if running {
+                if !targets.iter().any(|(n, _)| n == name) {
+                    targets.push((name.clone(), entry.handle.tx.clone()));
+                }
+            } else if !not_running.contains(name) {
+                not_running.push(name.clone());
+            }
+        }
+        if !not_running.is_empty() {
+            let _ = reply.send(Err(SignalError::NotRunning(not_running)));
+            return;
+        }
+        tokio::spawn(async move {
+            let mut sent = Vec::new();
+            let mut gone = Vec::new();
+            for (name, tx) in targets {
+                let (got_tx, got_rx) = oneshot::channel();
+                let delivered = tx.send(SvcCmd::Signal(signal, got_tx)).await.is_ok()
+                    && got_rx.await.unwrap_or(false);
+                if delivered {
+                    sent.push(name);
+                } else {
+                    gone.push(name);
+                }
+            }
+            let result = if gone.is_empty() {
+                Ok(sent)
+            } else {
+                Err(SignalError::NotRunning(gone))
+            };
+            let _ = reply.send(result);
+        });
     }
 
     /// Hand a refresh to the check's actor, or run a check without one

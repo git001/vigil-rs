@@ -7,7 +7,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use tokio::process::Child;
 use tokio::sync::mpsc;
-use tracing::debug;
+use tracing::{debug, info};
 use vigil_types::plan::ServiceConfig;
 
 use crate::logs::LogStore;
@@ -251,6 +251,14 @@ pub(super) async fn run(
                     }
                     Some(Cmd::ForwardSignal(sig)) => {
                         actor.send_signal(sig);
+                    }
+                    Some(Cmd::Signal(sig, reply)) => {
+                        let running = actor.child.is_some();
+                        if running {
+                            info!(service = %actor.name, signal = %sig, "sending signal");
+                            actor.send_signal(sig);
+                        }
+                        let _ = reply.send(running);
                     }
                     Some(Cmd::UpdateConfig(config)) => {
                         actor.handle_update_config(*config).await;

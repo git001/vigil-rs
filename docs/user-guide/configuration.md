@@ -1755,7 +1755,7 @@ identity "log-relay" (layer "001-auth"): password-hash-file: reading "/run/secre
 | `open` | `GET /v1/system-info`, `GET /v1/checks`, `GET /v1/health`, API docs — no authentication required |
 | `metrics` | `GET /v1/metrics` (Prometheus/OpenMetrics) |
 | `read` | All other `GET` endpoints |
-| `write` | `read` + service/check control (`POST /v1/services`, `POST /v1/checks/refresh`) |
+| `write` | `read` + service/check control (`POST /v1/services`, `POST /v1/signals`, `POST /v1/checks/refresh`) |
 | `admin` | `write` + identity management (`POST /v1/identities`, `DELETE /v1/identities`) |
 
 ### Default access (caller without a matching identity)

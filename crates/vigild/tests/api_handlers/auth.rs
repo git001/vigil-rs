@@ -123,6 +123,23 @@ async fn read_identity_forbidden_on_write_endpoint() {
     app.shutdown().await;
 }
 
+// Signals change what a service does: write access.
+#[tokio::test]
+async fn read_identity_forbidden_on_signals() {
+    let app = app_with_basic_identity("reader", "read", "r3ad").await;
+    let resp = app
+        .request_basic_auth(
+            Method::POST,
+            "/v1/signals",
+            "reader",
+            "r3ad",
+            Some(serde_json::json!({"signal": "SIGHUP", "services": ["any"]})),
+        )
+        .await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    app.shutdown().await;
+}
+
 // Running a check now changes its state and alerts: write access.
 #[tokio::test]
 async fn read_identity_forbidden_on_check_refresh() {

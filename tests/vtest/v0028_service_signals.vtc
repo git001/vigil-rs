@@ -1,0 +1,90 @@
+vtest "POST /v1/signals and vigil services signal: a signal to one running service; all or nothing"
+
+# vigild loads the static layer directory and logs to stdout, the terminal
+# of p1; -expect-text waits there for a line. A wide terminal keeps long log
+# lines on one row.
+process p1 -winsz 200 400 "env READY_FILE=${tmpdir}/web.ready ${vigild} --layers-dir ${vtestdir}/fixtures/v0028 --socket ${tmpdir}/vigild.sock" -start
+process p1 -expect-text 0 0 "API listening"
+process p1 -expect-text 0 0 "service is ready"
+
+# SIGHUP to web: 200, the result names the signal and the services. In the
+# body patterns each "." matches one character of a JSON escape (\" or [).
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/signals -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"signal\":\"SIGHUP\",\"services\":[\"web\"]}"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "signal.:.SIGHUP."
+	expect resp.body ~ "services.:..web.."
+} -run
+
+# web is still active: a signal is no stop.
+client c2 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/services?names=web" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "current.:.active."
+} -run
+
+# idle does not run: 409, and web gets nothing either (counted below).
+client c3 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/signals -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"signal\":\"SIGHUP\",\"services\":[\"web\",\"idle\"]}"
+	rxresp
+	expect resp.status == 409
+	expect resp.body ~ "not running: ..idle.."
+} -run
+
+# A name that is not a service: 404.
+client c4 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/signals -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"signal\":\"SIGHUP\",\"services\":[\"wbe\"]}"
+	rxresp
+	expect resp.status == 404
+	expect resp.body ~ "service ..wbe.. not found"
+} -run
+
+# A signal name without SIG: 400.
+client c5 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/signals -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"signal\":\"HUP\",\"services\":[\"web\"]}"
+	rxresp
+	expect resp.status == 400
+	expect resp.body ~ "write it like SIGHUP"
+} -run
+
+# No service: 400.
+client c6 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/signals -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"signal\":\"SIGHUP\",\"services\":[]}"
+	rxresp
+	expect resp.status == 400
+	expect resp.body ~ "services must name at least one service"
+} -run
+
+# The CLI: success on stdout; an API error on stderr with exit code 1.
+shell -expect "Sent SIGHUP to web." {
+	${vigil} --socket ${tmpdir}/vigild.sock services signal SIGHUP web
+}
+shell -exit 1 -expect {Error: not running: "idle"} {
+	${vigil} --socket ${tmpdir}/vigild.sock services signal SIGHUP web idle
+}
+
+# web reloaded exactly twice (c1 and the first CLI call); the refused
+# requests sent nothing. The trap runs asynchronously: give it a moment.
+delay 0.5
+client c7 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/logs?services=web" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "reloaded.*reloaded"
+	expect resp.body !~ "reloaded.*reloaded.*reloaded"
+} -run
+
+process p1 -kill TERM
+process p1 -wait

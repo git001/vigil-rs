@@ -62,6 +62,7 @@ tests/vtest/run.sh
 | `v0013_vigil_tls_and_reaper.vtc` | vigild TLS listener (`--tls-addr`), `vigil --insecure`, subreaper (`--reaper`) + SIGCHLD handling |
 | `v0014_vigil_checks_logs_vigild.vtc` | `vigil checks list` (all four `next_run` formatting branches), `vigil logs` with entries, `vigil vigild status/stop` |
 | `v0027_check_failure_reason.vtc` | Why a check fails: `last-error` in `GET /v1/checks` and `vigil checks list`, the reason in the `check failed` log line and in the alert message, cleared by a pass; `vigil checks run` (exit codes, reason, unknown check); `GET /v1/health` (200/502 by level and name, 404, 400) |
+| `v0028_service_signals.vtc` | `vigil services signal` / `POST /v1/signals`: SIGHUP reaches a trapping service that keeps running; all or nothing with a stopped service; unknown service and signal name |
 
 ## How it works
 

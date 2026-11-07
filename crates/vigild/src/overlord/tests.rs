@@ -1182,6 +1182,10 @@ fn stub_actor(ov: &mut Overlord, name: &str) -> mpsc::UnboundedReceiver<String> 
                     "stop/restart".to_owned()
                 }
                 service::Cmd::ForwardSignal(sig) => format!("signal {sig}"),
+                service::Cmd::Signal(sig, r) => {
+                    let _ = r.send(true);
+                    format!("signal {sig}")
+                }
                 _ => "other".to_owned(),
             };
             let _ = seen_tx.send(what);
@@ -1642,4 +1646,69 @@ async fn health_unknown_name_is_an_error() {
             .await,
         Err("check \"web-alvie\" not found".to_string())
     );
+}
+
+// ------------------------------------------------------------------
+// signal_services — POST /v1/signals
+// ------------------------------------------------------------------
+
+async fn signal(ov: &Overlord, services: &[&str]) -> Result<Vec<String>, super::SignalError> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    ov.signal_services(
+        nix::sys::signal::Signal::SIGHUP,
+        services.iter().map(|s| s.to_string()).collect(),
+        tx,
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), rx)
+        .await
+        .expect("signal timed out")
+        .unwrap()
+}
+
+#[tokio::test]
+async fn signal_services_sends_to_running_services() {
+    let mut ov = make_overlord(
+        &[("nginx", &[], &[], &[]), ("php-fpm", &[], &[], &[])],
+        &[
+            ("nginx", ServiceState::Active),
+            ("php-fpm", ServiceState::Starting),
+        ],
+    );
+    let mut nginx = stub_actor(&mut ov, "nginx");
+    let mut php = stub_actor(&mut ov, "php-fpm");
+    assert_eq!(
+        signal(&ov, &["nginx", "php-fpm", "nginx"]).await,
+        Ok(vec!["nginx".to_string(), "php-fpm".to_string()])
+    );
+    assert_eq!(next_seen(&mut nginx).await, "signal SIGHUP");
+    assert_eq!(next_seen(&mut php).await, "signal SIGHUP");
+}
+
+// All or nothing: one service that does not run, and none gets the signal.
+#[tokio::test]
+async fn signal_services_sends_nothing_when_one_does_not_run() {
+    use super::SignalError;
+    let mut ov = make_overlord(
+        &[("nginx", &[], &[], &[]), ("cron", &[], &[], &[])],
+        &[
+            ("nginx", ServiceState::Active),
+            ("cron", ServiceState::Backoff),
+        ],
+    );
+    let mut nginx = stub_actor(&mut ov, "nginx");
+    assert_eq!(
+        signal(&ov, &["nginx", "cron"]).await,
+        Err(SignalError::NotRunning(vec!["cron".into()]))
+    );
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), next_seen(&mut nginx))
+            .await
+            .is_err(),
+        "nginx must not get the signal"
+    );
+    assert_eq!(
+        signal(&ov, &["nginx", "nginx-typo"]).await,
+        Err(SignalError::NotFound("nginx-typo".into()))
+    );
+    assert_eq!(signal(&ov, &[]).await, Err(SignalError::NoServices));
 }

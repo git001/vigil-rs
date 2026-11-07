@@ -198,6 +198,25 @@ pub struct CheckInfo {
     pub last_error: Option<String>,
 }
 
+/// Body of `POST /v1/signals`.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct SignalsRequest {
+    /// Signal name as in `stop-signal`, e.g. `SIGHUP`, `SIGUSR1`.
+    pub signal: String,
+    /// The services to send it to; each must be running.
+    pub services: Vec<String>,
+}
+
+/// Result of `POST /v1/signals`.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub struct SignalsResult {
+    pub signal: String,
+    /// The services that got the signal.
+    pub services: Vec<String>,
+}
+
 /// Result of `GET /v1/health`.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "kebab-case")]

@@ -25,7 +25,7 @@ levels are ordered from least to most privileged:
 | `open` | No credentials needed | `GET /v1/system-info`, `GET /v1/checks`, `GET /v1/health` |
 | `metrics` | Basic Auth, local UID, or TLS client cert | `GET /v1/metrics` |
 | `read` | — | All other `GET` endpoints |
-| `write` | — | `POST /v1/services`, `POST /v1/checks/refresh`, `POST /v1/replan` |
+| `write` | — | `POST /v1/services`, `POST /v1/signals`, `POST /v1/checks/refresh`, `POST /v1/replan` |
 | `admin` | — | `POST /v1/vigild`, all `/v1/identities` endpoints |
 
 Each endpoint table below lists its **required level**.
@@ -243,6 +243,50 @@ curl --unix-socket /run/vigil/vigild.sock \
   -X POST -H "content-type: application/json" \
   -d '{"action":"restart","services":[]}' \
   http://localhost/v1/services
+```
+
+---
+
+### `POST /v1/signals`
+
+**Required access level:** `write`
+
+Send a signal to the process groups of running services, e.g. `SIGHUP` to
+make nginx re-read its configuration without a restart. Every named service
+must exist and have a running process (`starting`, `active` or
+`stopping`); otherwise none of them gets the signal.
+
+**Request body:**
+
+```json
+{"signal": "SIGHUP", "services": ["nginx"]}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `signal` | string | Signal name as in `stop-signal`: `SIGHUP`, `SIGUSR1`, … (`HUP` alone is rejected). |
+| `services` | array | The services; at least one. Unknown fields are rejected. |
+
+**Response** `200 OK`
+
+```json
+{
+  "type": "sync",
+  "status-code": 200,
+  "status": "OK",
+  "result": {"signal": "SIGHUP", "services": ["nginx"]}
+}
+```
+
+**Errors:** `400` unknown signal or empty `services`; `404` a name that is
+not a service (`service "ngnix" not found`); `409` a service without a
+running process (`not running: "php-fpm"`).
+
+**Example:**
+
+```bash
+curl --unix-socket /run/vigil/vigild.sock -X POST \
+  -d '{"signal": "SIGHUP", "services": ["nginx"]}' http://localhost/v1/signals
 ```
 
 ---

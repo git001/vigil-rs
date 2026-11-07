@@ -783,6 +783,14 @@ probes do), linked from configuration.md (`level`) and orchestrators.md.
 - CLI: `vigil services signal SIGHUP nginx [more…]`.
 - Forwarding SIGHUP/SIGUSR1/SIGUSR2 to all services stays as it is.
 
+Done. All or nothing: an empty list is 400, an unknown service 404, a
+service without a process (anything but starting, active, stopping) 409,
+and then no service gets the signal. Signal names only as in
+`stop-signal` (`SIGHUP`; `HUP` is 400). The overlord checks and then sends
+from a task of its own; the service actor answers whether it had a
+process (`service::Cmd::Signal`). Result `{"signal", "services"}`.
+CLI: `vigil services signal SIGHUP nginx`. vtest v0028.
+
 ### 5e: `follow` on `/v1/logs`
 
 - `GET /v1/logs?follow=true` behaves like `/v1/logs/follow?format=ndjson`

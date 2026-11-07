@@ -85,6 +85,15 @@ podman kill --signal HUP <container-name>
 # vigild receives SIGHUP and forwards it to all service process groups
 ```
 
+To signal only some services, use the API instead (needs `write` access):
+
+```bash
+podman exec <container-name> vigil services signal SIGHUP nginx
+```
+
+See [`services signal`](../user-guide/cli-reference.md#services-signal-signal-name)
+and [`POST /v1/signals`](../api-reference/rest-api.md#post-v1signals).
+
 ## Log format
 
 ### Text (default)

@@ -74,11 +74,43 @@ pub enum Cmd {
     ReloadLayers {
         reply: oneshot::Sender<anyhow::Result<()>>,
     },
+    /// Send `signal` to the process groups of `services`
+    /// (`POST /v1/signals`). All of them must exist and run, otherwise
+    /// none gets it. Ok: the services that got it.
+    Signal {
+        signal: nix::sys::signal::Signal,
+        services: Vec<String>,
+        reply: oneshot::Sender<Result<Vec<String>, SignalError>>,
+    },
     /// Forward a signal to all currently-running service process groups.
     ForwardSignal {
         signal: nix::sys::signal::Signal,
     },
     Shutdown,
+}
+
+/// Why `POST /v1/signals` sent nothing (or not to every service).
+#[derive(Debug, PartialEq)]
+pub enum SignalError {
+    /// No service named in the request (400).
+    NoServices,
+    /// A name that is not a service (404).
+    NotFound(String),
+    /// Services without a running process (409).
+    NotRunning(Vec<String>),
+}
+
+impl std::fmt::Display for SignalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoServices => write!(f, "services must name at least one service"),
+            Self::NotFound(name) => write!(f, "service {name:?} not found"),
+            Self::NotRunning(names) => {
+                let list: Vec<String> = names.iter().map(|n| format!("{n:?}")).collect();
+                write!(f, "not running: {}", list.join(", "))
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

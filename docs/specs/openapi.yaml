@@ -205,6 +205,46 @@ paths:
         "500":
           $ref: "#/components/responses/Error"
 
+  /v1/signals:
+    post:
+      summary: Send a signal to services
+      tags:
+        - services
+      description: >
+        Sends `signal` to the process group of each service in `services`,
+        e.g. SIGHUP to make nginx re-read its configuration. Every service
+        must exist and have a running process (starting, active or
+        stopping); otherwise none gets the signal. Signal names as in
+        `stop-signal`. Required access: `write`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignalsRequest"
+            example:
+              signal: SIGHUP
+              services: [nginx]
+      responses:
+        "200":
+          description: The services that got the signal.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignalsResponse"
+              example:
+                result:
+                  signal: SIGHUP
+                  services: [nginx]
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+
   /v1/health:
     get:
       summary: Health of the checks
@@ -771,6 +811,35 @@ components:
             output). Absent once a run passes.
           example: "HTTP 503 Service Unavailable"
       required: [name, level, status, failures, threshold]
+
+    SignalsRequest:
+      type: object
+      properties:
+        signal:
+          type: string
+          description: Signal name as in stop-signal, e.g. SIGHUP.
+        services:
+          type: array
+          items:
+            type: string
+          minItems: 1
+      required: [signal, services]
+      additionalProperties: false
+
+    SignalsResponse:
+      type: object
+      properties:
+        result:
+          type: object
+          properties:
+            signal:
+              type: string
+            services:
+              type: array
+              items:
+                type: string
+          required: [signal, services]
+      required: [result]
 
     HealthResponse:
       type: object

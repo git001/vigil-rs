@@ -46,6 +46,7 @@ enum LogFormat {
     "  GET    /v1/services[?names=]      list services and their status\n",
     "  POST   /v1/services               start / stop / restart services\n",
     "  GET    /v1/changes/{id}           inspect a change record\n",
+    "  POST   /v1/signals                send a signal to services\n",
     "  GET    /v1/checks[?names=]        list health checks\n",
     "  POST   /v1/checks/refresh         run a check now\n",
     "  GET    /v1/health[?level=&names=] 200 when no check is down, else 502\n",

@@ -47,6 +47,7 @@ mod handlers;
         handlers::checks::list_checks,
         handlers::checks::refresh_check,
         handlers::health::health,
+        handlers::signals::send_signals,
         handlers::alerts::list_alerts,
         handlers::logs::get_logs,
         handlers::logs::follow_logs,
@@ -69,6 +70,8 @@ mod handlers;
         vigil_types::api::CheckRefreshRequest,
         vigil_types::api::CheckRefresh,
         vigil_types::api::HealthInfo,
+        vigil_types::api::SignalsRequest,
+        vigil_types::api::SignalsResult,
         vigil_types::api::CheckStatus,
         AlertInfo, AlertCheckStatus,
         vigil_types::plan::AlertFormat,
@@ -131,6 +134,16 @@ impl ApiError {
         ApiError(StatusCode::NOT_FOUND, anyhow::anyhow!("{}", msg.into()))
     }
 
+    /// `400 Bad Request`, e.g. an unknown signal name.
+    pub(super) fn bad_request(e: anyhow::Error) -> Self {
+        ApiError(StatusCode::BAD_REQUEST, e)
+    }
+
+    /// Any status, for handlers that map their own errors.
+    pub(super) fn with_status(code: StatusCode, e: anyhow::Error) -> Self {
+        ApiError(code, e)
+    }
+
     /// `409 Conflict`, e.g. a change to an identity from a layer file.
     pub(super) fn conflict(e: anyhow::Error) -> Self {
         ApiError(StatusCode::CONFLICT, e)
@@ -188,6 +201,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/checks", get(handlers::list_checks))
         .route("/v1/checks/refresh", post(handlers::refresh_check))
         .route("/v1/health", get(handlers::health))
+        .route("/v1/signals", post(handlers::send_signals))
         .route("/v1/alerts", get(handlers::list_alerts))
         .route("/v1/logs", get(handlers::get_logs))
         .route("/v1/logs/follow", get(handlers::follow_logs))

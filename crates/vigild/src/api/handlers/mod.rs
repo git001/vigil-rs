@@ -9,6 +9,7 @@ pub(super) mod identities;
 pub(super) mod logs;
 pub(super) mod metrics;
 pub(super) mod services;
+pub(super) mod signals;
 pub(super) mod system;
 
 // ---------------------------------------------------------------------------
@@ -80,4 +81,5 @@ pub(crate) use identities::{add_identities, daemon_action, list_identities, remo
 pub(crate) use logs::{follow_logs, get_logs};
 pub(crate) use metrics::get_metrics;
 pub(crate) use services::{get_change, list_services, services_action};
+pub(crate) use signals::send_signals;
 pub(crate) use system::system_info;

@@ -181,6 +181,33 @@ vigil services restart myapp
 vigil services restart        # restart all
 ```
 
+#### `services signal SIGNAL NAME...`
+
+Send a signal to the process groups of running services
+(`POST /v1/signals`), e.g. to make nginx re-read its configuration without a
+restart. The signal name is written as in `stop-signal`: `SIGHUP`,
+`SIGUSR1`, `SIGUSR2`, …
+
+```bash
+vigil services signal SIGHUP nginx
+vigil services signal SIGUSR1 haproxy php-fpm
+```
+
+```
+Sent SIGHUP to nginx.
+```
+
+Every named service must be running (`starting`, `active` or `stopping`);
+otherwise none of them gets the signal and the command fails:
+
+```
+Error: not running: "php-fpm"
+```
+
+A signal to vigild itself (`SIGHUP`, `SIGUSR1`, `SIGUSR2`) still goes to all
+running services, see [Signal
+forwarding](../operator-guide/container-setup.md#signal-forwarding).
+
 ---
 
 ### `checks`

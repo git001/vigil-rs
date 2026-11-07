@@ -19,7 +19,8 @@ use transport::{
 };
 use vigil_types::api::{
     AlertInfo, ChangeInfo, CheckInfo, CheckRefresh, CheckRefreshRequest, DaemonAction,
-    DaemonActionRequest, LogEntry, ServiceAction, ServiceInfo, ServicesAction, SystemInfo,
+    DaemonActionRequest, LogEntry, ServiceAction, ServiceInfo, ServicesAction, SignalsRequest,
+    SignalsResult, SystemInfo,
 };
 use vigil_types::identity::{
     AddIdentitiesRequest, Identity, IdentitySpec, RemoveIdentitiesRequest,
@@ -179,6 +180,22 @@ impl VigilClient {
 
     pub async fn list_checks(&self, names: &[String]) -> anyhow::Result<Vec<CheckInfo>> {
         self.get(&format!("/v1/checks{}", names_query(names))).await
+    }
+
+    /// Send a signal to services (`POST /v1/signals`).
+    pub async fn send_signals(
+        &self,
+        signal: &str,
+        services: Vec<String>,
+    ) -> anyhow::Result<SignalsResult> {
+        self.post(
+            "/v1/signals",
+            &SignalsRequest {
+                signal: signal.to_owned(),
+                services,
+            },
+        )
+        .await
     }
 
     /// Run a check now (`POST /v1/checks/refresh`).

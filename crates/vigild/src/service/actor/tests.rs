@@ -1659,6 +1659,36 @@ async fn forwarded_signal_reaches_the_service() {
     shutdown(tx).await;
 }
 
+// POST /v1/signals: the signal reaches the process group, and the reply
+// says whether there was a process.
+#[tokio::test]
+async fn signal_command_replies_whether_a_process_got_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out");
+    let (tx, _rx) = spawn_run(
+        ServiceConfig {
+            command: Some(format!(
+                r#"sh -c 'trap "echo hup >> {out}" HUP; echo up >> {out}; while :; do sleep 0.05; done'"#,
+                out = out.display()
+            )),
+            ..Default::default()
+        },
+        std::env::temp_dir(),
+    );
+    // Not started yet: no process, nothing sent.
+    let (got_tx, got_rx) = tokio::sync::oneshot::channel();
+    tx.send(Cmd::Signal(Signal::SIGHUP, got_tx)).await.unwrap();
+    assert!(!got_rx.await.unwrap());
+
+    start(&tx).await;
+    wait_for_lines(&out, 1).await;
+    let (got_tx, got_rx) = tokio::sync::oneshot::channel();
+    tx.send(Cmd::Signal(Signal::SIGHUP, got_tx)).await.unwrap();
+    assert!(got_rx.await.unwrap());
+    assert_eq!(wait_for_lines(&out, 2).await, ["up", "hup"]);
+    shutdown(tx).await;
+}
+
 #[tokio::test]
 async fn check_passed_command_makes_the_service_ready() {
     let (tx, mut rx) = spawn_run(

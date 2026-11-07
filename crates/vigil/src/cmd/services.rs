@@ -34,6 +34,17 @@ pub enum ServicesCmd {
     /// Restart one or more services.
     #[command(name = "restart")]
     Restart { names: Vec<String> },
+
+    /// Send a signal to running services, e.g. SIGHUP to reload a config.
+    /// Every service must be running, otherwise none gets the signal.
+    #[command(name = "signal")]
+    Signal {
+        /// Signal name as in stop-signal, e.g. SIGHUP or SIGUSR1.
+        signal: String,
+        /// The services to send it to.
+        #[arg(required = true)]
+        names: Vec<String>,
+    },
 }
 
 pub async fn run(client: &VigilClient, sub: ServicesCmd) -> anyhow::Result<()> {
@@ -111,6 +122,10 @@ pub async fn run(client: &VigilClient, sub: ServicesCmd) -> anyhow::Result<()> {
                     .services_action(ServiceAction::Restart, names)
                     .await?,
             );
+        }
+        ServicesCmd::Signal { signal, names } => {
+            let sent = client.send_signals(&signal, names).await?;
+            println!("Sent {} to {}.", sent.signal, sent.services.join(", "));
         }
     }
     Ok(())
