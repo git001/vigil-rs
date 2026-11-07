@@ -621,11 +621,13 @@ libsystemd, the `sd-notify` crate, Python's `socket` module, or
 #### `healthy-time`
 
 How long a service must stay `active` without interruption before it counts
-as healthy again. Default: **10s**; allowed **`1s` to `1h`**. It only
-affects [alerts](#service-events): a service alert resolves once the service
-is healthy, and the checks of a service send no alerts while it is not
-healthy. A crash within `healthy-time` belongs to the same problem and sends
-no new alert, so a crash loop does not flap between firing and resolved.
+as healthy again. Default: **10s**; allowed **`1s` to `1h`**. A healthy
+service starts a new backoff sequence: only exits in a row count towards
+`backoff-limit`. For [alerts](#service-events): a service alert resolves
+once the service is healthy, and the checks of a service send no alerts
+while it is not healthy. A crash within `healthy-time` belongs to the same
+problem and sends no new alert, so a crash loop does not flap between
+firing and resolved.
 
 Oneshot jobs do not use `healthy-time`: a successful run makes them healthy.
 
@@ -662,6 +664,10 @@ Default: `5s`
 #### `on-success` / `on-failure`
 
 Policy applied when the managed process exits.
+
+Flow chart: [service-lifecycle.svg](../../images/service-lifecycle.svg)
+(start and readiness, how vigild stops a service, how an exit picks
+`on-success` or `on-failure`, restart with backoff).
 
 | Value | Behaviour |
 |---|---|

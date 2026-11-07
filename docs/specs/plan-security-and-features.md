@@ -846,6 +846,12 @@ exit → `exit-code-map` → `success-exit-codes` → `on-success` / `on-failure
 resets it; plus `on-check-failure`, `ready-timeout` and `kill-delay`. Last,
 so it shows the behaviour after 5f.
 
+Done. Four clusters in one column (start, vigild stops it, the process
+exits by itself, policy), loops as text ("start again (1.)") instead of
+long edges; linked from the `on-success` / `on-failure` section. Found on
+the way: configuration.md said `healthy-time` only affects alerts, but it
+also starts a new backoff sequence; fixed.
+
 ### 5h: check metrics
 
 Added by the user on 2026-11-07 after 5c. Today there are only

@@ -1,0 +1,151 @@
+// Service lifecycle: start and readiness, what happens when the process
+// exits, restart with backoff, and the ways vigild stops a service. It
+// describes the behaviour documented in configuration.md (sections ready /
+// ready-check / ready-timeout, healthy-time, kill-delay, on-success /
+// on-failure, success-exit-codes / exit-code-map, on-check-failure,
+// backoff-delay / -factor / -limit) and cli-reference.md (replan).
+//
+// CI (.github/workflows/diagrams.yml) renders it to
+// images/service-lifecycle.svg, which the docs link to. By hand:
+//   dot -Tsvg docs/user-guide/service-lifecycle.dot -o images/service-lifecycle.svg
+
+digraph service_lifecycle {
+    graph [
+        label = "vigild: service start, exit, restart and backoff",
+        labelloc = t,
+        fontname = "Helvetica",
+        fontsize = 18,
+        rankdir = TB,
+        nodesep = 0.5,
+        ranksep = 0.45,
+        newrank = true,
+        compound = true
+    ];
+    node [fontname = "Helvetica", fontsize = 11, style = "rounded,filled", fillcolor = white, shape = box];
+    edge [fontname = "Helvetica", fontsize = 10];
+
+    // ------------------------------------------------------------------
+    // 1. Start and readiness
+    // ------------------------------------------------------------------
+    subgraph cluster_start {
+        label = "1. start";
+        style = "rounded";
+        color = "#2563eb";
+        fontcolor = "#1e3a8a";
+
+        start [fillcolor = "#dbeafe",
+               label = "start\nautostart, vigil services start,\nschedule, end of backoff"];
+        starting [fillcolor = "#e0e7ff", penwidth = 2, label = "starting"];
+        q_ready [shape = diamond, label = "ready within\nready-timeout (30s)?"];
+        timeout_stop [fillcolor = "#fee2e2",
+                      label = "not ready in time:\nstopped like in 2.;\nthe exit always counts as\na failure: on-failure (3.)"];
+        { rank = same; q_ready; timeout_stop; }
+        active [fillcolor = "#bbf7d0", penwidth = 2,
+                label = "active\nready: process (default) spawned,\ncheck passed, or notify READY=1"];
+        healthy [fillcolor = "#dcfce7",
+                 label = "healthy after healthy-time (10s)\nwithout an exit: the backoff\nstarts over"];
+        { rank = same; active; healthy; }
+
+        start -> starting -> q_ready;
+        q_ready -> active [label = "yes"];
+        q_ready -> timeout_stop [label = "no"];
+        active -> healthy [style = dotted, arrowhead = none];
+    }
+
+    // ------------------------------------------------------------------
+    // 2. vigild stops the service
+    // ------------------------------------------------------------------
+    subgraph cluster_stop {
+        label = "2. vigild stops it";
+        style = "rounded";
+        color = "#6b7280";
+        fontcolor = "#374151";
+
+        stop_why [fillcolor = "#f3f4f6",
+                  label = "vigil services stop / restart,\nreplan with a changed config,\non-check-failure: restart,\na required service stopped"];
+        stopping [fillcolor = "#e5e7eb", penwidth = 2,
+                  label = "stopping\nstop-signal (SIGTERM), SIGKILL\nafter kill-delay (5s)"];
+        inactive_stop [fillcolor = "#e5e7eb", penwidth = 2,
+                       label = "inactive\nno on-success / on-failure;\nfor a restart: start again (1.)"];
+
+        stop_why -> stopping;
+        stopping -> inactive_stop [label = "exit"];
+    }
+
+    // ------------------------------------------------------------------
+    // 3. The process exits by itself
+    // ------------------------------------------------------------------
+    subgraph cluster_exit {
+        label = "3. the process exits by itself";
+        labeljust = r;
+        style = "rounded";
+        color = "#7c3aed";
+        fontcolor = "#4c1d95";
+
+        exited [fillcolor = "#ede9fe",
+                label = "process exits (also while starting)\nexit code, or 128 + signal"];
+        map [fillcolor = "#f5f3ff", label = "exit-code-map\ne.g. {143: 0}"];
+        q_success [shape = diamond, label = "in success-exit-codes?\n(default [0])"];
+        on_failure [fillcolor = "#fee2e2",
+                    label = "on-failure\n(restart; scheduled job: ignore)"];
+        on_success [fillcolor = "#dcfce7",
+                    label = "on-success\n(restart; oneshot: done)"];
+        { rank = same; on_failure; on_success; }
+
+        exited -> map -> q_success;
+        q_success -> on_failure [label = "no"];
+        q_success -> on_success [label = "yes"];
+    }
+
+    active -> exited [label = "exit"];
+    active -> stop_why [label = "vigild\nstops it"];
+    { rank = same; exited; stop_why; }
+
+    // ------------------------------------------------------------------
+    // 4. Policies
+    // ------------------------------------------------------------------
+    subgraph cluster_policy {
+        label = "4. policy";
+        labelloc = b;
+        style = "rounded";
+        color = "#b45309";
+        fontcolor = "#78350f";
+
+        p_shutdown [fillcolor = "#fecaca",
+                    label = "shutdown, failure-shutdown,\nsuccess-shutdown\nvigild stops all services\nand exits with an exit code"];
+        p_restart [fillcolor = "#fef3c7", label = "restart"];
+        p_ignore [fillcolor = "#f3f4f6",
+                  label = "ignore\ninactive; a oneshot\nafter success: done"];
+        { rank = same; p_shutdown; p_restart; p_ignore; }
+
+        q_limit [shape = diamond, label = "delay reached\nbackoff-limit (30s)?"];
+        backoff [fillcolor = "#fde68a", penwidth = 2,
+                 label = "backoff\nwait the delay, then start again (1.);\ndelay: backoff-delay (500ms),\nx backoff-factor (2) per restart in a row"];
+        error [fillcolor = "#fca5a5", penwidth = 2,
+               label = "error\ngiven up, alert;\nvigil services start resets it"];
+        { rank = same; backoff; error; }
+
+        p_restart -> q_limit;
+        q_limit -> backoff [label = "no"];
+        q_limit -> error [label = "yes"];
+    }
+
+    on_failure -> p_restart [lhead = cluster_policy];
+    on_success -> p_restart [lhead = cluster_policy];
+
+    // ------------------------------------------------------------------
+    // Legend
+    // ------------------------------------------------------------------
+    legend [shape = plaintext, style = "", fontsize = 10, label = <
+        <table border="1" color="gray60" cellborder="0" cellspacing="2" cellpadding="3" style="rounded">
+        <tr><td colspan="2" align="left"><font color="gray30">Legend (defaults in brackets)</font></td></tr>
+        <tr><td align="left"><b>bold box</b></td><td align="left">a service state (vigil services list)</td></tr>
+        <tr><td align="left"><b>restarts in a row</b></td><td align="left">wait 0.5s 1s 2s 4s 8s 16s, then error</td></tr>
+        <tr><td align="left"><b>on-check-failure</b></td><td align="left">restart (like vigil services restart, 2.),<br align="left"/>shutdown, failure-shutdown (exit code 10),<br align="left"/>success-shutdown (0), ignore<br align="left"/></td></tr>
+        <tr><td align="left"><b>requires</b></td><td align="left">a stopped or failed service stops<br align="left"/>the services that require it (2.)<br align="left"/></td></tr>
+        </table>
+    >];
+    // Top right, next to the first node.
+    { rank = same; start; legend; }
+    start -> legend [style = invis, minlen = 4];
+}
