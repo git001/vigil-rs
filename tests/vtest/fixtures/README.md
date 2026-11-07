@@ -5,9 +5,17 @@ They are plain vigil layers and request bodies, so they double as examples.
 
 ## vNNNN/
 
-Layer files of test `vNNNN_*.vtc`; the test copies them into its layers
-directory (`cp ${vtestdir}/fixtures/v0005/demo.yaml ${tmpdir}/layers/`) and
-runs `vigil replan`.
+Layer files of test `vNNNN_*.vtc`. vigild reads them directly
+(`--layers-dir ${vtestdir}/fixtures/v0027`). A test that changes the plan
+has `before/` and `after/` and points a symlink at one of them
+(`ln -sfn ${vtestdir}/fixtures/v0005/after ${tmpdir}/layers`), the way
+Kubernetes swaps the `..data` symlink of a ConfigMap volume; see `v0005`,
+`v0030`.
+
+## empty/
+
+A layers directory without layer files: vigild runs with no services,
+checks or alerts.
 
 Values known only at run time (a port, the test's tmpdir) are not written
 into the file by the test; the layer gets them the way a real deployment

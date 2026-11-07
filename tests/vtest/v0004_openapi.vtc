@@ -1,27 +1,18 @@
 vtest "GET /openapi.json returns the OpenAPI spec"
 
-shell { mkdir -p ${tmpdir}/layers }
+# vigild with an empty layers directory; see v0001.
+process p1 -winsz 200 400 "${vigild} --layers-dir ${vtestdir}/fixtures/empty --socket ${tmpdir}/vigild.sock" -start
+process p1 -expect-text 0 0 "API listening"
 
-process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
-
-shell {
-	for i in $(seq 1 50); do
-		test -S ${tmpdir}/vigild.sock && break
-		sleep 0.1
-	done
-	test -S ${tmpdir}/vigild.sock
-}
-
+# The API title, and the info and paths objects.
 client c1 -connect ${tmpdir}/vigild.sock {
 	txreq -method GET -url /openapi.json -hdr "Host: localhost"
 	rxresp
 	expect resp.status == 200
-	write_body openapi.json
-	# Must contain the API title
-	shell { grep -q '"vigil API"' openapi.json }
-	# Must contain info and paths objects
-	shell { grep -q '"info"' openapi.json }
-	shell { grep -q '"paths"' openapi.json }
+	expect resp.body ~ "\"title\":\"vigil API\""
+	expect resp.body ~ "\"info\":"
+	expect resp.body ~ "\"paths\":"
+	expect resp.body ~ "/v1/system-info"
 } -run
 
 process p1 -kill TERM
