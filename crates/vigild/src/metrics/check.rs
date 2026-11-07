@@ -10,7 +10,7 @@
 //! survives a replan.
 
 use std::collections::HashMap;
-
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use prometheus_client::encoding::EncodeLabelSet;
@@ -18,17 +18,20 @@ use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::histogram::Histogram;
 use vigil_types::plan::CheckLevel;
 
-use super::MetricsStore;
+use prometheus_client::metrics::{counter::Counter, gauge::Gauge};
+use prometheus_client::registry::Registry;
+
+use super::{MetricsStore, reg, register};
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
-pub(super) struct CheckLabel {
+struct CheckLabel {
     check: String,
     /// `alive` or `ready`.
     level: String,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
-pub(super) struct CheckResultLabel {
+struct CheckResultLabel {
     check: String,
     /// `alive` or `ready`.
     level: String,
@@ -41,9 +44,9 @@ const DURATION_BUCKETS: [f64; 14] = [
     0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0,
 ];
 
-pub(super) type DurationFamily = Family<CheckResultLabel, Histogram, fn() -> Histogram>;
+type DurationFamily = Family<CheckResultLabel, Histogram, fn() -> Histogram>;
 
-pub(super) fn duration_family() -> DurationFamily {
+fn duration_family() -> DurationFamily {
     Family::new_with_constructor(|| Histogram::new(DURATION_BUCKETS.into_iter()))
 }
 
@@ -56,7 +59,7 @@ fn result_label(check: &str, level: CheckLevel, success: bool) -> CheckResultLab
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
-pub(super) struct LevelLabel {
+struct LevelLabel {
     /// `alive` or `ready`.
     level: String,
 }
@@ -76,13 +79,75 @@ fn label(check: &str, level: CheckLevel) -> CheckLabel {
 }
 
 /// The running checks and their level.
-pub(super) type KnownChecks = std::sync::Mutex<HashMap<String, CheckLevel>>;
+type KnownChecks = std::sync::Mutex<HashMap<String, CheckLevel>>;
+
+pub(super) struct CheckMetrics {
+    check_up: Family<CheckLabel, Gauge>,
+    check_success_count: Family<CheckLabel, Counter>,
+    check_failure_count: Family<CheckLabel, Counter>,
+    check_down_count: Family<CheckLabel, Counter>,
+    check_down_seconds: Family<CheckLabel, Counter<f64, AtomicU64>>,
+    health: Family<LevelLabel, Gauge>,
+    check_duration: DurationFamily,
+    check_connect_duration: DurationFamily,
+    known: KnownChecks,
+}
+
+impl CheckMetrics {
+    pub(super) fn register(r: &mut Registry) -> Self {
+        Self {
+            check_up: reg(
+                r,
+                "vigil_check_up",
+                "Whether the health check is up (1) or not (0)",
+            ),
+            check_success_count: reg(
+                r,
+                "vigil_check_success_count",
+                "Number of times the check has succeeded",
+            ),
+            check_failure_count: reg(
+                r,
+                "vigil_check_failure_count",
+                "Number of times the check has failed",
+            ),
+            check_down_count: reg(
+                r,
+                "vigil_check_down_count",
+                "Number of outages: the check went from up to down",
+            ),
+            check_down_seconds: reg(
+                r,
+                "vigil_check_down_seconds",
+                "Time the check spent down, updated at each run while it is down",
+            ),
+            health: reg(
+                r,
+                "vigil_health",
+                "Whether GET /v1/health?level= answers healthy (1) or not (0)",
+            ),
+            check_duration: register(
+                r,
+                "vigil_check_duration_seconds",
+                "Duration of a probe run, from its start to its result (at most the check's timeout)",
+                duration_family(),
+            ),
+            check_connect_duration: register(
+                r,
+                "vigil_check_connect_duration_seconds",
+                "Time until the connection of a probe was up (http: DNS, TCP and TLS; tcp: the connect)",
+                duration_family(),
+            ),
+            known: Default::default(),
+        }
+    }
+}
 
 impl MetricsStore {
     /// The running checks are exactly `checks`: drop the series of every
     /// other check and of a check whose level changed.
     pub fn set_checks(&self, checks: &[(&str, CheckLevel)]) {
-        let mut known = self.known_checks.lock().unwrap_or_else(|e| e.into_inner());
+        let mut known = self.checks.known.lock().unwrap_or_else(|e| e.into_inner());
         let stale: Vec<(String, CheckLevel)> = known
             .iter()
             .filter(|(name, level)| !checks.contains(&(name.as_str(), **level)))
@@ -90,15 +155,15 @@ impl MetricsStore {
             .collect();
         for (name, level) in stale {
             let l = label(&name, level);
-            self.check_up.remove(&l);
-            self.check_success_count.remove(&l);
-            self.check_failure_count.remove(&l);
-            self.check_down_count.remove(&l);
-            self.check_down_seconds.remove(&l);
+            self.checks.check_up.remove(&l);
+            self.checks.check_success_count.remove(&l);
+            self.checks.check_failure_count.remove(&l);
+            self.checks.check_down_count.remove(&l);
+            self.checks.check_down_seconds.remove(&l);
             for success in [true, false] {
                 let r = result_label(&name, level, success);
-                self.check_duration.remove(&r);
-                self.check_connect_duration.remove(&r);
+                self.checks.check_duration.remove(&r);
+                self.checks.check_connect_duration.remove(&r);
             }
         }
         *known = checks
@@ -109,39 +174,42 @@ impl MetricsStore {
 
     /// The label of `check` if it is a running check with `level`.
     fn known(&self, check: &str, level: CheckLevel) -> Option<CheckLabel> {
-        let known = self.known_checks.lock().unwrap_or_else(|e| e.into_inner());
+        let known = self.checks.known.lock().unwrap_or_else(|e| e.into_inner());
         (known.get(check) == Some(&level)).then(|| label(check, level))
     }
 
     pub fn record_check_success(&self, check: &str, level: CheckLevel) {
         if let Some(l) = self.known(check, level) {
-            self.check_success_count.get_or_create(&l).inc();
+            self.checks.check_success_count.get_or_create(&l).inc();
         }
     }
 
     pub fn record_check_failure(&self, check: &str, level: CheckLevel) {
         if let Some(l) = self.known(check, level) {
-            self.check_failure_count.get_or_create(&l).inc();
+            self.checks.check_failure_count.get_or_create(&l).inc();
         }
     }
 
     pub fn set_check_up(&self, check: &str, level: CheckLevel, up: bool) {
         if let Some(l) = self.known(check, level) {
-            self.check_up.get_or_create(&l).set(i64::from(up));
+            self.checks.check_up.get_or_create(&l).set(i64::from(up));
         }
     }
 
     /// The check went from up to down (one outage).
     pub fn record_check_down(&self, check: &str, level: CheckLevel) {
         if let Some(l) = self.known(check, level) {
-            self.check_down_count.get_or_create(&l).inc();
+            self.checks.check_down_count.get_or_create(&l).inc();
         }
     }
 
     /// Add time the check spent down.
     pub fn add_check_down_seconds(&self, check: &str, level: CheckLevel, seconds: f64) {
         if let Some(l) = self.known(check, level) {
-            self.check_down_seconds.get_or_create(&l).inc_by(seconds);
+            self.checks
+                .check_down_seconds
+                .get_or_create(&l)
+                .inc_by(seconds);
         }
     }
 
@@ -160,11 +228,13 @@ impl MetricsStore {
             return;
         }
         let l = result_label(check, level, success);
-        self.check_duration
+        self.checks
+            .check_duration
             .get_or_create(&l)
             .observe(duration.as_secs_f64());
         if let Some(c) = connect {
-            self.check_connect_duration
+            self.checks
+                .check_connect_duration
                 .get_or_create(&l)
                 .observe(c.as_secs_f64());
         }
@@ -173,7 +243,8 @@ impl MetricsStore {
     /// What `GET /v1/health?level=alive` and `?level=ready` answer now.
     pub fn set_health(&self, alive: bool, ready: bool) {
         for (level, healthy) in [(CheckLevel::Alive, alive), (CheckLevel::Ready, ready)] {
-            self.health
+            self.checks
+                .health
                 .get_or_create(&LevelLabel {
                     level: level_str(level).to_owned(),
                 })
