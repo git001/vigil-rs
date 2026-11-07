@@ -38,7 +38,6 @@ impl LineFilter {
     }
 
     /// Returns `true` if `line` should be forwarded.
-    #[allow(clippy::inline_always)]
     #[inline]
     pub fn allow(&self, line: &str) -> bool {
         if !self.include.is_empty() && !self.include.iter().any(|re| re.is_match(line)) {
