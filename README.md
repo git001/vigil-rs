@@ -297,7 +297,7 @@ look alike, but they are not interchangeable (see below).
 | HTTP check headers | ✅ | ✅ |
 | HTTP check TLS and proxy (`tls:` / `proxy:`) | ❌ | ✅ custom CAs, client certificate, proxy |
 | Check `delay` field | ❌ | ✅ |
-| `/v1/health` endpoint | ✅ | ❌ |
+| `/v1/health` endpoint | ✅ | ✅ (`404` for a name that is not a check) |
 | Log targets | ✅ Loki, OpenTelemetry, syslog | ndjson push per service (Unix/TCP), `vigil-log-relay` |
 | Alerting (webhook / Alertmanager / CloudEvents / OTLP) | ❌ | ✅ |
 | exec, files and signals API; notices | ✅ | ❌ |

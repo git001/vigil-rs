@@ -5,7 +5,7 @@
 
 use chrono::Utc;
 use tokio::sync::oneshot;
-use vigil_types::api::{AlertInfo, ChangeInfo, ChangeStatus, ServiceInfo, SystemInfo};
+use vigil_types::api::{AlertInfo, ChangeInfo, ChangeStatus, CheckStatus, ServiceInfo, SystemInfo};
 use vigil_types::plan::OnExit;
 
 use crate::check;
@@ -43,6 +43,13 @@ impl Overlord {
                 let _ = reply.send(infos);
             }
             Cmd::RefreshCheck { name, reply } => self.refresh_check(name, reply),
+            Cmd::Health {
+                level,
+                names,
+                reply,
+            } => {
+                let _ = reply.send(self.health(level, &names).await);
+            }
             Cmd::GetAlerts { names, reply } => {
                 let infos = self.query_alerts(&names);
                 let _ = reply.send(infos);
@@ -209,6 +216,31 @@ impl Overlord {
             }
         }
         infos
+    }
+
+    /// `GET /v1/health`: the checks of `level` (`ready` includes
+    /// `alive` checks; none: all levels) among `names` (empty: all) are
+    /// healthy when none of them is down. Only running checks count; a
+    /// check with `startup: disabled` is ignored. A name that is not a check
+    /// is an error, so a typo in a probe cannot pass for ever.
+    pub(super) async fn health(
+        &self,
+        level: Option<vigil_types::plan::CheckLevel>,
+        names: &[String],
+    ) -> Result<bool, String> {
+        use vigil_types::plan::CheckLevel;
+        if let Some(unknown) = names.iter().find(|n| !self.plan.checks.contains_key(*n)) {
+            return Err(format!("check {unknown:?} not found"));
+        }
+        let counts = |l: CheckLevel| match level {
+            None | Some(CheckLevel::Ready) => true,
+            Some(CheckLevel::Alive) => l == CheckLevel::Alive,
+        };
+        Ok(!self
+            .query_checks(names)
+            .await
+            .iter()
+            .any(|c| counts(c.level) && c.status == CheckStatus::Down))
     }
 
     /// Hand a refresh to the check's actor, or run a check without one

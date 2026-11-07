@@ -198,7 +198,15 @@ pub struct CheckInfo {
     pub last_error: Option<String>,
 }
 
-/// Body of `POST /v1/checks/refresh` (Pebble's shape).
+/// Result of `GET /v1/health`.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub struct HealthInfo {
+    /// No selected, running check is down.
+    pub healthy: bool,
+}
+
+/// Body of `POST /v1/checks/refresh`.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct CheckRefreshRequest {

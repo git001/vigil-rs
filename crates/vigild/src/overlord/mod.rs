@@ -57,6 +57,13 @@ pub enum Cmd {
         name: String,
         reply: oneshot::Sender<Option<vigil_types::api::CheckRefresh>>,
     },
+    /// `GET /v1/health`: whether no selected, running check is down. `Err`
+    /// names a check that is not in the plan.
+    Health {
+        level: Option<vigil_types::plan::CheckLevel>,
+        names: Vec<String>,
+        reply: oneshot::Sender<Result<bool, String>>,
+    },
     GetAlerts {
         names: Vec<String>,
         reply: oneshot::Sender<Vec<AlertInfo>>,

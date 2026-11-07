@@ -17,7 +17,7 @@ use super::TestApp;
 async fn tls_anonymous_default_metrics_allows_probes_and_metrics_only() {
     let app = TestApp::new().await; // no identities, default `metrics`
 
-    for uri in ["/v1/checks", "/v1/system-info", "/v1/metrics"] {
+    for uri in ["/v1/checks", "/v1/health", "/v1/system-info", "/v1/metrics"] {
         let resp = app.request_tls(Method::GET, uri, None).await;
         assert_eq!(resp.status(), StatusCode::OK, "{uri}");
     }
@@ -55,8 +55,10 @@ async fn tls_anonymous_open_hides_metrics() {
     let app = TestApp::with_tls_anonymous(IdentityAccess::Open).await;
     let resp = app.request_tls(Method::GET, "/v1/metrics", None).await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-    let resp = app.request_tls(Method::GET, "/v1/checks", None).await;
-    assert_eq!(resp.status(), StatusCode::OK, "probes keep working");
+    for uri in ["/v1/checks", "/v1/health"] {
+        let resp = app.request_tls(Method::GET, uri, None).await;
+        assert_eq!(resp.status(), StatusCode::OK, "probes keep working: {uri}");
+    }
     app.shutdown().await;
 }
 

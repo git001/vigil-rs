@@ -1,4 +1,4 @@
-vtest "why a check fails: last-error in GET /v1/checks, vigil checks list/run, the log and the alert"
+vtest "why a check fails: last-error in GET /v1/checks, vigil checks list/run, the log, the alert; GET /v1/health"
 
 shell { mkdir -p ${tmpdir}/layers }
 
@@ -57,6 +57,19 @@ shell {
 	grep -F 'check is down' ${tmpdir}/vigild.log | grep -qF 'error="exit status 2: migration 42 pending'
 }
 
+# GET /v1/health: 502 while the ready check is down; level=alive does not
+# look at it; a name that is not a check is 404.
+shell {
+	h() { curl -s -o /dev/null -w '%{http_code}' --unix-socket ${tmpdir}/vigild.sock "http://localhost/v1/health$1"; }
+	test "$(h '')" = 502
+	test "$(h '?level=ready')" = 502
+	test "$(h '?level=alive')" = 200
+	test "$(h '?names=migrate-done')" = 502
+	test "$(h '?names=migrate-dnoe')" = 404
+	test "$(h '?level=live')" = 400
+	curl -s --unix-socket ${tmpdir}/vigild.sock http://localhost/v1/health | grep -qF '"result":{"healthy":false}'
+}
+
 # vigil checks run: runs it now, exit code 1 and the reason on a failure.
 shell {
 	if ${vigil} --socket ${tmpdir}/vigild.sock checks run migrate-done > ${tmpdir}/run.out 2> ${tmpdir}/run.err; then
@@ -91,6 +104,11 @@ shell {
 	done
 	grep -q '"status":"up"' ${tmpdir}/checks2.json
 	! grep -q '"last-error"' ${tmpdir}/checks2.json
+}
+
+# GET /v1/health: 200 once the check passed.
+shell {
+	test "$(curl -s -o /dev/null -w '%{http_code}' --unix-socket ${tmpdir}/vigild.sock http://localhost/v1/health)" = 200
 }
 
 # vigil checks run on a passing check: exit code 0.

@@ -23,10 +23,10 @@ spec:
         - name: VIGIL_TLS_ADDR
           value: "0.0.0.0:8443"
 
-      # Liveness probe via vigild health check API
+      # Liveness probe: 502 while an alive check is down
       livenessProbe:
         httpGet:
-          path: /v1/checks
+          path: /v1/health?level=alive
           port: 8443
           scheme: HTTPS
         initialDelaySeconds: 10
@@ -190,30 +190,34 @@ vigild exposes its REST API directly over HTTPS — use `httpGet` probes
 without requiring the `vigil` CLI to be present in the image:
 
 ```yaml
-# Liveness: vigild is responsive
+# Liveness: no check with level: alive is down
 livenessProbe:
   httpGet:
-    path: /v1/checks
+    path: /v1/health?level=alive
     port: 8443
-    scheme: HTTPS
-    insecureSkipTLSVerify: true   # vigild uses a self-signed cert by default
+    scheme: HTTPS   # the kubelet does not verify the certificate
   initialDelaySeconds: 10
   periodSeconds: 30
 
-# Readiness: vigild is responsive and serving requests
+# Readiness: no check is down (level=ready counts ready and alive checks)
 readinessProbe:
   httpGet:
-    path: /v1/checks
+    path: /v1/health?level=ready
     port: 8443
     scheme: HTTPS
-    insecureSkipTLSVerify: true   # vigild uses a self-signed cert by default
   initialDelaySeconds: 5
   periodSeconds: 10
 ```
 
 Requires `VIGIL_TLS_ADDR: "0.0.0.0:8443"` (or `--tls-addr`) to enable the
-HTTPS listener. The `/v1/checks` endpoint returns `200` when vigild is
-healthy and reachable.
+HTTPS listener. `GET /v1/health` needs no credentials and answers `200`
+while none of the selected checks is down, `502` otherwise; checks with
+`startup: disabled` do not count. `?names=a,b` selects checks by name; a
+name that is not a check is `404`, so a typo cannot pass unnoticed. If a
+service restarts itself on a failed check (`on-check-failure: restart`),
+give vigild time for that before the kubelet restarts the whole container:
+`periodSeconds` x `failureThreshold` longer than the check's `period` x
+`threshold` plus the service's start.
 
 ### Kubernetes pod log collector
 
@@ -423,7 +427,7 @@ EOF
 
         check {
           type     = "http"
-          path     = "/v1/checks"
+          path     = "/v1/health"
           port     = "vigild"
           protocol = "https"
           tls_skip_verify = true

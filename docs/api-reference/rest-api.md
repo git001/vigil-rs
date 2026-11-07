@@ -22,7 +22,7 @@ levels are ordered from least to most privileged:
 
 | Level | How it is granted | Required by |
 |-------|-------------------|-------------|
-| `open` | No credentials needed | `GET /v1/system-info`, `GET /v1/checks` |
+| `open` | No credentials needed | `GET /v1/system-info`, `GET /v1/checks`, `GET /v1/health` |
 | `metrics` | Basic Auth, local UID, or TLS client cert | `GET /v1/metrics` |
 | `read` | — | All other `GET` endpoints |
 | `write` | — | `POST /v1/services`, `POST /v1/checks/refresh`, `POST /v1/replan` |
@@ -341,6 +341,45 @@ fails](../user-guide/configuration.md#why-a-check-fails).
 curl --unix-socket /run/vigil/vigild.sock http://localhost/v1/checks
 curl --unix-socket /run/vigil/vigild.sock \
   "http://localhost/v1/checks?names=myapp-alive"
+```
+
+---
+
+### `GET /v1/health`
+
+**Required access level:** `open` (for Kubernetes `httpGet` probes, which
+send no credentials)
+
+vigild's health endpoint: `200` while none of the selected checks is down,
+`502 Bad Gateway` otherwise. Only running checks count; a check with
+`startup: disabled` is ignored. A check during its initial `delay` is up.
+
+**Query parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `level` | `alive` \| `ready` | `alive`: only checks with `level: alive`. `ready`: checks of both levels. Omit for all checks. |
+| `names` | string | Comma-separated check names. Omit for all. |
+
+A name that is not a check is `404 Not Found` (a typo in a probe would
+otherwise pass for ever), and an unknown parameter or level is
+`400 Bad Request`.
+
+**Response** `200 OK` or `502 Bad Gateway`
+
+```json
+{
+  "type": "sync",
+  "status-code": 502,
+  "status": "Bad Gateway",
+  "result": {"healthy": false}
+}
+```
+
+**Example:**
+
+```bash
+curl -sk -o /dev/null -w '%{http_code}\n' "https://localhost:8443/v1/health?level=ready"
 ```
 
 ---

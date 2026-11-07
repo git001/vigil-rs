@@ -1573,3 +1573,73 @@ checks:
         result.error.as_deref().unwrap_or_default()
     );
 }
+
+// ------------------------------------------------------------------
+// health — GET /v1/health
+// ------------------------------------------------------------------
+
+/// An overlord with a failing `ready` check (`db-ready`, down after one
+/// refresh), a passing `alive` check (`web-alive`) and a disabled failing
+/// check (`off`). Nothing runs on its own (delay 1h).
+async fn health_overlord() -> (Overlord, tempfile::TempDir) {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("001.yaml"),
+        r#"checks:
+  web-alive:
+    level: alive
+    startup: enabled
+    delay: 1h
+    exec:
+      command: "true"
+  db-ready:
+    level: ready
+    startup: enabled
+    delay: 1h
+    threshold: 1
+    exec:
+      command: "exit 1"
+  off:
+    level: alive
+    startup: disabled
+    exec:
+      command: "exit 1"
+"#,
+    )
+    .unwrap();
+    let mut ov = make_overlord(&[], &[]);
+    ov.alert_sender.spawn_worker();
+    ov.layers_dir = dir.path().to_path_buf();
+    ov.reload_layers().await.unwrap();
+    (ov, dir)
+}
+
+#[tokio::test]
+async fn health_follows_the_levels_and_names() {
+    use vigil_types::plan::CheckLevel;
+    let (ov, _dir) = health_overlord().await;
+    // Before any run every check is up.
+    assert_eq!(ov.health(None, &[]).await, Ok(true));
+
+    refresh(&ov, "db-ready").await.unwrap();
+    // db-ready (ready) is down: all levels and `ready` are unhealthy …
+    assert_eq!(ov.health(None, &[]).await, Ok(false));
+    assert_eq!(ov.health(Some(CheckLevel::Ready), &[]).await, Ok(false));
+    // … `alive` only looks at web-alive; the disabled `off` never counts.
+    assert_eq!(ov.health(Some(CheckLevel::Alive), &[]).await, Ok(true));
+    assert_eq!(
+        ov.health(None, &["web-alive".into(), "off".into()]).await,
+        Ok(true)
+    );
+    assert_eq!(ov.health(None, &["db-ready".into()]).await, Ok(false));
+}
+
+#[tokio::test]
+async fn health_unknown_name_is_an_error() {
+    let (ov, _dir) = health_overlord().await;
+    assert_eq!(
+        ov.health(None, &["web-alive".into(), "web-alvie".into()])
+            .await,
+        Err("check \"web-alvie\" not found".to_string())
+    );
+}

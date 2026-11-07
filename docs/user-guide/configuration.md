@@ -893,7 +893,11 @@ checks:
 | `alive` | Basic liveness — is the process responsive at all? |
 | `ready` | Readiness — is the process ready to serve traffic? |
 
-Currently informational only; both levels behave identically in the scheduler.
+Both levels run the same way. The level matters for [`GET
+/v1/health`](../api-reference/rest-api.md#get-v1health): `?level=alive`
+looks only at `alive` checks, `?level=ready` at both. Use it to point a
+Kubernetes liveness probe at the `alive` checks and the readiness probe at
+all of them.
 
 #### `delay`
 
@@ -1706,7 +1710,7 @@ identity "log-relay" (layer "001-auth"): password-hash-file: reading "/run/secre
 
 | Level | Grants access to |
 |-------|-----------------|
-| `open` | `GET /v1/system-info`, `GET /v1/checks`, API docs — no authentication required |
+| `open` | `GET /v1/system-info`, `GET /v1/checks`, `GET /v1/health`, API docs — no authentication required |
 | `metrics` | `GET /v1/metrics` (Prometheus/OpenMetrics) |
 | `read` | All other `GET` endpoints |
 | `write` | `read` + service/check control (`POST /v1/services`, `POST /v1/checks/refresh`) |

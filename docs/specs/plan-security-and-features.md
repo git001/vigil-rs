@@ -759,6 +759,14 @@ fields rejected. The docs' CLI examples used commands that do not exist
 - The kubernetes-pod-logs Deployment switches its probes to
   `/v1/health?level=alive` and `?level=ready`.
 
+Done. Deviations from Pebble, both so that a broken probe cannot pass
+unnoticed: a name in `names` that is not a check is 404 (Pebble ignores
+it), and an unknown query parameter or level is 400. A check during its
+initial `delay` counts as up. The kubernetes-pod-logs probes comment that
+vigild's own `on-check-failure: restart` acts first; orchestrators.md lost
+the `insecureSkipTLSVerify` probe field (not a Kubernetes field) and
+explains how to size the probe against a check's period x threshold.
+
 ### 5d: send a signal to single services
 
 - `POST /v1/signals {"signal": "SIGHUP", "services": ["nginx"]}` (Pebble's

@@ -205,6 +205,54 @@ paths:
         "500":
           $ref: "#/components/responses/Error"
 
+  /v1/health:
+    get:
+      summary: Health of the checks
+      tags:
+        - checks
+      description: >
+        vigild's health endpoint, for Kubernetes httpGet probes: 200 when
+        none of the selected checks is down, otherwise 502. Only running
+        checks count; a check with `startup: disabled` is ignored.
+        `level=ready` includes `alive` checks. A name that is not a check is
+        404, an unknown query parameter or level 400. Required access: `open`.
+      parameters:
+        - name: level
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/CheckLevel"
+        - name: names
+          in: query
+          description: Comma-separated check names. Omit for all checks.
+          required: false
+          schema:
+            type: string
+          example: "web-alive,db-ready"
+      responses:
+        "200":
+          description: No selected check is down.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                result:
+                  healthy: true
+        "400":
+          description: Unknown query parameter or level.
+        "404":
+          $ref: "#/components/responses/Error"
+        "502":
+          description: At least one selected check is down.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                result:
+                  healthy: false
+
   /v1/checks/refresh:
     post:
       summary: Run a check now
@@ -723,6 +771,18 @@ components:
             output). Absent once a run passes.
           example: "HTTP 503 Service Unavailable"
       required: [name, level, status, failures, threshold]
+
+    HealthResponse:
+      type: object
+      properties:
+        result:
+          type: object
+          properties:
+            healthy:
+              type: boolean
+              description: No selected, running check is down.
+          required: [healthy]
+      required: [result]
 
     CheckRefreshRequest:
       type: object

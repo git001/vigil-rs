@@ -80,9 +80,14 @@ spec:
               containerPort: 8443
               protocol: TCP
 
+          # GET /v1/health answers 200 while no check of the level is down,
+          # 502 otherwise; it needs no credentials. vigild restarts
+          # vigil-log-relay itself when pod-log-collector-alive goes down
+          # (on-check-failure: restart); the kubelet restarts the container
+          # only when that did not help for 3 x 30s.
           livenessProbe:
             httpGet:
-              path: /v1/checks
+              path: /v1/health?level=alive
               port: 8443
               # The kubelet does not verify the certificate of HTTPS probes, so
               # vigild's self-signed certificate works as is.
@@ -92,9 +97,10 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 3
 
+          # level=ready counts the ready and the alive checks.
           readinessProbe:
             httpGet:
-              path: /v1/checks
+              path: /v1/health?level=ready
               port: 8443
               scheme: HTTPS
             initialDelaySeconds: 10

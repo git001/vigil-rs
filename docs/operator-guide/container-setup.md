@@ -57,7 +57,7 @@ LABEL org.opencontainers.image.description="My application supervised by vigil-r
 | `--socket-mode <OCTAL>` | `VIGIL_SOCKET_MODE` | `600` | Permission bits of the Unix socket. While no identity was added over the API, root and vigild's own UID are admin on the socket (bootstrap); widen this (e.g. `660`) only together with local identities. |
 | `--tls-addr <ADDR>` | `VIGIL_TLS_ADDR` | — | Enable HTTPS listener, e.g. `0.0.0.0:8443` |
 | `--exit-code <MODE>` | `VIGIL_EXIT_CODE` | `propagate` | vigild's exit code when a policy shuts it down: `propagate` (the service's code, `128+signal` for signals) or `fixed` (`0`/`10`, v3 behaviour) |
-| `--tls-anonymous-access <LEVEL>` | `VIGIL_TLS_ANONYMOUS_ACCESS` | `metrics` | Access of TLS callers without a matching identity: `metrics` (`/v1/metrics`, `/v1/checks`, `/v1/system-info`) or `open` (without metrics). Logs, services and state changes always need an identity over TLS. |
+| `--tls-anonymous-access <LEVEL>` | `VIGIL_TLS_ANONYMOUS_ACCESS` | `metrics` | Access of TLS callers without a matching identity: `metrics` (`/v1/metrics`, `/v1/checks`, `/v1/health`, `/v1/system-info`) or `open` (without metrics). Logs, services and state changes always need an identity over TLS. |
 | `--cert <PATH>` | `VIGIL_CERT` | — | PEM certificate file for TLS (auto-generated if omitted) |
 | `--key <PATH>` | `VIGIL_KEY` | — | PEM private key file for TLS (auto-generated if omitted) |
 | `--reaper` | `VIGIL_REAPER` | — | Force subreaper mode (automatic when PID 1) |
