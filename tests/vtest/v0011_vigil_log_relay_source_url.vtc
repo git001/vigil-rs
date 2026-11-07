@@ -8,6 +8,10 @@ server s1 -repeat 20 {
 		-body "{\"service\":\"url-test\",\"message\":\"relay-url-test-line\"}\n"
 } -start
 
+# VTest2 can neither check the content of a raw TCP stream nor connect to a
+# port known only at run time (the relay's healthcheck on :0), so the TCP
+# sink is a helper and the healthcheck uses curl.
+#
 # TCP sink (tests/vtest/helpers/tcp_capture.py) on a free port, written to
 # sink_port.txt once it listens.
 shell {

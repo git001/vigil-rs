@@ -1,27 +1,21 @@
 vtest "Identity CRUD: add, list, remove"
 
-shell { mkdir -p ${tmpdir}/layers }
+# vigild with an empty layers directory. It logs to stdout, the terminal of
+# p1; -expect-text waits there for a line. A wide terminal keeps long log
+# lines on one row.
+process p1 -winsz 200 400 "${vigild} --layers-dir ${vtestdir}/fixtures/empty --socket ${tmpdir}/vigild.sock" -start
+process p1 -expect-text 0 0 "API listening"
 
-process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
-
-shell {
-	for i in $(seq 1 50); do
-		test -S ${tmpdir}/vigild.sock && break
-		sleep 0.1
-	done
-	test -S ${tmpdir}/vigild.sock
-}
-
-# Bootstrap mode: empty store → Admin for any caller
+# No identities yet (bootstrap): any local caller is admin. In the body
+# patterns each "." matches one character of a JSON escape.
 client c1 -connect ${tmpdir}/vigild.sock {
 	txreq -method GET -url /v1/identities -hdr "Host: localhost"
 	rxresp
 	expect resp.status == 200
-	write_body empty.json
-	shell { grep -q '\[\]' empty.json }
+	expect resp.body ~ "result.:.]"
 } -run
 
-# Add alice with local (any UID) so we stay authenticated after bootstrap ends
+# Add alice with local (any UID), so we stay admin after bootstrap ends.
 client c2 -connect ${tmpdir}/vigild.sock {
 	txreq -method POST -url /v1/identities -hdr "Host: localhost" \
 		-hdr "Content-Type: application/json" \
@@ -30,26 +24,32 @@ client c2 -connect ${tmpdir}/vigild.sock {
 	expect resp.status == 200
 } -run
 
-# Bootstrap ended — connecting via Unix socket provides UID-based auth;
-# the OS passes our real UID as the peer credential, and alice's "local: {}"
-# accepts any UID.
+# Bootstrap ended: the Unix socket passes our UID as the peer credential,
+# and alice's "local: {}" accepts any UID.
 client c3 -connect ${tmpdir}/vigild.sock {
 	txreq -method GET -url /v1/identities -hdr "Host: localhost"
 	rxresp
 	expect resp.status == 200
-	write_body idents.json
-	shell { grep -q 'alice' idents.json }
+	expect resp.body ~ "name.:.alice."
+	expect resp.body ~ "access.:.admin."
 } -run
 
-# Remove alice
+# Remove alice: the result names her.
 client c4 -connect ${tmpdir}/vigild.sock {
 	txreq -method DELETE -url /v1/identities -hdr "Host: localhost" \
 		-hdr "Content-Type: application/json" \
 		-body "{\"identities\":[\"alice\"]}"
 	rxresp
 	expect resp.status == 200
-	write_body removed.json
-	shell { grep -q 'alice' removed.json }
+	expect resp.body ~ "result.:..alice.]"
+} -run
+
+# Bootstrap again: the list is empty.
+client c5 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /v1/identities -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "result.:.]"
 } -run
 
 process p1 -kill TERM

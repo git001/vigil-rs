@@ -1,25 +1,15 @@
 vtest "vigil-log-relay source-socket forwards logs to TCP sink"
 
-shell { mkdir -p ${tmpdir}/layers }
+# vigild starts log-svc, which prints relay-test-line-N every 0.2s. It logs
+# to stdout, the terminal of p1; -expect-text waits there for a line. A wide
+# terminal keeps long log lines on one row.
+process p1 -winsz 200 400 "${vigild} --layers-dir ${vtestdir}/fixtures/v0010 --socket ${tmpdir}/vigild.sock" -start
+process p1 -expect-text 0 0 "API listening"
+process p1 -expect-text 0 0 "[log-svc] relay-test-line-0"
 
-process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
-
-shell {
-	for i in $(seq 1 50); do
-		test -S ${tmpdir}/vigild.sock && break
-		sleep 0.1
-	done
-	test -S ${tmpdir}/vigild.sock
-}
-
-# Write a service that continuously emits log lines to stdout
-shell {
-	cp ${vtestdir}/fixtures/v0010/log-svc.yaml ${tmpdir}/layers/
-	${vigil} --socket ${tmpdir}/vigild.sock replan
-}
-
-# Let vigild start the service
-shell { sleep 0.5 }
+# VTest2 can neither check the content of a raw TCP stream nor connect to a
+# port known only at run time (the relay's healthcheck on :0), so the TCP
+# sink is a helper and the healthcheck uses curl.
 
 # Start a TCP sink (tests/vtest/helpers/tcp_capture.py) that appends what it
 # receives to relay-output.txt; it binds a free port and writes it to

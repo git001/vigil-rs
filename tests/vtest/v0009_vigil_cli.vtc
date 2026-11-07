@@ -1,89 +1,61 @@
 vtest "vigil CLI commands against a running vigild"
 
-shell { mkdir -p ${tmpdir}/layers }
+# The layers directory is a symlink to a static fixture directory; the test
+# changes the plan by pointing it to another one. VTest2 cannot make
+# symlinks.
+shell {ln -s ${vtestdir}/fixtures/v0009/before ${tmpdir}/layers}
 
-process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+# vigild logs to stdout, the terminal of p1; -expect-text waits there for a
+# line. A wide terminal keeps long log lines on one row.
+process p1 -winsz 200 400 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+process p1 -expect-text 0 0 "API listening"
 
-shell {
-	for i in $(seq 1 50); do
-		test -S ${tmpdir}/vigild.sock && break
-		sleep 0.1
-	done
-	test -S ${tmpdir}/vigild.sock
+shell -match {(?s)version: +[0-9.]+.*boot-id: +[0-9a-f-]+} {
+	${vigil} --socket ${tmpdir}/vigild.sock system-info
 }
+shell -expect "No services." { ${vigil} --socket ${tmpdir}/vigild.sock services list }
+shell -expect "No checks." { ${vigil} --socket ${tmpdir}/vigild.sock checks list }
+shell -expect "No alerts." { ${vigil} --socket ${tmpdir}/vigild.sock alerts list }
+shell -expect "No log entries." { ${vigil} --socket ${tmpdir}/vigild.sock logs }
+shell -expect "Replan completed." { ${vigil} --socket ${tmpdir}/vigild.sock replan }
 
-# system-info
-shell {
-	${vigil} --socket ${tmpdir}/vigild.sock system-info > ${tmpdir}/sysinfo.txt
-	grep -q version ${tmpdir}/sysinfo.txt
-	grep -q boot-id ${tmpdir}/sysinfo.txt
-}
-
-# services list
-shell {
+# A layer with demo-svc (startup: disabled) appears; replan loads it.
+shell {ln -sfn ${vtestdir}/fixtures/v0009/after ${tmpdir}/layers}
+shell -expect "Replan completed." { ${vigil} --socket ${tmpdir}/vigild.sock replan }
+shell -match {demo-svc +disabled +inactive} {
 	${vigil} --socket ${tmpdir}/vigild.sock services list
 }
 
-# checks list
-shell {
-	${vigil} --socket ${tmpdir}/vigild.sock checks list
-}
-
-# alerts list
-shell {
-	${vigil} --socket ${tmpdir}/vigild.sock alerts list
-}
-
-# logs
-shell {
-	${vigil} --socket ${tmpdir}/vigild.sock logs
-}
-
-# replan
-shell {
-	${vigil} --socket ${tmpdir}/vigild.sock replan
-}
-
-# Write a layer and replan — service should appear in list output
-shell {
-	cp ${vtestdir}/fixtures/v0009/demo.yaml ${tmpdir}/layers/
-	${vigil} --socket ${tmpdir}/vigild.sock replan
-	${vigil} --socket ${tmpdir}/vigild.sock services list > ${tmpdir}/svcs.txt
-	grep -q demo-svc ${tmpdir}/svcs.txt
-}
-
-# start the service and check its status
-shell {
+# Start it: active once the process runs.
+shell -expect {[done]: Start ["demo-svc"]} {
 	${vigil} --socket ${tmpdir}/vigild.sock services start demo-svc
-	sleep 0.2
-	${vigil} --socket ${tmpdir}/vigild.sock services list > ${tmpdir}/svcs2.txt
-	grep -q demo-svc ${tmpdir}/svcs2.txt
+}
+process p1 -expect-text 0 0 "process started"
+shell -match {demo-svc +disabled +active} {
+	${vigil} --socket ${tmpdir}/vigild.sock services list
 }
 
-# restart and stop
-shell {
+# Restart and stop.
+shell -expect {[done]: Restart ["demo-svc"]} {
 	${vigil} --socket ${tmpdir}/vigild.sock services restart demo-svc
-	sleep 0.2
+}
+process p1 -expect-text 0 0 "process exited"
+shell -expect {[done]: Stop ["demo-svc"]} {
 	${vigil} --socket ${tmpdir}/vigild.sock services stop demo-svc
 }
 
-# identities list (bootstrap mode — no auth needed)
-shell {
+# Identities: none (bootstrap), then ci-user, then none again.
+shell -expect "No identities." { ${vigil} --socket ${tmpdir}/vigild.sock identities list }
+shell -expect "Identity 'ci-user' added." {
+	${vigil} --socket ${tmpdir}/vigild.sock identities add-local ci-user --access admin
+}
+shell -match {ci-user +admin +local[(]any[)] +api} {
 	${vigil} --socket ${tmpdir}/vigild.sock identities list
 }
-
-# identities add-local, list, remove
-shell {
-	${vigil} --socket ${tmpdir}/vigild.sock identities add-local ci-user --access admin
-	${vigil} --socket ${tmpdir}/vigild.sock identities list > ${tmpdir}/ids.txt
-	grep -q ci-user ${tmpdir}/ids.txt
-}
-
-shell {
+shell -expect "Removed: ci-user" {
 	${vigil} --socket ${tmpdir}/vigild.sock identities remove ci-user
-	${vigil} --socket ${tmpdir}/vigild.sock identities list > ${tmpdir}/ids2.txt
-	grep -qv ci-user ${tmpdir}/ids2.txt
 }
+shell -expect "No identities." { ${vigil} --socket ${tmpdir}/vigild.sock identities list }
 
 process p1 -kill TERM
 process p1 -wait
