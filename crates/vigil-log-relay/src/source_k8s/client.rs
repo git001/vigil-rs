@@ -21,13 +21,13 @@ pub async fn build(cli: &Cli) -> Result<Client> {
 /// `--source-proxy-cacert` to `config`. The proxy CA is added to the CAs of
 /// the kubeconfig (kube has no TLS settings of its own for the proxy).
 async fn apply_proxy(config: &mut kube::Config, cli: &Cli) -> Result<()> {
-    if let Some(proxy_url) = &cli.source_proxy {
+    if let Some(proxy_url) = &cli.conn.source_proxy {
         config.proxy_url = Some(proxy_url.parse().context("invalid --source-proxy URL")?);
     }
-    if cli.source_proxy_insecure {
+    if cli.conn.source_proxy_insecure {
         config.accept_invalid_certs = true;
     }
-    if let Some(ca_path) = cli.source_proxy_cacert.clone() {
+    if let Some(ca_path) = cli.conn.source_proxy_cacert.clone() {
         let certs = vigil_files::off_runtime("TLS files", move || {
             vigil_tls::ca_bundle(vigil_tls::PemFile::new("--source-proxy-cacert", &ca_path))
         })

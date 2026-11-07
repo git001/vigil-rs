@@ -21,8 +21,10 @@ fn default_conn() -> SourceConnConfig {
         connect_timeout_ms: 500,
         read_timeout_ms: 0,
         idle_timeout_ms: 0,
-        keepalive_interval_secs: 0,
-        keepalive_timeout_secs: 0,
+        keepalive: crate::keepalive::Keepalive {
+            interval_secs: 0,
+            timeout_secs: 0,
+        },
         source_insecure: false,
         source_cacert: None,
         proxy_url: None,

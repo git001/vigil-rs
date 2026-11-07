@@ -63,8 +63,11 @@ pub async fn run(
     if conn.read_timeout_ms > 0 {
         builder = builder.read_timeout(Duration::from_millis(conn.read_timeout_ms));
     }
-    if conn.keepalive_interval_secs > 0 {
-        builder = builder.tcp_keepalive(Duration::from_secs(conn.keepalive_interval_secs));
+    if let Some((idle, interval)) = conn.keepalive.times() {
+        builder = builder
+            .tcp_keepalive(idle)
+            .tcp_keepalive_interval(interval)
+            .tcp_keepalive_retries(crate::keepalive::RETRIES);
     }
     if let Some(proxy_url) = &conn.proxy_url {
         use vigil_types::no_proxy::{no_proxy_matches, parse_no_proxy};

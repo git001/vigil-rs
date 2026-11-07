@@ -25,6 +25,7 @@ use tracing::info;
 mod cli;
 mod filter;
 mod healthcheck;
+mod keepalive;
 mod source_http;
 mod source_k8s;
 mod source_unix;
@@ -95,10 +96,10 @@ async fn main() -> Result<()> {
         bail!("specify exactly one source: --kubernetes, --source-url, or --source-socket");
     }
 
-    let addr = format!("{}:{}", cli.tcp_sink_host, cli.tcp_sink_port);
+    let addr = format!("{}:{}", cli.sink.tcp_sink_host, cli.sink.tcp_sink_port);
     let (tx, rx) = mpsc::channel::<String>(8192);
 
-    if cli.stdout_sink {
+    if cli.sink.stdout_sink {
         // Stdout sink — write each line to stdout (lines end with '\n').
         tokio::spawn(async move {
             let mut out = tokio::io::stdout();
@@ -110,16 +111,7 @@ async fn main() -> Result<()> {
         });
     } else {
         // TCP sink — single task owning the connection
-        let sink_cfg = SinkConfig {
-            connect_timeout_ms: cli.dest_connect_timeout,
-            write_timeout_ms: cli.dest_read_timeout,
-            idle_timeout_ms: cli.dest_idle_timeout,
-            keepalive_interval_secs: cli.dest_keepalive_interval,
-            keepalive_timeout_secs: cli.dest_keepalive_timeout,
-            reconnect_delay_ms: cli.dest_reconnect_delay,
-            reconnect_max_ms: cli.dest_reconnect_max,
-        };
-        tokio::spawn(tcp_sink::run(addr.clone(), rx, sink_cfg));
+        tokio::spawn(tcp_sink::run(addr.clone(), rx, cli.sink.tcp_sink_config()));
     }
 
     // Healthcheck HTTP server
@@ -128,31 +120,11 @@ async fn main() -> Result<()> {
     tokio::spawn(healthcheck::serve(health_listener, liveness.clone()));
 
     // Connection + reconnect config for HTTP source modes
-    let source_conn = SourceConnConfig {
-        connect_timeout_ms: cli.source_connect_timeout,
-        read_timeout_ms: cli.source_read_timeout,
-        idle_timeout_ms: cli.source_idle_timeout,
-        keepalive_interval_secs: cli.source_keepalive_interval,
-        keepalive_timeout_secs: cli.source_keepalive_timeout,
-        source_insecure: cli.source_insecure,
-        source_cacert: cli.source_cacert.clone(),
-        proxy_url: cli.source_proxy.clone(),
-        proxy_insecure: cli.source_proxy_insecure,
-        proxy_cacert: cli.source_proxy_cacert.clone(),
-        no_proxy: cli.source_no_proxy.clone(),
-        source_user_file: cli.source_user_file.clone(),
-        source_cert: cli.source_cert.clone(),
-        source_key: cli.source_key.clone(),
-    };
-    let reconnect = ReconnectConfig {
-        initial_delay_ms: cli.source_reconnect_delay,
-        max_delay_ms: cli.source_reconnect_max,
-        max_retries: cli.source_reconnect_retries,
-    };
+    let source_conn = cli.conn.source_conn_config();
+    let reconnect = cli.reconnect.reconnect_config();
+    let filter = LineFilter::new(&cli.sink.include, &cli.sink.exclude)?;
 
-    let filter = LineFilter::new(&cli.include, &cli.exclude)?;
-
-    let sink_label = if cli.stdout_sink {
+    let sink_label = if cli.sink.stdout_sink {
         "stdout".to_string()
     } else {
         addr.clone()
@@ -166,36 +138,27 @@ async fn main() -> Result<()> {
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
 
-    if cli.kubernetes {
+    let liveness = Arc::clone(&liveness);
+    let source = if cli.kubernetes {
         info!(
-            namespace   = %cli.namespace,
-            selector    = cli.pod_selector.as_str(),
+            namespace   = %cli.k8s.namespace,
+            selector    = cli.k8s.pod_selector.as_str(),
             sink        = %sink_label,
-            interval_s  = cli.watch_interval,
+            interval_s  = cli.k8s.watch_interval,
             healthcheck = %cli.healthcheck,
             "source: kubernetes pod logs",
         );
-        let source = tokio::spawn(source_k8s::run(cli, tx, Arc::clone(&liveness), filter));
-        tokio::select! {
-            res = source        => { res??; }
-            _ = sigterm.recv()  => { info!("received SIGTERM"); }
-            _ = sigint.recv()   => { info!("received SIGINT");  }
-        }
+        tokio::spawn(source_k8s::run(cli, tx, liveness, filter))
     } else if let Some(url) = cli.source_url.clone() {
         info!(url = %url, sink = %sink_label, healthcheck = %cli.healthcheck, "source: http url");
-        let source = tokio::spawn(source_url::run(
+        tokio::spawn(source_url::run(
             url,
             tx,
-            Arc::clone(&liveness),
+            liveness,
             source_conn,
             reconnect,
             filter,
-        ));
-        tokio::select! {
-            res = source        => { res??; }
-            _ = sigterm.recv()  => { info!("received SIGTERM"); }
-            _ = sigint.recv()   => { info!("received SIGINT");  }
-        }
+        ))
     } else if let Some(socket) = cli.source_socket.clone() {
         info!(
             socket      = %socket.display(),
@@ -204,20 +167,22 @@ async fn main() -> Result<()> {
             healthcheck = %cli.healthcheck,
             "source: unix socket",
         );
-        let source = tokio::spawn(source_unix::run(
+        tokio::spawn(source_unix::run(
             socket,
             cli.source_path.clone(),
             tx,
-            Arc::clone(&liveness),
+            liveness,
             source_conn,
             reconnect,
             filter,
-        ));
-        tokio::select! {
-            res = source        => { res??; }
-            _ = sigterm.recv()  => { info!("received SIGTERM"); }
-            _ = sigint.recv()   => { info!("received SIGINT");  }
-        }
+        ))
+    } else {
+        unreachable!("one source is set, checked above");
+    };
+    tokio::select! {
+        res = source        => { res??; }
+        _ = sigterm.recv()  => { info!("received SIGTERM"); }
+        _ = sigint.recv()   => { info!("received SIGINT");  }
     }
 
     info!("shutdown complete");

@@ -44,10 +44,8 @@ pub struct SourceConnConfig {
     pub read_timeout_ms: u64,
     /// Per-line idle timeout in ms; reconnects if no line arrives (0 = disabled).
     pub idle_timeout_ms: u64,
-    /// TCP keepalive interval in seconds (0 = disabled).
-    pub keepalive_interval_secs: u64,
-    /// TCP keepalive probe timeout in seconds (0 = OS default).
-    pub keepalive_timeout_secs: u64,
+    /// TCP keepalive (see [`crate::keepalive`]).
+    pub keepalive: crate::keepalive::Keepalive,
     /// Skip TLS certificate verification for the source connection.
     pub source_insecure: bool,
     /// PEM file with one or more CA certificates (chain) used to verify the source's TLS.

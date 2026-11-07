@@ -30,10 +30,8 @@ pub struct SinkConfig {
     pub write_timeout_ms: u64,
     /// Idle timeout; reconnects if channel stays empty this long (0 = disabled).
     pub idle_timeout_ms: u64,
-    /// TCP keepalive interval in seconds (0 = disabled).
-    pub keepalive_interval_secs: u64,
-    /// TCP keepalive probe timeout in seconds (0 = OS default).
-    pub keepalive_timeout_secs: u64,
+    /// TCP keepalive (see [`crate::keepalive`]).
+    pub keepalive: crate::keepalive::Keepalive,
     /// Initial reconnect delay in ms.
     pub reconnect_delay_ms: u64,
     /// Reconnect backoff ceiling in ms.
@@ -140,21 +138,13 @@ pub async fn run(addr: String, mut rx: mpsc::Receiver<String>, cfg: SinkConfig) 
 // ---------------------------------------------------------------------------
 
 pub fn apply_keepalive(stream: &TcpStream, cfg: &SinkConfig) {
-    if cfg.keepalive_interval_secs == 0 {
+    let Some((idle, interval)) = cfg.keepalive.times() else {
         return;
-    }
-    let mut ka = TcpKeepalive::new()
-        .with_time(Duration::from_secs(if cfg.keepalive_timeout_secs > 0 {
-            cfg.keepalive_timeout_secs
-        } else {
-            cfg.keepalive_interval_secs * 3 // sensible default: 3× interval
-        }))
-        .with_interval(Duration::from_secs(cfg.keepalive_interval_secs));
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        ka = ka.with_retries(3);
-    }
+    };
+    let ka = TcpKeepalive::new()
+        .with_time(idle)
+        .with_interval(interval)
+        .with_retries(crate::keepalive::RETRIES);
 
     if let Err(e) = SockRef::from(stream).set_tcp_keepalive(&ka) {
         warn!(error = %e, "failed to set TCP keepalive");
@@ -176,8 +166,10 @@ mod tests {
             connect_timeout_ms: 1000,
             write_timeout_ms: 0,
             idle_timeout_ms: 0,
-            keepalive_interval_secs: 0,
-            keepalive_timeout_secs: 0,
+            keepalive: crate::keepalive::Keepalive {
+                interval_secs: 0,
+                timeout_secs: 0,
+            },
             reconnect_delay_ms: 10,
             reconnect_max_ms: 100,
         }
@@ -266,7 +258,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let stream = TcpStream::connect(addr).await.unwrap();
-        // keepalive_interval_secs = 0 → early return, no panic
+        // keepalive interval 0 → early return, no panic
         apply_keepalive(&stream, &default_cfg());
     }
 
@@ -276,8 +268,10 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let stream = TcpStream::connect(addr).await.unwrap();
         let cfg = SinkConfig {
-            keepalive_interval_secs: 10,
-            keepalive_timeout_secs: 30,
+            keepalive: crate::keepalive::Keepalive {
+                interval_secs: 10,
+                timeout_secs: 30,
+            },
             ..default_cfg()
         };
         apply_keepalive(&stream, &cfg);

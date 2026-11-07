@@ -88,6 +88,7 @@ pub async fn run(
 ) -> Result<()> {
     let filter = Arc::new(filter);
     let exclude_pod_re: Vec<Regex> = cli
+        .k8s
         .exclude_pod
         .iter()
         .map(|p| {
@@ -95,27 +96,29 @@ pub async fn run(
         })
         .collect::<Result<_>>()?;
 
-    let semaphore = if cli.max_log_requests > 0 {
-        Some(Arc::new(tokio::sync::Semaphore::new(cli.max_log_requests)))
+    let semaphore = if cli.k8s.max_log_requests > 0 {
+        Some(Arc::new(tokio::sync::Semaphore::new(
+            cli.k8s.max_log_requests,
+        )))
     } else {
         None
     };
 
     let kube_client = client::build(&cli).await?;
-    let pods_api: Api<Pod> = Api::namespaced(kube_client.clone(), &cli.namespace);
-    let namespace = Arc::new(cli.namespace.clone());
-    let selector = ContainerSelector::from_cli(cli.container.as_deref());
+    let pods_api: Api<Pod> = Api::namespaced(kube_client.clone(), &cli.k8s.namespace);
+    let namespace = Arc::new(cli.k8s.namespace.clone());
+    let selector = ContainerSelector::from_cli(cli.k8s.container.as_deref());
 
     // Shared by all streams: the first one the API server rejects turns it
     // off for the rest of the process.
     let stream_param = Arc::new(AtomicBool::new(
-        !cli.no_stream_param && detect_stream_param_support(&kube_client).await,
+        !cli.k8s.no_stream_param && detect_stream_param_support(&kube_client).await,
     ));
 
-    let watcher_config = if cli.pod_selector.is_empty() {
+    let watcher_config = if cli.k8s.pod_selector.is_empty() {
         watcher::Config::default()
     } else {
-        watcher::Config::default().labels(&cli.pod_selector)
+        watcher::Config::default().labels(&cli.k8s.pod_selector)
     };
     let mut pod_events = watcher(pods_api, watcher_config).boxed();
 
@@ -127,7 +130,7 @@ pub async fn run(
     // First stream uses --tail-lines; reconnects use --since-seconds instead.
     let mut initialized: HashSet<String> = HashSet::new();
 
-    let mut reconcile = interval(Duration::from_secs(cli.watch_interval));
+    let mut reconcile = interval(Duration::from_secs(cli.k8s.watch_interval));
     reconcile.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
     loop {
@@ -157,7 +160,7 @@ pub async fn run(
                             }
                             let container_keys = selector.keys_for_pod(&pod);
                             running_pods.insert(name.clone(), container_keys.clone());
-                            let (tail, since) = stream_params(&name, &initialized, cli.tail_lines, cli.since_seconds);
+                            let (tail, since) = stream_params(&name, &initialized, cli.k8s.tail_lines, cli.k8s.since_seconds);
                             let mut any_started = false;
                             for ck in &container_keys {
                                 if stream::try_start(
@@ -224,7 +227,7 @@ pub async fn run(
                 });
 
                 for (name, container_keys) in &running_pods {
-                    let (tail, since) = stream_params(name, &initialized, cli.tail_lines, cli.since_seconds);
+                    let (tail, since) = stream_params(name, &initialized, cli.k8s.tail_lines, cli.k8s.since_seconds);
                     let mut any_started = false;
                     for ck in container_keys {
                         if stream::try_start(
