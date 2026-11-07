@@ -49,6 +49,7 @@ pub(crate) struct Args {
     #[arg(
         long,
         short = 'k',
+        env = "VIGIL_INSECURE",
         help = "Skip TLS certificate verification (useful for self-signed certs).\nOnly effective with --url https://..."
     )]
     insecure: bool,
