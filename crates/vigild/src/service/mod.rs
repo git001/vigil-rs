@@ -64,6 +64,21 @@ pub struct Snapshot {
     pub next_run: Option<DateTime<Utc>>,
 }
 
+impl Snapshot {
+    /// A service that has not run yet: `inactive` since now.
+    pub fn inactive(name: String, startup: Startup) -> Self {
+        Self {
+            name,
+            state: crate::state::ServiceState::Inactive,
+            since: Utc::now(),
+            startup,
+            last_exit: None,
+            status_message: None,
+            next_run: None,
+        }
+    }
+}
+
 /// Event emitted by the actor to the Overlord.
 #[derive(Debug)]
 pub struct Event {

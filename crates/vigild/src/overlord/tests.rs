@@ -17,7 +17,10 @@ use super::{Overlord, ServiceEntry};
 // Test helpers
 // ------------------------------------------------------------------
 
-/// Build a minimal `Overlord` for testing `after_deps_running` and
+/// One service of a test plan: `(name, after, requires, before)`.
+pub(super) type Deps<'a> = (&'a str, &'a [&'a str], &'a [&'a str], &'a [&'a str]);
+
+/// Build a minimal `Overlord` for testing `ready_to_start` and
 /// `handle_svc_event`.
 ///
 /// `plan_services`: list of `(name, after, requires, before)` tuples
@@ -25,9 +28,8 @@ use super::{Overlord, ServiceEntry};
 ///
 /// `states`: current state for each service name (services not listed
 /// here get `ServiceState::Inactive`).
-#[allow(clippy::type_complexity)]
 pub(super) fn make_overlord(
-    plan_services: &[(&str, &[&str], &[&str], &[&str])],
+    plan_services: &[Deps<'_>],
     states: &[(&str, ServiceState)],
 ) -> Overlord {
     let mut services_plan: IndexMap<String, ServiceConfig> = IndexMap::new();
@@ -52,13 +54,8 @@ pub(super) fn make_overlord(
             .copied()
             .unwrap_or(ServiceState::Inactive);
         let snapshot = Snapshot {
-            name: name.to_string(),
             state,
-            since: Utc::now(),
-            startup: Startup::Enabled,
-            last_exit: None,
-            status_message: None,
-            next_run: None,
+            ..Snapshot::inactive(name.to_string(), Startup::Enabled)
         };
         svc_map.insert(name.to_string(), ServiceEntry { handle, snapshot });
     }
@@ -106,7 +103,7 @@ pub(super) fn make_overlord(
 }
 
 // ------------------------------------------------------------------
-// after_deps_running — `after:` ordering
+// ready_to_start — `after:` ordering
 // ------------------------------------------------------------------
 
 #[test]
@@ -118,7 +115,7 @@ fn after_dep_running_unblocks_service() {
             ("svc", ServiceState::Inactive),
         ],
     );
-    assert!(ov.after_deps_running("svc"));
+    assert!(ov.ready_to_start("svc"));
 }
 
 #[test]
@@ -133,17 +130,17 @@ fn after_dep_inactive_blocks_service() {
     // An autostarted dependency that is not ready yet blocks (a disabled
     // one would be ignored, see unmet_deps).
     ov.plan.services.get_mut("dep").unwrap().startup = Some(Startup::Enabled);
-    assert!(!ov.after_deps_running("svc"));
+    assert!(!ov.ready_to_start("svc"));
 }
 
 #[test]
 fn service_with_no_deps_is_always_ready() {
     let ov = make_overlord(&[("svc", &[], &[], &[])], &[]);
-    assert!(ov.after_deps_running("svc"));
+    assert!(ov.ready_to_start("svc"));
 }
 
 // ------------------------------------------------------------------
-// after_deps_running — `before:` (reverse-after) ordering
+// ready_to_start — `before:` (reverse-after) ordering
 // ------------------------------------------------------------------
 
 #[test]
@@ -155,7 +152,7 @@ fn before_dep_running_unblocks_service() {
             ("svc", ServiceState::Inactive),
         ],
     );
-    assert!(ov.after_deps_running("svc"));
+    assert!(ov.ready_to_start("svc"));
 }
 
 #[test]
@@ -168,11 +165,11 @@ fn before_dep_inactive_blocks_service() {
         ],
     );
     ov.plan.services.get_mut("gate").unwrap().startup = Some(Startup::Enabled);
-    assert!(!ov.after_deps_running("svc"));
+    assert!(!ov.ready_to_start("svc"));
 }
 
 // ------------------------------------------------------------------
-// after_deps_running — `requires:` ordering (identical to `after:`)
+// ready_to_start — `requires:` ordering (identical to `after:`)
 // ------------------------------------------------------------------
 
 #[test]
@@ -184,7 +181,7 @@ fn requires_dep_running_unblocks_service() {
             ("api", ServiceState::Inactive),
         ],
     );
-    assert!(ov.after_deps_running("api"));
+    assert!(ov.ready_to_start("api"));
 }
 
 #[test]
@@ -196,7 +193,7 @@ fn requires_dep_inactive_blocks_service() {
             ("api", ServiceState::Inactive),
         ],
     );
-    assert!(!ov.after_deps_running("api"));
+    assert!(!ov.ready_to_start("api"));
 }
 
 // ------------------------------------------------------------------
@@ -204,9 +201,7 @@ fn requires_dep_inactive_blocks_service() {
 // ------------------------------------------------------------------
 
 async fn make_requires_overlord() -> (Overlord, mpsc::Receiver<()>) {
-    #[allow(clippy::type_complexity)]
-    let plan_services: &[(&str, &[&str], &[&str], &[&str])] =
-        &[("db", &[], &[], &[]), ("api", &[], &["db"], &[])];
+    let plan_services: &[Deps<'_>] = &[("db", &[], &[], &[]), ("api", &[], &["db"], &[])];
     let states = &[("db", ServiceState::Active), ("api", ServiceState::Active)];
     let mut ov = make_overlord(plan_services, states);
 
@@ -589,14 +584,14 @@ async fn reload_layers_defaults_when_not_specified() {
 }
 
 // ------------------------------------------------------------------
-// after_deps_running — unknown service
+// ready_to_start — unknown service
 // ------------------------------------------------------------------
 
 #[test]
-fn after_deps_running_unknown_service_returns_true() {
+fn ready_to_start_unknown_service_returns_true() {
     let ov = make_overlord(&[], &[]);
     // Service not in plan → no deps → always ready
-    assert!(ov.after_deps_running("nonexistent"));
+    assert!(ov.ready_to_start("nonexistent"));
 }
 
 // ------------------------------------------------------------------
@@ -812,7 +807,7 @@ fn after_dep_starting_blocks_service() {
         &[("dep", ServiceState::Starting)],
     );
     assert!(
-        !ov.after_deps_running("svc"),
+        !ov.ready_to_start("svc"),
         "a dependency that is not ready yet must block"
     );
 }
@@ -907,7 +902,7 @@ fn done_oneshot_unblocks_dependents() {
         &[("migrate", &[], &[], &[]), ("app", &["migrate"], &[], &[])],
         &[("migrate", ServiceState::Done)],
     );
-    assert!(ov.after_deps_running("app"));
+    assert!(ov.ready_to_start("app"));
 }
 
 #[tokio::test]
