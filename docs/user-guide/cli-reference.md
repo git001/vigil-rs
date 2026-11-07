@@ -146,9 +146,9 @@ a service reported a `STATUS=` text via sd_notify.
 |---|---|
 | `starting` | Process is running but not ready yet (`ready: notify` / `ready: check`) |
 | `active` | Process is running and ready |
-| `inactive` | Not running (stopped or not yet started) |
+| `inactive` | Not running: stopped, not yet started, or stopped because a `requires` dependency stopped |
 | `backoff` | Waiting before the next restart attempt |
-| `error` | Exceeded backoff limit or `requires` dependency failed |
+| `error` | Gave up: the backoff limit was reached, or the process could not be started (for example an unknown user) |
 | `done` | A `type: oneshot` service finished successfully |
 
 #### `services start [NAME...]`

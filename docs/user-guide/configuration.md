@@ -515,9 +515,10 @@ exist in the merged plan.
 - `before: [c]` — syntactic sugar for `after` from the reverse direction:
   `B before: [A]` is equivalent to `A after: [B]`. B must be running before A starts.
 - `requires: [a]` — implies `after` ordering **and** a runtime stop cascade:
-  if `a` leaves the running state (Inactive, Backoff, Error), this service is
-  stopped automatically. Use this for hard dependencies where the dependent
-  service cannot function without the required one.
+  if `a` stops for good (Inactive or Error), this service is stopped
+  automatically. Backoff does not trigger it: `a` is restarted on its own
+  then, and the dependent keeps running. Use this for hard dependencies where
+  the dependent service cannot function without the required one.
 
 #### `ready` / `ready-check` / `ready-timeout`
 
