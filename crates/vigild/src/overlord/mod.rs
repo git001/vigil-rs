@@ -22,6 +22,7 @@ use crate::service;
 
 mod actions;
 mod autostart;
+mod check_events;
 mod events;
 mod handlers;
 mod health_metric;
