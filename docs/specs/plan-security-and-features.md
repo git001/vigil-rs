@@ -822,6 +822,47 @@ exit → `exit-code-map` → `success-exit-codes` → `on-success` / `on-failure
 resets it; plus `on-check-failure`, `ready-timeout` and `kill-delay`. Last,
 so it shows the behaviour after 5f.
 
+### 5h: check metrics
+
+Added by the user on 2026-11-07 after 5c. Today there are only
+`vigil_check_up{check}`, `vigil_check_success_count{check}` and
+`vigil_check_failure_count{check}`, documented only under `GET /v1/metrics`
+in rest-api.md. Missing: which level is down (a dependency or the own app),
+how often and how long a check was down, and how long a probe takes.
+
+- **`level` label** on every check metric (`{check, level}`), so that
+  `min by (level) (vigil_check_up)` separates dependencies (`ready`) from
+  the own app (`alive`). Decided: a label, not a separate info metric.
+  Changes the label set of the three existing metrics: `feat(vigild)!`
+  with a migration note for recording rules and joins.
+- **`vigil_health{level="alive|ready"}`** gauge 0/1: what
+  `GET /v1/health?level=…` would answer, to alert on directly.
+- **Outages:** `vigil_check_down_count{check, level}` counter (transitions
+  up → down: "how often") and `vigil_check_down_seconds{check, level}`
+  counter (time spent down: availability = `1 - rate(…[30d])`). The
+  existing failure counter counts single failed runs, not outages.
+- **Rough timing** ("start, connect, end"), histograms with
+  `{check, level, result="success|error"}`:
+  - `vigil_check_duration_seconds`: start to end of the probe. On a
+    timeout the run ends at the check's `timeout`, so that value is
+    recorded with `result="error"`.
+  - `vigil_check_connect_duration_seconds`: start until the connection is
+    up. tcp: the connect; http: TCP connect plus TLS handshake, measured
+    with reqwest's `connector_layer`; exec: none. HTTP check clients stop
+    keeping idle connections (`pool_max_idle_per_host(0)`), so every run
+    connects and is measured; a health check should test a fresh connect
+    anyway.
+  - Buckets 1 ms to 60 s (0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5,
+    1, 2.5, 5, 10, 30, 60).
+- **TLS certificate:** `vigil_check_tls_cert_expiry_timestamp_seconds{check,
+  level}` gauge, the `notAfter` of the server certificate of an https
+  check (reqwest `tls_info`), to alert before it expires.
+- **Docs:** an operator-guide page "Metrics" with every metric and PromQL
+  examples (dependency down, own app down, availability over 30 days, p95
+  duration, certificate expires within 14 days); rest-api.md links to it.
+- Later, only if needed: separate HTTP phases (DNS, TCP connect, TLS,
+  time to first byte).
+
 ### Not taken from the comparison
 
 Pebble's exec and files API (Juju-specific, large attack surface) and
