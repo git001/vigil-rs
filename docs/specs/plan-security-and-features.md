@@ -916,6 +916,63 @@ Pebble's exec and files API (Juju-specific, large attack surface) and
 notices (alerts cover them); `logs-push-format` stays a documented
 placeholder.
 
+## Phase 6: refactor before v4.0
+
+Decided by the user on 2026-11-07: before the v4.0 release, after phase 5.
+Two parts, no behaviour change in either.
+
+### 6a: source files of about 200 lines
+
+No Rust source file longer than about 200 lines, test code not counted
+(`tests.rs`, `tests/`, everything after `#[cfg(test)]`). On 2026-11-07
+(`3896a57`) 25 files are longer; the largest:
+
+| File | Lines | Split |
+|---|---|---|
+| `vigild/src/overlord/plan.rs` | 526 | `plan/mod.rs` (load, read, `Loaded`), `plan/validate_service.rs`, `plan/validate_check.rs` (with the level warning), `plan/validate_alert.rs`, `plan/dependencies.rs` (names, cycles, warnings) |
+| `vigil-log-relay/src/cli.rs` | 515 | option groups as `#[command(flatten)]` structs (source, sink, Kubernetes, TLS, proxy); flags, environment variables and `--help` unchanged |
+| `vigild/src/overlord/lifecycle.rs` | 431 | `actors.rs` (`sync_actors`), `autostart.rs` (autostart, dependencies, pending), `reload.rs` (`reload_layers`, `apply_plan`) |
+| `vigild/src/main.rs` | 394 | `args.rs` (flags, enums, parsers), the start-up steps of `async_main` in their own functions |
+| `vigild/src/overlord/handlers.rs` | 388 | by command: services, checks (query, health, refresh), signals, alerts |
+| `vigil-types/src/plan/service.rs` | 337 | the enums and `WatchFiles` apart from `ServiceConfig`, `merge_service` apart |
+| `vigil-types/src/api.rs` | 337 | `api/` with one file per area (system, services, changes, checks, alerts, logs, notices), re-exported: paths stay `vigil_types::api::X` |
+
+The others (200–331 lines) are split where the file has natural parts;
+a file of 200–220 lines without one stays.
+
+Rules:
+
+- Before splitting a file, check what can be simplified or merged: code
+  that two places (or two crates) do each in their own way gets one
+  implementation, in a shared module or a workspace crate, as file and PEM
+  loading went into `vigil-files` and `vigil-tls` (`fe6be4f`). Candidates
+  come up per area; each is named in the diff review.
+- No new behaviour. Where merging two implementations aligns a difference
+  between them (one of them was wrong or stricter), the commit message
+  lists it under "Behaviour changes", as `fe6be4f` did.
+- Public paths of `vigil-types` stay (re-exports); no new external
+  dependencies.
+- Same output before and after: `vigild --help`, `vigil --help` (and its
+  subcommands), `vigil-log-relay --help`, and `GET /openapi.json` are
+  compared byte for byte.
+- One commit per area (`refactor(vigild): …`), each after the user has
+  seen the diff; `cargo fmt --check`, clippy, all tests and all vtests
+  before each.
+- New code from now on goes into small modules from the start.
+
+### 6b: older vtests in native VTest2
+
+v0001–v0026 move to the style of v0027–v0031 (tests/vtest/README.md,
+"Native VTest2 first"): `--layers-dir ${vtestdir}/fixtures/vNNNN` instead
+of mkdir/cp/replan, `process -expect-text` on vigild's log instead of shell
+wait loops, one `client` per request instead of curl, `server` instead of
+capture helpers, `filewrite` instead of touch, shell only for the vigil CLI,
+symlinks, TLS with files and other things VTest2 cannot do.
+
+- Every assertion of the old test stays (or is replaced by a stricter one);
+  the commit message names any that cannot be kept, and why.
+- About five tests per commit, each stable in 10 runs.
+
 ## Releases
 
 ```
