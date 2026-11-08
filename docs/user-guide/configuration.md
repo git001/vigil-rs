@@ -42,6 +42,12 @@ lists the valid ones. At startup vigild then does not start; on `vigil
 replan` or `--watch-layers` the running plan stays. Nothing is silently
 ignored.
 
+A replan (`vigil replan`, `--watch-layers`) applies a changed plan without
+restarting vigild: new services with `startup: enabled` start, removed ones
+stop, and running services whose configuration changed are restarted
+together with the services that require them. Stopped services get the new
+configuration at their next start. See [`vigil replan`](cli-reference.md#replan).
+
 ```
 Error: parsing "/etc/vigil/layers/001-base.yaml"
 
@@ -75,20 +81,26 @@ Layer files can also define identities (`identities:`); see
 
 ### Full reference
 
+The block lists every field. Some of them exclude each other, so it is not a
+valid service as it stands: `schedule` needs `type: oneshot`, which in turn
+rules out `ready`, `ready-check`, `ready-timeout`, `watch-files` and
+`on-success: restart`; `ready-check` needs `ready: check`. The field
+reference below has the rules.
+
 ```yaml
 services:
 
   myservice:
     # --- Identity ---
-    summary: Short description shown in vigil services output
+    summary: Short description          # for readers of the file; vigil does not show it
     description: Longer description (optional)
 
     # --- Process ---
-    command: /usr/local/bin/myapp --config /etc/myapp.yaml --workers {{ cpu() }}  # templates, see below
+    command: /usr/local/bin/myapp --config /etc/myapp.yaml --workers {{ cpu() }}  # required; templates, see below
     type: simple                       # simple | oneshot (default: simple)
     schedule: '0 3 * * *'              # cron pattern, type: oneshot only
-    schedule-tz: Europe/Vienna         # time zone for schedule (default: UTC)
-    working-dir: /var/lib/myapp        # working directory (default: /)
+    schedule-tz: Europe/Vienna         # time zone for schedule (default: UTC); only with schedule
+    working-dir: /var/lib/myapp        # working directory (default: vigild's working directory)
     user: myapp                        # run as this username
     user-id: 1000                      # or by UID
     group: myapp                       # primary group
@@ -108,15 +120,15 @@ services:
 
     # --- Startup ---
     startup: enabled                   # enabled | disabled (default: disabled)
-    after:                             # start after these services are Active
+    after:                             # start after these services are ready
       - database
       - cache
-    before:                            # start before these services
+    before:                            # these services start after this one is ready
       - frontend
-    requires:                          # fail if these services are not Active
+    requires:                          # like after, and stop when one of them stops for good
       - database
-    ready: process                     # process | notify | check (default: process)
-    ready-check: myservice-alive       # check that signals readiness (ready: check)
+    ready: check                       # process | notify | check (default: process)
+    ready-check: myservice-alive       # check that signals readiness (only with ready: check)
     ready-timeout: 30s                 # stop + on-failure if not ready in time (0s = wait forever)
     healthy-time: 10s                  # healthy after running for this time without a crash (default: 10s, 1s..1h)
 
@@ -141,8 +153,8 @@ services:
 
     # --- Logging ---
     logs-forward: enabled              # enabled (default) | disabled | passthrough
-    logs-push-socket: /run/collector/input.sock  # push ndjson to Unix socket (mutually exclusive with logs-push-addr)
-    logs-push-addr: 127.0.0.1:5170    # push ndjson to TCP address (mutually exclusive with logs-push-socket)
+    logs-push-socket: /run/collector/input.sock  # push ndjson to a Unix socket
+    logs-push-addr: 127.0.0.1:5170    # push ndjson to a TCP address (both may be set)
     logs-push-format: ndjson          # ndjson (default; currently the only supported format)
 
     # --- Layer merging ---
@@ -153,12 +165,23 @@ services:
 
 #### `command`
 
-Required. The command to execute. Parsed as a shell-style string (split on
-whitespace; no shell expansion). To use shell features, wrap in `sh -c`:
+Required: a service without a `command` after all layers are merged makes
+the layers invalid. A later layer may leave it out when an earlier one sets
+it.
+
+The command is split into arguments like a shell would, but without any
+expansion: words are separated by whitespace, `'…'` and `"…"` keep spaces
+together, and `\` escapes the next character (not inside `'…'`). Variables,
+globs, pipes and redirections are not interpreted. To use shell features,
+wrap in `sh -c`:
 
 ```yaml
 command: sh -c "echo starting && exec /usr/local/bin/myapp"
 ```
+
+A part in ` [ … ]` (with spaces around the brackets) marks default
+arguments; vigild passes them like the other arguments:
+`/usr/bin/app --verbose [ --port 8080 ]` runs `app --verbose --port 8080`.
 
 `command` and the values of `environment` may contain
 [templates](#templates-in-command-and-environment).
@@ -502,7 +525,7 @@ vigild (other services, the API, reaping) keeps working.
 | Value | Behaviour |
 |---|---|
 | `enabled` | Service is started automatically when vigild starts (or after `replan`) |
-| `disabled` | Service must be started explicitly via `vigil start` or the API |
+| `disabled` | Service must be started explicitly via `vigil services start` or the API |
 
 Default: `disabled`
 
@@ -516,7 +539,7 @@ these makes the layer invalid, and the error names the services involved.
 - `after: [a, b]` — this service starts after `a` and `b` reach `Active`
   (that is, after they are ready, see [`ready`](#ready--ready-check--ready-timeout))
 - `before: [c]` — syntactic sugar for `after` from the reverse direction:
-  `B before: [A]` is equivalent to `A after: [B]`. B must be running before A starts.
+  `B before: [A]` is equivalent to `A after: [B]`. B must be ready before A starts.
 - `requires: [a]` — implies `after` ordering **and** a runtime stop cascade:
   if `a` stops for good (Inactive or Error), this service is stopped
   automatically. Backoff does not trigger it: `a` is restarted on its own
@@ -766,7 +789,7 @@ into `error`.
 
 The sequence starts again from `backoff-delay` when the service has been
 running for [`healthy-time`](#healthy-time) (or a oneshot run succeeded), and
-on a manual `vigil start` or `vigil restart`. So only failures in a row count,
+on a manual `vigil services start` or `vigil services restart`. So only failures in a row count,
 not failures days apart.
 
 #### `logs-forward`
@@ -790,9 +813,10 @@ natural role) without any `curl` wrapper in the service command.
 - `logs-push-socket` — Unix domain socket path (collector listens here).
 - `logs-push-addr` — TCP address `host:port` (collector listens here).
 
-The two are mutually exclusive. vigild retries the connection with
-exponential backoff (500 ms → … → 30 s) if the collector is not yet ready.
-On connection loss vigild reconnects automatically.
+A service may set both; its entries then go to both targets. vigild retries
+the connection with exponential backoff (500 ms → … → 30 s) if the collector
+is not yet ready. On connection loss vigild reconnects automatically; lines
+logged while it is disconnected are not pushed.
 
 ```yaml
 services:
@@ -803,7 +827,7 @@ services:
     logs-push-socket: /run/collector/input.sock  # vigild connects here
 
   filebeat:
-    command: filebeat run --strict.perms=false -c /etc/filebeat/filebeat.yml 2>/dev/null
+    command: sh -c 'filebeat run --strict.perms=false -c /etc/filebeat/filebeat.yml 2>/dev/null'
     startup: enabled
     logs-forward: passthrough       # filebeat writes enriched JSON to podman logs
     on-failure: restart
@@ -834,8 +858,20 @@ layers.
 
 | Value | Behaviour |
 |---|---|
-| `merge` | Fields set in this layer override the same fields of earlier layers; fields this layer does not set keep their earlier value (also `startup`, and `level`/`startup` of checks). Lists (`after`, `before`, `requires`, `environment`) are merged. **Default.** |
+| `merge` | Fields set in this layer override the same fields of earlier layers; fields this layer does not set keep their earlier value (also `startup`). **Default.** |
 | `replace` | This definition completely replaces the earlier one. |
+
+With `merge`, fields that hold several values combine like this:
+
+| Fields | Merge |
+|---|---|
+| `after`, `before`, `requires`, `env-file`, `pass-env-glob`, `pass-env-regex` | Appended; an entry that is already there is not added again |
+| `environment`, `exit-code-map`, `on-check-failure` | Merged by key; this layer's value wins for a key both set |
+| `success-exit-codes` | Replaced as a whole when this layer sets it |
+| `watch-files` | Merged per field (`on-change`, `interval`, `paths`) |
+
+There is no way to remove a single value with `merge` (e.g. one entry of
+`after`); use `override: replace` and write the whole service.
 
 ---
 
@@ -852,12 +888,12 @@ checks:
   myservice-alive:
     # --- Level ---
     level: alive                       # alive | ready (default: alive)
-    startup: enabled                   # enabled | disabled (default: disabled)
+    startup: enabled                   # enabled | disabled (default: disabled: the check does not run)
 
     # --- Timing ---
     delay: 3s                          # wait before first check (default: 3s)
     period: 10s                        # how often to run the check (default: 10s)
-    timeout: 3s                        # per-check timeout (default: 3s)
+    timeout: 3s                        # per-check timeout (default: 3s, at most period)
     threshold: 3                       # consecutive failures to declare Down (default: 3)
 
     # --- Alerts ---
@@ -889,9 +925,34 @@ checks:
     #   user-id: 999
     #   group: postgres
     #   working-dir: /tmp
+
+    # --- Layer merging ---
+    override: merge                    # merge (default) | replace
 ```
 
 ### Field reference
+
+#### `startup`
+
+| Value | Behaviour |
+|---|---|
+| `enabled` | The check runs: after `delay`, then every `period` |
+| `disabled` | The check does not run. **Default.** |
+
+A disabled check is listed with status `inactive` in `vigil checks list` and
+`GET /v1/checks`, and is ignored by `GET /v1/health`, alerts and
+`on-check-failure`. `vigil checks run` (`POST /v1/checks/refresh`) still runs
+it once, without changing any state. A service cannot use it as its
+`ready-check`. A replan that sets a running check to `disabled` stops it.
+
+#### `override`
+
+How this check merges with the same check in earlier layers: `merge`
+(default) or `replace`, as for [services](#override). With `merge` a probe
+block (`http`, `tcp`, `exec`) that this layer sets replaces the earlier one
+as a whole. To switch a check to another probe type (e.g. from `exec` to
+`http`), use `override: replace`: a merge would keep the old probe as well,
+and a check with two probes is invalid.
 
 #### `level`
 
@@ -963,7 +1024,8 @@ makes the layer invalid.
 #### `timeout`
 
 How long to wait for the check to complete before counting it as a failure.
-Default: **3s**; must be greater than 0.
+Default: **3s**; must be greater than 0. A timeout longer than `period` is
+cut to `period`, so runs never overlap.
 
 #### `threshold`
 
@@ -1193,7 +1255,7 @@ One event per failure, named after what vigild does next:
 A crash loop sends one `backoff`, then one `error` when vigild gives up; a
 crash within `healthy-time` sends nothing new. A process that exits with
 success (e.g. a service restarted by `on-success: restart`) and a stop
-requested by you or by vigild (`vigil stop`, replan, `watch-files`) are no
+requested by you or by vigild (`vigil services stop`, replan, `watch-files`) are no
 failure.
 
 With a shutdown policy (`on-failure: shutdown`) vigild exits right after the
@@ -1235,6 +1297,9 @@ alerts:
   # Prevents a flood of stale alerts when an endpoint comes back online
   # after a long outage. Default: 60s, at least 1s
   max-queue-time: 60s
+
+  # Every other key is an alert and must be a mapping. A misspelled setting
+  # (max-queue-depht: 5) is therefore an error that names the key.
 
   my-alert:
     # --- Endpoint ---
@@ -1304,6 +1369,9 @@ alerts:
     body-template: '{"text": "Check {{ check }} is {{ status }}"}'
 
     # --- Layer merging ---
+    # merge: scalars set here win; on-check, on-service, on-vigild,
+    # pass-env-glob and pass-env-regex are appended; headers, labels and
+    # send-info-fields are merged by key; retry-backoff is replaced.
     override: merge   # merge (default) | replace
 ```
 
@@ -1631,8 +1699,10 @@ alerts:
 
 ## Duration format
 
-All duration fields (e.g. `kill-delay`, `period`, `timeout`, `backoff-delay`,
-`backoff-limit`, `delay`, `retry-backoff` entries) accept strings like:
+All duration fields accept strings like these: `kill-delay`, `ready-timeout`,
+`healthy-time`, `backoff-delay`, `backoff-limit`, `watch-files.interval`,
+`delay`, `period`, `timeout`, `retry-backoff` entries and
+`alerts.max-queue-time`.
 
 | Example | Meaning |
 |---|---|
@@ -1641,6 +1711,11 @@ All duration fields (e.g. `kill-delay`, `period`, `timeout`, `backoff-delay`,
 | `1m` | 1 minute |
 | `1m30s` | 1 minute 30 seconds |
 | `1h` | 1 hour |
+| `0s` | zero, where a field allows it (e.g. `delay`, `ready-timeout`) |
+
+Each part is a whole number followed by a unit: `ms`, `s`, `m` or `h`.
+Fractions (`1.5s`), other units (`d`, `us`) and a number without a unit
+(`0`, `30`) are errors that make the layer invalid; write `0s` for zero.
 
 ---
 
@@ -1763,13 +1838,15 @@ identity "log-relay" (layer "001-auth"): password-hash-file: reading "/run/secre
 
 ### Access levels
 
+Each level includes everything of the levels above it.
+
 | Level | Grants access to |
 |-------|-----------------|
 | `open` | `GET /v1/system-info`, `GET /v1/checks`, `GET /v1/health`, API docs — no authentication required |
 | `metrics` | `GET /v1/metrics` (Prometheus/OpenMetrics) |
-| `read` | All other `GET` endpoints |
-| `write` | `read` + service/check control (`POST /v1/services`, `POST /v1/signals`, `POST /v1/checks/refresh`) |
-| `admin` | `write` + identity management (`POST /v1/identities`, `DELETE /v1/identities`) |
+| `read` | The other `GET` endpoints: services, logs, alerts, changes |
+| `write` | `read` + changes: `POST /v1/services`, `POST /v1/replan`, `POST /v1/signals`, `POST /v1/checks/refresh` |
+| `admin` | `write` + `POST /v1/vigild` (stop, restart) and identity management (`GET`, `POST`, `DELETE /v1/identities`) |
 
 ### Default access (caller without a matching identity)
 
