@@ -96,7 +96,7 @@ services:
     description: Longer description (optional)
 
     # --- Process ---
-    command: /usr/local/bin/myapp --config /etc/myapp.yaml --workers {{ cpu() }}  # required; templates, see below
+    command: /usr/local/bin/myapp --config /etc/myapp.yaml --workers {{ cpu() }}  # required; {{ … }}: see "Templates in command and environment" below the block
     type: simple                       # simple | oneshot (default: simple)
     schedule: '0 3 * * *'              # cron pattern, type: oneshot only
     schedule-tz: Europe/Vienna         # time zone for schedule (default: UTC); only with schedule

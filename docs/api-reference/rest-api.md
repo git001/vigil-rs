@@ -4,29 +4,28 @@ vigild exposes an HTTP/1.1 API over:
 - A Unix domain socket (always active)
 - An optional TLS TCP listener (`--tls-addr`)
 
-The API follows the shape of Canonical Pebble's API for `/v1/services`,
-`/v1/checks` and `/v1/system-info`, but it is not a drop-in replacement:
-`/v1/logs` returns a JSON envelope, and service actions return a finished
-change instead of an asynchronous one. See "vs. Canonical Pebble" in the
-README.
-
 Interactive documentation is available at `/docs` (Swagger UI) and
-`/openapi.json` on a running daemon.
+`/openapi.json` (OpenAPI 3.1) on a running daemon; the same spec is in the
+repository as [docs/specs/openapi.yaml](../specs/openapi.yaml).
+
+Requests are strict: a request body with a field vigild does not know is
+`422`, a query parameter it does not know is `400`.
 
 ---
 
 ## Authentication and access levels
 
 vigild enforces per-endpoint access control using named identities. The access
-levels are ordered from least to most privileged:
+levels are ordered from least to most privileged; each includes the ones
+above it:
 
-| Level | How it is granted | Required by |
-|-------|-------------------|-------------|
-| `open` | No credentials needed | `GET /v1/system-info`, `GET /v1/checks`, `GET /v1/health` |
-| `metrics` | Basic Auth, local UID, or TLS client cert | `GET /v1/metrics` |
-| `read` | — | All other `GET` endpoints |
-| `write` | — | `POST /v1/services`, `POST /v1/signals`, `POST /v1/checks/refresh`, `POST /v1/replan` |
-| `admin` | — | `POST /v1/vigild`, all `/v1/identities` endpoints |
+| Level | Required by |
+|-------|-------------|
+| `open` | `GET /v1/system-info`, `GET /v1/checks`, `GET /v1/health`, `/docs`, `/openapi.json` |
+| `metrics` | `GET /v1/metrics` |
+| `read` | `GET /v1/services`, `/v1/changes/{id}`, `/v1/alerts`, `/v1/logs`, `/v1/logs/follow` |
+| `write` | `POST /v1/services`, `POST /v1/signals`, `POST /v1/checks/refresh`, `POST /v1/replan` |
+| `admin` | `POST /v1/vigild`, all `/v1/identities` endpoints (also `GET`) |
 
 Each endpoint table below lists its **required level**.
 
@@ -35,8 +34,8 @@ Each endpoint table below lists its **required level**.
 | Connection | Access |
 |---|---|
 | TLS listener | `--tls-anonymous-access` (`metrics` by default, or `open`) |
-| Unix socket, root or vigild's UID, **no identities configured yet** | `admin` (bootstrap: add the first identity this way, e.g. via `kubectl exec`) |
-| Unix socket, any other UID, or once identities exist | `open` |
+| Unix socket, root or vigild's UID, **no identity added over the API yet** | `admin` (bootstrap: add the first identity this way, e.g. via `kubectl exec`). Identities from layer files do not end the bootstrap |
+| Unix socket, any other UID, or once an identity was added over the API | `open` |
 
 Reading logs or services and anything that changes state over TLS always
 requires an identity. Before v4, every caller (including TLS) was `admin`
@@ -44,15 +43,20 @@ while the identity store was empty.
 
 **Authentication methods:**
 
-- **Local (Unix socket):** the caller's Unix UID is looked up in the identity
-  store. Omit `user-id` in the identity to allow any local user.
-- **Basic Auth:** `Authorization: Basic <base64(user:pass)>` — password is
-  verified against a SHA-512-crypt hash (`$6$...`).
-- **TLS client certificate:** the client cert is verified against the CA stored
-  in the identity.
+1. **Basic Auth:** `Authorization: Basic <base64(user:pass)>` — password is
+   verified against a SHA-512-crypt hash (`$6$...`).
+2. **TLS client certificate:** the client cert is verified against the CA
+   stored in the identity; the highest matching level counts.
+3. **Local (Unix socket):** the caller's Unix UID is looked up in the
+   identity store. Omit `user-id` in the identity to allow any local user.
 
-Unauthenticated requests are treated as `open` level. Requests that don't meet
-the required level receive `403 Forbidden`.
+The methods are tried in this order, and the first matching identity
+counts. A caller gets the higher of that identity's level and the level in
+the table above, so a TLS caller with a `metrics` identity and the default
+`--tls-anonymous-access` has `metrics`. Requests that don't meet the
+required level receive `403 Forbidden`. The access check comes first: a
+caller without access gets `403` even for a request that is invalid
+otherwise.
 
 ---
 
@@ -74,11 +78,24 @@ On error:
 ```json
 {
   "type": "error",
-  "status-code": 500,
-  "status": "Internal Server Error",
-  "message": "human-readable error description"
+  "status-code": 422,
+  "status": "Unprocessable Entity",
+  "result": null,
+  "message": "Failed to deserialize the JSON body into the target type: service: unknown field `service`, expected `signal` or `services` at line 1 column 28"
 }
 ```
+
+Every error uses this envelope. Status codes used by all endpoints:
+
+| Code | Meaning |
+|---|---|
+| `400` | Invalid JSON body, unknown query parameter, or an invalid value |
+| `403` | The caller's access level is too low |
+| `415` | A request body without `Content-Type: application/json` |
+| `422` | A request body with an unknown field or a value of the wrong type |
+| `500` | Internal error (and an invalid layer on `POST /v1/replan`) |
+
+Endpoint-specific codes (`404`, `409`, `502`) are listed with the endpoints.
 
 ---
 
@@ -101,7 +118,7 @@ Returns daemon version, boot ID, start time, and API addresses.
     "boot-id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     "http-address": "/run/vigil/vigild.sock",
     "https-address": "0.0.0.0:8443",
-    "version": "1.0.0",
+    "version": "4.0.0",
     "start-time": "2026-03-18T08:00:00.000Z"
   }
 }
@@ -209,9 +226,14 @@ Pass an empty `services` array to act on all services.
 | `stop` | Stop the specified services |
 | `restart` | Stop then start the specified services |
 | `autostart` | Start the services vigild starts at startup: `startup: enabled`, not scheduled, no oneshot that has already run; each once its `after` dependencies are ready. With `services`, only those; a listed service that autostart does not cover (disabled, scheduled, unknown) is reported in `err`. The plan is not changed. |
-| `replan` | Alias for `POST /v1/replan` |
+| `replan` | Reload the layers once, like `POST /v1/replan`; `services` is ignored. Unlike `POST /v1/replan`, an invalid layer is reported in the change (`status: error`, `err`), not as `500` |
 
-**Response** `200 OK`
+`services` is required (`[]` for all).
+
+**Response** `200 OK` — a change record. vigild performs the action before
+it answers, so `status` is `done`, or `error` with the reason in `err`. A
+problem with single services (an unknown name, a failed start) is such an
+`error`, still with HTTP `200`.
 
 ```json
 {
@@ -224,8 +246,21 @@ Pass an empty `services` array to act on all services.
     "summary": "Start [\"myapp\"]",
     "status": "done",
     "spawn-time": "2026-03-18T10:01:00.000Z",
-    "ready-time": "2026-03-18T10:01:00.250Z"
+    "ready-time": "2026-03-18T10:01:00.250Z",
+    "err": null
   }
+}
+```
+
+```json
+{
+  "id": "43",
+  "kind": "start",
+  "summary": "Start [\"web\", \"nope\"]",
+  "status": "error",
+  "spawn-time": "2026-03-18T10:02:00.000Z",
+  "ready-time": "2026-03-18T10:02:00.000Z",
+  "err": "nope: unknown service 'nope'"
 }
 ```
 
@@ -286,6 +321,7 @@ running process (`not running: "php-fpm"`).
 
 ```bash
 curl --unix-socket /run/vigil/vigild.sock -X POST \
+  -H "content-type: application/json" \
   -d '{"signal": "SIGHUP", "services": ["nginx"]}' http://localhost/v1/signals
 ```
 
@@ -321,7 +357,9 @@ Get a specific change record by ID.
 }
 ```
 
-**Change status values:** `doing` | `done` | `error` | `hold`
+**Change status values:** `done` | `error`. The schema also has `doing` and
+`hold`, but vigild never returns them: an action is finished when the
+response is sent. Changes are kept in memory only.
 
 **Example:**
 
@@ -373,7 +411,9 @@ List health checks and their current status.
 }
 ```
 
-**Check status values:** `up` | `down`
+**Check status values:** `up` | `down` | `inactive`. `inactive` is a check
+with `startup: disabled`: it does not run, has no failures and no
+`next-run-in-secs`.
 
 `next-run-in-secs` is absent during the initial `delay`. `last-error` is why
 the last run failed, until a run passes; see [Why a check
@@ -476,6 +516,7 @@ check is `404 Not Found`.
 
 ```bash
 curl --unix-socket /run/vigil/vigild.sock -X POST \
+  -H "content-type: application/json" \
   -d '{"name": "db-ready"}' http://localhost/v1/checks/refresh
 ```
 
@@ -553,23 +594,23 @@ curl -N --unix-socket /run/vigil/vigild.sock \
 
 **Required access level:** `read`
 
-Stream live log output as Server-Sent Events (SSE).
+Stream live log output: only lines logged after the request. For the lines
+before it as well, use `GET /v1/logs?follow=true`.
 
 **Query parameters:**
 
 | Parameter | Type | Description |
 |---|---|---|
 | `services` | string | Comma-separated service names to filter. Omit for all. |
+| `format` | `json` \| `text` \| `ndjson` | `json` (default): SSE, each event a `LogEntry`. `text`: SSE, each event `[service] message`. `ndjson`: `application/x-ndjson`, one `LogEntry` per line, no SSE framing, no keep-alives |
 
-**Request headers:**
+Any other parameter, or another `format`, is `400 Bad Request`.
 
-```
-Accept: text/event-stream
-```
+**Response** `200 OK` — `text/event-stream` (`application/x-ndjson` with
+`format=ndjson`)
 
-**Response** `200 OK` — `text/event-stream`
-
-Each SSE event carries a JSON-encoded `LogEntry` in its `data` field:
+With `format=json` each SSE event carries a JSON-encoded `LogEntry` in its
+`data` field:
 
 ```
 data: {"timestamp":"2026-03-18T10:00:05.123Z","service":"myapp","stream":"stdout","message":"hello"}
@@ -579,20 +620,21 @@ data: {"timestamp":"2026-03-18T10:00:05.123Z","service":"myapp","stream":"stdout
 data: {"timestamp":"2026-03-18T10:00:15.456Z","service":"myapp","stream":"stdout","message":"world"}
 ```
 
-Keep-alive comments (`: ping`) are sent every 15 seconds.
+Keep-alive comments (`: ping`) are sent every 15 seconds. A client that
+falls too far behind skips the entries it missed; the SSE formats mark the
+gap with a comment `: lagged: skipped N entries` (see
+[Logging](../user-guide/logging.md#slow-consumer--lagged)).
 
 **Example:**
 
 ```bash
-# Follow all logs
-curl --unix-socket /run/vigil/vigild.sock \
-  -H "Accept: text/event-stream" \
+# Follow all logs (SSE)
+curl -N --unix-socket /run/vigil/vigild.sock \
   http://localhost/v1/logs/follow
 
-# Follow myapp only
-curl --unix-socket /run/vigil/vigild.sock \
-  -H "Accept: text/event-stream" \
-  "http://localhost/v1/logs/follow?services=myapp"
+# Follow myapp only, as ndjson
+curl -N --unix-socket /run/vigil/vigild.sock \
+  "http://localhost/v1/logs/follow?services=myapp&format=ndjson"
 ```
 
 ---
@@ -616,13 +658,16 @@ After replan:
   scheduled job re-arms a changed `schedule` at once; a run in progress
   finishes with the old configuration.
 
-**Request body:** empty or `null`
+**Request body:** none
 
 **Response** `200 OK`
 
 ```json
 { "type": "sync", "status-code": 200, "status": "OK", "result": null }
 ```
+
+An invalid layer (a YAML error, an unknown key, a failed validation) is
+`500` with the reason in `message`; the running plan stays unchanged.
 
 **Example:**
 
@@ -651,31 +696,74 @@ says what `GET /v1/health?level=` answers.
 curl --unix-socket /run/vigil/vigild.sock http://localhost/v1/metrics
 ```
 
-Sample output:
+Sample output (excerpt; OpenMetrics names a counter family without
+`_total` and ends the output with `# EOF`):
 
 ```
-# HELP vigil_services_count Total number of configured services
-# TYPE vigil_services_count gauge
-vigil_services_count 2
-# HELP vigil_service_info Service metadata — label enumerates all configured service names
-# TYPE vigil_service_info gauge
-vigil_service_info{service="haproxy"} 1
-vigil_service_info{service="controller"} 1
-# HELP vigil_service_active Whether the service is currently active (1) or not (0)
+# HELP vigil_service_start_count Number of times the service has started.
+# TYPE vigil_service_start_count counter
+vigil_service_start_count_total{service="haproxy"} 1
+vigil_service_start_count_total{service="controller"} 1
+# HELP vigil_service_active Whether the service is currently active (1) or not (0).
 # TYPE vigil_service_active gauge
 vigil_service_active{service="haproxy"} 1
 vigil_service_active{service="controller"} 1
-# HELP vigil_service_start_count_total Number of times the service has started
-# TYPE vigil_service_start_count_total counter
-vigil_service_start_count_total{service="haproxy"} 1
-vigil_service_start_count_total{service="controller"} 1
-# HELP vigil_check_up Whether the health check is up (1) or not (0)
+# HELP vigil_check_up Whether the health check is up (1) or not (0).
 # TYPE vigil_check_up gauge
 vigil_check_up{check="check-haproxy",level="alive"} 1
-# HELP vigil_health Whether GET /v1/health?level= answers healthy (1) or not (0)
+# HELP vigil_health Whether GET /v1/health?level= answers healthy (1) or not (0).
 # TYPE vigil_health gauge
 vigil_health{level="alive"} 1
 vigil_health{level="ready"} 1
+# EOF
+```
+
+---
+
+### `GET /v1/alerts`
+
+**Required access level:** `read`
+
+List the alerts of the plan, what they are subscribed to, and the last
+status of the checks they watch.
+
+**Query parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `names` | string | Comma-separated alert names. Omit for all. |
+
+**Response** `200 OK`
+
+```json
+{
+  "type": "sync",
+  "status-code": 200,
+  "status": "OK",
+  "result": [
+    {
+      "name": "ops-hook",
+      "url": "env:OPS_WEBHOOK_URL",
+      "format": "webhook",
+      "on-check": ["web-alive"],
+      "on-service": ["web"],
+      "on-vigild": ["layers"],
+      "check-status": [{"check": "web-alive", "status": "down"}]
+    }
+  ]
+}
+```
+
+`url` is the value as written in the layer (an `env:VAR` reference is not
+resolved). `format` is `webhook`, `alertmanager`, `cloud-events` or
+`otlp-logs`. `on-service` and `on-vigild` are omitted when empty.
+`check-status` has one entry per `on-check` check; `status` is `null` until
+the check reported a first event.
+
+**Example:**
+
+```bash
+curl --unix-socket /run/vigil/vigild.sock http://localhost/v1/alerts
 ```
 
 ---
@@ -754,16 +842,24 @@ List named identities.
     {
       "name": "ops-user",
       "access": "admin",
-      "local": { "user-id": 1000 }
+      "local": { "user-id": 1000 },
+      "source": "api"
     },
     {
-      "name": "ci-bot",
+      "name": "log-relay",
       "access": "read",
-      "local": {}
+      "basic": { "password-hash": "$6$6lRcqNf3pZIIeBI6$kJXN…" },
+      "source": "layer",
+      "layer": "001-auth"
     }
   ]
 }
 ```
+
+`source` is `api` (added with `POST /v1/identities`, lost on restart) or
+`layer` (from a layer file; `layer` names the file without extension).
+Password hashes are returned, never passwords; this is why the endpoint
+needs `admin`.
 
 ---
 
@@ -803,13 +899,19 @@ Add or update identities.
 - `basic` — HTTP Basic Auth. `password-hash` must be a SHA-512-crypt string
   (`$6$...`). Generate with `openssl passwd -6 <password>`.
 - `tls` — matches TLS connections by client certificate CA.
-  `ca-cert` is a PEM-encoded CA certificate string or file path.
+  `ca-cert` is the PEM-encoded CA certificate itself (in a layer file,
+  `tls.ca` names a file instead).
+
+An existing identity of the same name is replaced.
 
 **Response** `200 OK`
 
 ```json
 { "type": "sync", "status-code": 200, "status": "OK", "result": null }
 ```
+
+**Errors:** `409` when a name belongs to an identity from a layer file
+(read-only over the API); the message names the layer file.
 
 **Example — local identity:**
 
@@ -846,6 +948,9 @@ Remove identities by name.
 }
 ```
 
+Unknown names are skipped. `409` when a name belongs to an identity from a
+layer file; then nothing is removed.
+
 **Response** `200 OK` — returns the list of actually removed names:
 
 ```json
@@ -873,4 +978,4 @@ curl --unix-socket /run/vigil/vigild.sock \
 | Path | Description |
 |---|---|
 | `GET /docs` | Swagger UI (interactive API explorer) |
-| `GET /openapi.json` | OpenAPI 3.0 specification (JSON) |
+| `GET /openapi.json` | OpenAPI 3.1 specification (JSON); also in the repository as [openapi.yaml](../specs/openapi.yaml) |
