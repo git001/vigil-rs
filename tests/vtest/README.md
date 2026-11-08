@@ -50,7 +50,7 @@ tests/vtest/run.sh
 | `v0001_system_info.vtc` | `GET /v1/system-info` — 200, body contains version / boot-id / start-time |
 | `v0002_api_lists.vtc` | `GET /v1/services`, `/v1/checks`, `/v1/alerts`, `/v1/logs`, `/v1/identities` — all 200, result field present |
 | `v0003_metrics.vtc` | `GET /v1/metrics` — 200, Content-Type contains `openmetrics` |
-| `v0004_openapi.vtc` | `GET /openapi.json` — 200, spec contains `"vigil API"`, `info`, `paths` |
+| `v0004_openapi.vtc` | `GET /openapi.json` — 200, spec contains `"vigil API"`, `info`, `paths`; `GET /docs` — the Swagger UI page that loads `/openapi.json` |
 | `v0005_replan.vtc` | `POST /v1/replan` before and after the layers symlink points to a layer — service appears in list |
 | `v0006_identities.vtc` | Identity CRUD: add alice (bootstrap auth), list (Unix UID auth), remove |
 | `v0007_daemon_stop.vtc` | `POST /v1/vigild {"action":"stop"}` — daemon exits cleanly |

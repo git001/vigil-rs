@@ -1,4 +1,4 @@
-vtest "GET /openapi.json returns the OpenAPI spec"
+vtest "GET /openapi.json returns the OpenAPI spec, GET /docs the Swagger UI"
 
 # vigild with an empty layers directory; see v0001.
 process p1 -winsz 200 400 "${vigild} --layers-dir ${vtestdir}/fixtures/empty --socket ${tmpdir}/vigild.sock" -start
@@ -13,6 +13,17 @@ client c1 -connect ${tmpdir}/vigild.sock {
 	expect resp.body ~ "\"info\":"
 	expect resp.body ~ "\"paths\":"
 	expect resp.body ~ "/v1/system-info"
+} -run
+
+# The Swagger UI page: HTML that loads the spec from /openapi.json.
+client c2 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /docs -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.http.content-type ~ "^text/html"
+	expect resp.body ~ "<title>vigil API</title>"
+	expect resp.body ~ "url: \"/openapi.json\""
+	expect resp.body ~ "SwaggerUIBundle"
 } -run
 
 process p1 -kill TERM
