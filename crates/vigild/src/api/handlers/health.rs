@@ -17,6 +17,7 @@ use super::super::{ApiError, AppState, auth::Caller};
 use super::{Params, query_params, split_list};
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct HealthQuery {
     /// `alive`: only checks with `level: alive`. `ready`: checks of both

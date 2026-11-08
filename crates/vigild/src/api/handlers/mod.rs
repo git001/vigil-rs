@@ -49,6 +49,7 @@ pub(super) fn query_params<T>(query: Params<T>) -> Result<T, ApiError> {
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 #[serde(deny_unknown_fields)]
 pub(super) struct NamesQuery {
     /// Comma-separated list of names to filter by. Omit for all.

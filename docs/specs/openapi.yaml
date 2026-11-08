@@ -37,13 +37,11 @@ paths:
       operationId: list_alerts
       parameters:
       - name: names
-        in: path
+        in: query
         description: Comma-separated list of names to filter by. Omit for all.
-        required: true
+        required: false
         schema:
-          type:
-          - string
-          - 'null'
+          type: string
       responses:
         '200':
           description: List of alert entries.
@@ -98,13 +96,11 @@ paths:
       operationId: list_checks
       parameters:
       - name: names
-        in: path
+        in: query
         description: Comma-separated list of names to filter by. Omit for all.
-        required: true
+        required: false
         schema:
-          type:
-          - string
-          - 'null'
+          type: string
       responses:
         '200':
           description: List of check status entries.
@@ -169,23 +165,19 @@ paths:
       operationId: health
       parameters:
       - name: level
-        in: path
+        in: query
         description: |-
           `alive`: only checks with `level: alive`. `ready`: checks of both
           levels. Omit for all checks.
-        required: true
+        required: false
         schema:
-          oneOf:
-          - type: 'null'
-          - $ref: '#/components/schemas/CheckLevel'
+          $ref: '#/components/schemas/CheckLevel'
       - name: names
-        in: path
+        in: query
         description: Comma-separated check names. Omit for all checks.
-        required: true
+        required: false
         schema:
-          type:
-          - string
-          - 'null'
+          type: string
       responses:
         '200':
           description: No selected check is down.
@@ -212,13 +204,11 @@ paths:
       operationId: list_identities
       parameters:
       - name: names
-        in: path
+        in: query
         description: Comma-separated list of names to filter by. Omit for all.
-        required: true
+        required: false
         schema:
-          type:
-          - string
-          - 'null'
+          type: string
       responses:
         '200':
           description: List of identities.
@@ -308,34 +298,28 @@ paths:
       operationId: get_logs
       parameters:
       - name: services
-        in: path
+        in: query
         description: Comma-separated list of service names to filter by. Omit for all services.
-        required: true
+        required: false
         schema:
-          type:
-          - string
-          - 'null'
+          type: string
       - name: n
-        in: path
+        in: query
         description: |-
           Number of most recent lines to return (default 100). With
           `follow=true` these come first, then the new lines.
-        required: true
+        required: false
         schema:
-          type:
-          - integer
-          - 'null'
+          type: integer
           minimum: 0
       - name: follow
-        in: path
+        in: query
         description: |-
           `true` keeps the connection open and streams newline-delimited JSON
           (`application/x-ndjson`), like `/v1/logs/follow?format=ndjson`.
-        required: true
+        required: false
         schema:
-          type:
-          - boolean
-          - 'null'
+          type: boolean
       responses:
         '200':
           description: Recent log entries; with `follow=true` an `application/x-ndjson` stream.
@@ -370,21 +354,17 @@ paths:
       operationId: follow_logs
       parameters:
       - name: services
-        in: path
+        in: query
         description: Comma-separated list of service names to filter by. Omit for all services.
-        required: true
+        required: false
         schema:
-          type:
-          - string
-          - 'null'
+          type: string
       - name: format
-        in: path
+        in: query
         description: 'Stream format: `json` (default), `text` or `ndjson`.'
-        required: true
+        required: false
         schema:
-          oneOf:
-          - type: 'null'
-          - $ref: '#/components/schemas/LogFormat'
+          $ref: '#/components/schemas/LogFormat'
       responses:
         '200':
           description: Log stream (content-type depends on `format`).
@@ -437,13 +417,11 @@ paths:
       operationId: list_services
       parameters:
       - name: names
-        in: path
+        in: query
         description: Comma-separated list of names to filter by. Omit for all.
-        required: true
+        required: false
         schema:
-          type:
-          - string
-          - 'null'
+          type: string
       responses:
         '200':
           description: List of service status entries.

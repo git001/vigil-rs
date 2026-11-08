@@ -40,6 +40,7 @@ pub(crate) enum LogFormat {
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LogsQuery {
     /// Comma-separated list of service names to filter by. Omit for all services.
@@ -53,6 +54,7 @@ pub(crate) struct LogsQuery {
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FollowQuery {
     /// Comma-separated list of service names to filter by. Omit for all services.
