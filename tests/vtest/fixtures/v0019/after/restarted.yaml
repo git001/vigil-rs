@@ -1,0 +1,6 @@
+# The plan after the daemon restart: its start shows that the re-executed
+# vigild loaded the layers again.
+services:
+  restarted:
+    command: "/bin/sleep 3600"
+    startup: enabled

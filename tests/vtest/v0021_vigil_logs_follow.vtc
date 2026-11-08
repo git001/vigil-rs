@@ -1,99 +1,43 @@
 vtest "vigil logs: --follow (SSE streaming), --services filter, -n limit, empty output"
 
-shell { mkdir -p ${tmpdir}/layers }
+# The layers directory is a symlink to a static fixture directory; the test
+# changes the plan by pointing it to another one. VTest2 cannot make
+# symlinks.
+shell {ln -s ${vtestdir}/fixtures/v0021/before ${tmpdir}/layers}
 
-process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+# vigild logs to stdout, the terminal of p1; -expect-text waits there for a
+# line. A wide terminal keeps long log lines on one row.
+process p1 -winsz 200 400 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+process p1 -expect-text 0 0 "API listening"
 
-shell {
-	for i in $(seq 1 50); do
-		test -S ${tmpdir}/vigild.sock && break
-		sleep 0.1
-	done
-	test -S ${tmpdir}/vigild.sock
+# Part 1: no service yet, an empty log store.
+shell -expect "No log entries." { ${vigil} --socket ${tmpdir}/vigild.sock logs }
+
+# Part 2: logger prints a line every 50ms.
+shell {ln -sfn ${vtestdir}/fixtures/v0021/after ${tmpdir}/layers}
+shell -expect "Replan completed." { ${vigil} --socket ${tmpdir}/vigild.sock replan }
+process p1 -expect-text 0 0 "[logger] vigil-follow-line-2"
+
+shell -match {[[]logger[]] [[]stdout[]] vigil-follow-line-0} {
+	${vigil} --socket ${tmpdir}/vigild.sock logs
 }
 
-# ---------------------------------------------------------------------------
-# Part 1: vigil logs with empty store → "No log entries."
-# ---------------------------------------------------------------------------
-
-shell {
-	${vigil} --socket ${tmpdir}/vigild.sock logs > ${tmpdir}/logs_empty.txt
-	grep -q 'No log entries' ${tmpdir}/logs_empty.txt
+# Part 3: only the lines of logger.
+shell -match {[[]logger[]] [[]stdout[]] vigil-follow-line-0} {
+	${vigil} --socket ${tmpdir}/vigild.sock logs logger
 }
 
-# ---------------------------------------------------------------------------
-# Part 2: start a service that produces continuous log output
-# ---------------------------------------------------------------------------
-
-shell {
-	cp ${vtestdir}/fixtures/v0021/logger.yaml ${tmpdir}/layers/
-	${vigil} --socket ${tmpdir}/vigild.sock replan
+# Part 4: -n 2, exactly the last two lines (there are more by now).
+shell -match {^[^\n]+vigil-follow-line-[0-9]+\n[^\n]+vigil-follow-line-[0-9]+\n?$} {
+	${vigil} --socket ${tmpdir}/vigild.sock logs -n 2
 }
 
-# Wait for log entries to appear in the store.
-shell {
-	for i in $(seq 1 80); do
-		${vigil} --socket ${tmpdir}/vigild.sock logs 2>/dev/null \
-			| grep -q vigil-follow-line && break
-		sleep 0.1
-	done
-	${vigil} --socket ${tmpdir}/vigild.sock logs | grep -q vigil-follow-line
-}
-
-# ---------------------------------------------------------------------------
-# Part 3: vigil logs --services filter
-# ---------------------------------------------------------------------------
-
-shell {
-	${vigil} --socket ${tmpdir}/vigild.sock logs logger \
-		> ${tmpdir}/logs_svc.txt
-	grep -q vigil-follow-line ${tmpdir}/logs_svc.txt
-}
-
-# ---------------------------------------------------------------------------
-# Part 4: vigil logs -n 2  (at most 2 entries returned)
-# ---------------------------------------------------------------------------
-
-shell {
-	COUNT=$(${vigil} --socket ${tmpdir}/vigild.sock logs -n 2 | wc -l)
-	test "$COUNT" -le 2
-}
-
-# ---------------------------------------------------------------------------
-# Part 5: vigil logs --follow  (SSE streaming via Unix socket)
-#
-# Run follow in background, wait for output, then send SIGINT so the process
-# exits cleanly (ctrl_c() fires → select! exits → main returns → profraw flushed).
-# ---------------------------------------------------------------------------
-
-shell {
-	${vigil} --socket ${tmpdir}/vigild.sock logs --follow \
-		>> ${tmpdir}/follow.txt 2>/dev/null &
-	echo $! > ${tmpdir}/follow.pid
-}
-
-shell {
-	for i in $(seq 1 50); do
-		test -s ${tmpdir}/follow.txt && break
-		sleep 0.1
-	done
-	grep -q vigil-follow-line ${tmpdir}/follow.txt
-}
-
-# SIGINT → clean exit (atexit/profraw flush preserved for coverage)
-shell { kill -INT $(cat ${tmpdir}/follow.pid) 2>/dev/null || true }
-
-# Wait for the follow process to exit.
-shell {
-	for i in $(seq 1 30); do
-		kill -0 $(cat ${tmpdir}/follow.pid) 2>/dev/null || break
-		sleep 0.1
-	done
-}
-
-# ---------------------------------------------------------------------------
-# Tear down
-# ---------------------------------------------------------------------------
+# Part 5: --follow streams new lines until it gets SIGINT, then exits with
+# 0. It runs as p2; -expect-text waits on its terminal.
+process p2 -winsz 100 200 "${vigil} --socket ${tmpdir}/vigild.sock logs --follow" -start
+process p2 -expect-text 0 0 "[logger] [stdout] vigil-follow-line-"
+process p2 -kill INT
+process p2 -wait
 
 process p1 -kill TERM
 process p1 -wait

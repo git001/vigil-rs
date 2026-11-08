@@ -1,90 +1,43 @@
 vtest "vigild: --log-format json, SIGHUP/SIGUSR1/SIGUSR2 forwarding, and daemon restart"
 
-# ---------------------------------------------------------------------------
-# Part 1: --log-format json
-# ---------------------------------------------------------------------------
-# Start vigild with JSON log format and verify it boots and serves requests.
+# The layers directory is a symlink to a static fixture directory; the test
+# changes the plan by pointing it to another one. VTest2 cannot make
+# symlinks.
+shell {ln -s ${vtestdir}/fixtures/v0019/before ${tmpdir}/layers}
 
-shell { mkdir -p ${tmpdir}/layers }
+# Part 1: --log-format json. vigild logs to stdout, the terminal of p1;
+# -expect-text waits there for a line. A wide terminal keeps the JSON lines
+# on one row.
+process p1 -winsz 200 400 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock --log-format json" -start
+process p1 -expect-text 0 0 "\"level\":\"INFO\",\"fields\":"
+process p1 -expect-text 0 0 "\"message\":\"API listening on"
+process p1 -expect-text 0 0 "\"message\":\"process started\",\"service\":\"signal-sink\""
 
-shell {
-	${vigild} \
-		--layers-dir ${tmpdir}/layers \
-		--socket     ${tmpdir}/vigild.sock \
-		--log-format json \
-		>> ${tmpdir}/vigild_json.log 2>&1 < /dev/null &
-	echo $! > ${tmpdir}/vigild.pid
-}
-
-shell {
-	for i in $(seq 1 50); do
-		test -S ${tmpdir}/vigild.sock && break
-		sleep 0.1
-	done
-	test -S ${tmpdir}/vigild.sock
-}
-
-# Verify the daemon responds normally.
 client c1 -connect ${tmpdir}/vigild.sock {
 	txreq -method GET -url /v1/system-info -hdr "Host: localhost"
 	rxresp
 	expect resp.status == 200
 } -run
 
-# Verify log output is JSON (tracing-subscriber json format includes "level":).
-shell {
-	head -3 ${tmpdir}/vigild_json.log | grep -q '"level"'
-}
+# Part 2: SIGHUP, SIGUSR1 and SIGUSR2 go on to the services. VTest2 knows
+# only a few signal names; the others are numbers (Linux: USR1 10, USR2 12).
+process p1 -kill HUP
+process p1 -expect-text 0 0 "received SIGHUP, forwarding to services"
+process p1 -kill -10
+process p1 -expect-text 0 0 "received SIGUSR1, forwarding to services"
+process p1 -kill -12
+process p1 -expect-text 0 0 "received SIGUSR2, forwarding to services"
 
-# ---------------------------------------------------------------------------
-# Part 2: SIGHUP / SIGUSR1 / SIGUSR2 signal forwarding
-# ---------------------------------------------------------------------------
-# Add a long-running service so that vigild has a child process to forward to.
-# We only need to exercise the select{} branches — the service command is kept
-# deliberately simple (pure /bin/sh busy-wait, no shell-variable expansion in
-# the vtc heredoc).
-
-shell {
-	cp ${vtestdir}/fixtures/v0019/signal-sink.yaml ${tmpdir}/layers/
-	${vigil} --socket ${tmpdir}/vigild.sock replan
-}
-
-# Wait for the service to start.
-shell {
-	for i in $(seq 1 50); do
-		${vigil} --socket ${tmpdir}/vigild.sock services list \
-			| grep -q 'signal-sink' && break
-		sleep 0.1
-	done
-}
-
-shell { sleep 0.3 }
-
-# Send SIGHUP to vigild → exercises the SIGHUP select branch (forward to services).
-shell { kill -HUP  $(cat ${tmpdir}/vigild.pid) }
-shell { sleep 0.1 }
-# SIGUSR1
-shell { kill -USR1 $(cat ${tmpdir}/vigild.pid) }
-shell { sleep 0.1 }
-# SIGUSR2
-shell { kill -USR2 $(cat ${tmpdir}/vigild.pid) }
-shell { sleep 0.2 }
-
-# vigild must still be running and responding after the three signals.
+# vigild still answers.
 client c2 -connect ${tmpdir}/vigild.sock {
 	txreq -method GET -url /v1/system-info -hdr "Host: localhost"
 	rxresp
 	expect resp.status == 200
 } -run
 
-# ---------------------------------------------------------------------------
-# Part 3: DaemonAction::Restart (re-exec path in main.rs)
-# ---------------------------------------------------------------------------
-# POST /v1/vigild with action=restart causes vigild to re-exec itself.
-# The same PID continues as a new vigild instance (exec replaces the image).
-
-shell { rm -f ${tmpdir}/layers/signal-sink.yaml }
-
+# Part 3: POST /v1/vigild restart re-executes vigild in the same process. It
+# loads the layers again: the new plan has the service restarted.
+shell {ln -sfn ${vtestdir}/fixtures/v0019/after ${tmpdir}/layers}
 client c3 -connect ${tmpdir}/vigild.sock {
 	txreq -method POST -url /v1/vigild -hdr "Host: localhost" \
 		-hdr "Content-Type: application/json" \
@@ -92,32 +45,16 @@ client c3 -connect ${tmpdir}/vigild.sock {
 	rxresp
 	expect resp.status == 200
 } -run
+process p1 -expect-text 0 0 "re-executing vigild"
+process p1 -expect-text 0 0 "\"message\":\"process started\",\"service\":\"restarted\""
 
-# Wait for the socket to disappear, then for the re-exec'd daemon to recreate it.
-shell {
-	for i in $(seq 1 30); do
-		test -S ${tmpdir}/vigild.sock || break
-		sleep 0.1
-	done
-	for i in $(seq 1 60); do
-		test -S ${tmpdir}/vigild.sock && break
-		sleep 0.1
-	done
-	test -S ${tmpdir}/vigild.sock
-}
-
-# The re-exec'd vigild must serve requests normally.
+# The re-executed vigild serves requests, with the new plan.
 client c4 -connect ${tmpdir}/vigild.sock {
-	txreq -method GET -url /v1/system-info -hdr "Host: localhost"
+	txreq -method GET -url /v1/services -hdr "Host: localhost"
 	rxresp
 	expect resp.status == 200
+	expect resp.body ~ "name.:.restarted."
 } -run
 
-# Tear down.
-shell {
-	kill $(cat ${tmpdir}/vigild.pid) 2>/dev/null || true
-	for i in $(seq 1 30); do
-		kill -0 $(cat ${tmpdir}/vigild.pid) 2>/dev/null || break
-		sleep 0.1
-	done
-}
+process p1 -kill TERM
+process p1 -wait

@@ -1,114 +1,38 @@
 vtest "vigild metrics: service_active, alert_fire_count reflect runtime state"
 
-shell { mkdir -p ${tmpdir}/layers }
+# The webhook endpoint for the alert; any answer will do.
+server s1 {
+	rxreq
+	expect req.method == POST
+	txresp -hdr "Connection: close"
+} -start
 
-# Webhook server for the alert part (tests/vtest/helpers/http_capture.py);
-# started first so vigild can get its URL via WEBHOOK_URL ("env:" in the
-# alert url).
-shell {
-	${vtestdir}/helpers/http_capture.py ${tmpdir}/alert_port.txt ${tmpdir}/alerts.json \
-		> /dev/null 2>&1 &
-	echo $! > ${tmpdir}/alert_srv.pid
-	for i in $(seq 1 50); do
-		test -s ${tmpdir}/alert_port.txt && break
-		sleep 0.1
-	done
-	test -s ${tmpdir}/alert_port.txt
-}
+# fixtures/v0020: long-runner (a running service), dummy-check (always
+# fails: nothing listens on port 1) and test-alert on it. vigild gets the
+# webhook URL as WEBHOOK_URL ("env:" in the alert url). It logs to stdout,
+# the terminal of p1; -expect-text waits there for a line. A wide terminal
+# keeps long log lines on one row.
+process p1 -winsz 200 400 "env WEBHOOK_URL=http://${s1_sock}/ ${vigild} --layers-dir ${vtestdir}/fixtures/v0020 --socket ${tmpdir}/vigild.sock" -start
+process p1 -expect-text 0 0 "API listening"
+process p1 -expect-text 0 0 "process started service=long-runner"
 
-process p1 "env WEBHOOK_URL=http://127.0.0.1:$(cat ${tmpdir}/alert_port.txt)/ ${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+# dummy-check goes down (threshold 3) and the alert fires.
+process p1 -expect-text 0 0 "check is down check=dummy-check"
+server s1 -wait
 
-shell {
-	for i in $(seq 1 50); do
-		test -S ${tmpdir}/vigild.sock && break
-		sleep 0.1
-	done
-	test -S ${tmpdir}/vigild.sock
-}
-
-# ---------------------------------------------------------------------------
-# Part 1: vigil_service_active reflects a running service
-# ---------------------------------------------------------------------------
-
-shell {
-	cp ${vtestdir}/fixtures/v0020/svc.yaml ${tmpdir}/layers/
-	${vigil} --socket ${tmpdir}/vigild.sock replan
-}
-
-# Wait for service to become active.
-shell {
-	for i in $(seq 1 50); do
-		${vigil} --socket ${tmpdir}/vigild.sock services list \
-			| grep -q 'long-runner' && break
-		sleep 0.1
-	done
-	sleep 0.3
-}
-
-shell {
-	curl -sf --unix-socket ${tmpdir}/vigild.sock \
-		http://localhost/v1/metrics > ${tmpdir}/metrics1.txt
-	grep -q 'vigil_service_active{service="long-runner"} 1' ${tmpdir}/metrics1.txt
-	grep -q 'vigil_service_info{service="long-runner"} 1'   ${tmpdir}/metrics1.txt
-	grep -qE 'vigil_services_count(_total)? [1-9]'          ${tmpdir}/metrics1.txt
-	grep -q 'vigil_service_start_count_total{service="long-runner"}' ${tmpdir}/metrics1.txt
-}
-
-# ---------------------------------------------------------------------------
-# Part 2: vigil_alert_fire_count increments when a check transitions Down
-# ---------------------------------------------------------------------------
-
-# Pick a free port for the mock alert receiver.
-
-
-# Layer fixtures/v0020/alert_check.yaml: an always failing check with an alert.
-shell {
-	cp ${vtestdir}/fixtures/v0020/alert_check.yaml ${tmpdir}/layers/
-	${vigil} --socket ${tmpdir}/vigild.sock replan
-}
-
-# Wait for the check to fail and the alert to fire.
-shell {
-	for i in $(seq 1 80); do
-		curl -sf --unix-socket ${tmpdir}/vigild.sock \
-			http://localhost/v1/metrics 2>/dev/null \
-			| grep -qF 'vigil_alert_fire_count_total{alert="test-alert"}' && break
-		sleep 0.2
-	done
-}
-
-shell {
-	curl -sf --unix-socket ${tmpdir}/vigild.sock \
-		http://localhost/v1/metrics > ${tmpdir}/metrics2.txt
-	grep -qF 'vigil_alert_fire_count_total{alert="test-alert"}' ${tmpdir}/metrics2.txt
-	grep -qF 'vigil_check_failure_count_total{check="dummy-check",level="alive"}' ${tmpdir}/metrics2.txt
-}
-
-# The counter is at least 1 (the line ends with its value).
-shell {
-	v=$(grep -F 'vigil_alert_fire_count_total{alert="test-alert"}' ${tmpdir}/metrics2.txt | awk '{print $NF}')
-	if [ -z "$v" ] || [ "$v" -lt 1 ]; then
-		echo "expected vigil_alert_fire_count_total >= 1, got '$v'"
-		exit 1
-	fi
-}
-
-# ---------------------------------------------------------------------------
-# Part 3: /v1/metrics via VTest HTTP client — content-type and key names
-# ---------------------------------------------------------------------------
-
+# In the patterns "." stands for the braces and quotes of the labels.
 client c1 -connect ${tmpdir}/vigild.sock {
 	txreq -method GET -url /v1/metrics -hdr "Host: localhost"
 	rxresp
 	expect resp.status == 200
-	expect resp.http.Content-Type ~ openmetrics
+	expect resp.http.Content-Type ~ "application/openmetrics-text"
+	expect resp.body ~ "vigil_service_active.service=.long-runner.. 1"
+	expect resp.body ~ "vigil_service_info.service=.long-runner.. 1"
+	expect resp.body ~ "vigil_services_count 1"
+	expect resp.body ~ "vigil_service_start_count_total.service=.long-runner.. 1"
+	expect resp.body ~ "vigil_alert_fire_count_total.alert=.test-alert.. [1-9]"
+	expect resp.body ~ "vigil_check_failure_count_total.check=.dummy-check.,level=.alive.. [1-9]"
 } -run
-
-# ---------------------------------------------------------------------------
-# Tear down
-# ---------------------------------------------------------------------------
-
-shell { kill $(cat ${tmpdir}/alert_srv.pid) 2>/dev/null || true }
 
 process p1 -kill TERM
 process p1 -wait

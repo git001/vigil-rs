@@ -1,6 +1,9 @@
 vtest "mTLS client certificate authentication"
 
-shell { mkdir -p ${tmpdir}/layers ${tmpdir}/certs }
+# VTest2 has no TLS: the certificates are made with openssl, the TLS calls
+# use vigil (--cert/--key for mTLS, --insecure for the self-signed server
+# certificate).
+shell { mkdir ${tmpdir}/certs }
 
 # ---------------------------------------------------------------------------
 # Generate CA cert + client cert signed by that CA
@@ -42,111 +45,7 @@ shell {
 		2>/dev/null
 }
 
-# ---------------------------------------------------------------------------
-# Start vigild with mTLS on a free port
-# ---------------------------------------------------------------------------
-
-shell {
-	${vigild} \
-		--layers-dir    ${tmpdir}/layers \
-		--socket        ${tmpdir}/vigild.sock \
-		--tls-addr      127.0.0.1:0 \
-		--tls-client-ca ${tmpdir}/certs/ca.crt \
-		>> ${tmpdir}/vigild.log 2>&1 < /dev/null &
-	echo $! > ${tmpdir}/vigild.pid
-}
-
-# Wait for Unix socket
-shell {
-	for i in $(seq 1 50); do
-		test -S ${tmpdir}/vigild.sock && break
-		sleep 0.1
-	done
-	test -S ${tmpdir}/vigild.sock
-}
-
-# vigild binds a free TLS port (--tls-addr 127.0.0.1:0); vigil system-info
-# shows the one it got.
-shell {
-	${vigil} --socket ${tmpdir}/vigild.sock system-info \
-		| sed -n 's/^https-address: .*:\([0-9]*\)$/\1/p' > ${tmpdir}/tls_port.txt
-	test -s ${tmpdir}/tls_port.txt
-}
-
-# Wait for TLS port
-shell {
-	PORT=$(cat ${tmpdir}/tls_port.txt)
-	for i in $(seq 1 30); do
-		curl -sf --insecure https://127.0.0.1:$PORT/v1/system-info > /dev/null 2>&1 && break
-		sleep 0.2
-	done
-}
-
-# ---------------------------------------------------------------------------
-# Register identities via Unix socket (bootstrap mode — first POST ends it)
-# 1. Add a local admin identity to retain Unix-socket access after bootstrap.
-# 2. Add the TLS identity for the ops principal.
-# ---------------------------------------------------------------------------
-
-# Step 1: add local admin (this ends bootstrap mode)
-client c1 -connect ${tmpdir}/vigild.sock {
-	txreq -method POST -url /v1/identities -hdr "Host: localhost" \
-		-hdr "Content-Type: application/json" \
-		-body "{\"identities\":{\"local-admin\":{\"access\":\"admin\",\"local\":{}}}}"
-	rxresp
-	expect resp.status == 200
-} -run
-
-# Step 2: add the TLS identity (Unix socket still works via local-admin)
-shell {
-	${vtestdir}/helpers/tls_identity.py ops read ${tmpdir}/certs/ca.crt ${tmpdir}/identity_payload.json
-	curl -sf \
-		--unix-socket ${tmpdir}/vigild.sock \
-		-X POST http://localhost/v1/identities \
-		-H "Content-Type: application/json" \
-		-d @${tmpdir}/identity_payload.json \
-		> /dev/null
-}
-
-# Verify both identities are stored
-client c2 -connect ${tmpdir}/vigild.sock {
-	txreq -method GET -url /v1/identities -hdr "Host: localhost"
-	rxresp
-	expect resp.status == 200
-	write_body ${tmpdir}/list_identities.json
-	shell { grep -q '"ops"' ${tmpdir}/list_identities.json }
-} -run
-
-# ---------------------------------------------------------------------------
-# WITH client cert → Read access → GET /v1/services returns 200
-# ---------------------------------------------------------------------------
-
-shell {
-	PORT=$(cat ${tmpdir}/tls_port.txt)
-	STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
-		--insecure \
-		--cert ${tmpdir}/certs/client.crt \
-		--key  ${tmpdir}/certs/client.key \
-		https://127.0.0.1:$PORT/v1/services)
-	[ "$STATUS" = "200" ]
-}
-
-# ---------------------------------------------------------------------------
-# WITHOUT client cert → Open access → GET /v1/services returns 403
-# ---------------------------------------------------------------------------
-
-shell {
-	PORT=$(cat ${tmpdir}/tls_port.txt)
-	STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
-		--insecure \
-		https://127.0.0.1:$PORT/v1/services)
-	[ "$STATUS" = "403" ]
-}
-
-# ---------------------------------------------------------------------------
-# Client cert signed by a DIFFERENT (untrusted) CA → TLS handshake rejected
-# ---------------------------------------------------------------------------
-
+# An untrusted CA and a client certificate signed by it.
 shell {
 	# Generate an untrusted CA + client cert
 	openssl req -x509 \
@@ -169,26 +68,71 @@ shell {
 		-days 1 2>/dev/null
 }
 
+# vigild with mTLS on a free port, trusting ca.crt for client certificates.
+# It logs to stdout, the terminal of p1; -expect-text waits there for a
+# line. A wide terminal keeps long log lines on one row.
+process p1 -winsz 200 400 "${vigild} --layers-dir ${vtestdir}/fixtures/empty --socket ${tmpdir}/vigild.sock --tls-addr 127.0.0.1:0 --tls-client-ca ${tmpdir}/certs/ca.crt" -start
+process p1 -expect-text 0 0 "API listening"
+
+# The TLS port vigild got is known only at run time; vigil system-info
+# shows it.
 shell {
-	PORT=$(cat ${tmpdir}/tls_port.txt)
-	# curl exits non-zero when the TLS handshake is rejected — that's expected.
-	STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
-		--insecure \
-		--cert ${tmpdir}/certs/bad-client.crt \
-		--key  ${tmpdir}/certs/bad-client.key \
-		https://127.0.0.1:$PORT/v1/services 2>/dev/null || true)
-	# TLS rejection → curl writes "000" for http_code; 403 if it got through.
-	[ "$STATUS" = "000" ] || [ "$STATUS" = "403" ]
+	${vigil} --socket ${tmpdir}/vigild.sock system-info \
+		| sed -n 's/^https-address: 127.0.0.1:\([0-9]*\)$/\1/p' > ${tmpdir}/tls_port
+	test -s ${tmpdir}/tls_port
 }
 
-# ---------------------------------------------------------------------------
-# Tear down
-# ---------------------------------------------------------------------------
+# A local admin keeps the Unix socket working once bootstrap ends.
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/identities -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"identities\":{\"local-admin\":{\"access\":\"admin\",\"local\":{}}}}"
+	rxresp
+	expect resp.status == 200
+} -run
 
+# The TLS identity ops (read) for certificates signed by ca.crt; the helper
+# writes the request body with the CA's fingerprint.
 shell {
-	kill $(cat ${tmpdir}/vigild.pid) 2>/dev/null || true
-	for i in $(seq 1 30); do
-		kill -0 $(cat ${tmpdir}/vigild.pid) 2>/dev/null || break
-		sleep 0.1
-	done
+	${vtestdir}/helpers/tls_identity.py ops read ${tmpdir}/certs/ca.crt ${tmpdir}/identity_payload.json
 }
+client c2 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/identities -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-bodyfrom ${tmpdir}/identity_payload.json
+	rxresp
+	expect resp.status == 200
+} -run
+
+# Both identities are stored. In the body patterns each "." matches one
+# character of a JSON escape.
+client c3 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /v1/identities -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "name.:.local-admin."
+	expect resp.body ~ "name.:.ops.,.access.:.read."
+} -run
+
+# With the client certificate: ops, read access, the services list works.
+shell -expect "No services." {
+	${vigil} --url https://127.0.0.1:$(cat ${tmpdir}/tls_port) --insecure \
+		--cert ${tmpdir}/certs/client.crt --key ${tmpdir}/certs/client.key \
+		services list
+}
+
+# Without a certificate: anonymous (metrics), the services list is
+# forbidden.
+shell -exit 1 -expect "Error: forbidden" {
+	${vigil} --url https://127.0.0.1:$(cat ${tmpdir}/tls_port) --insecure services list
+}
+
+# A certificate of the untrusted CA: vigild rejects the handshake.
+shell -exit 1 -expect "received fatal alert: UnknownCA" {
+	${vigil} --url https://127.0.0.1:$(cat ${tmpdir}/tls_port) --insecure \
+		--cert ${tmpdir}/certs/bad-client.crt --key ${tmpdir}/certs/bad-client.key \
+		services list
+}
+
+process p1 -kill TERM
+process p1 -wait
