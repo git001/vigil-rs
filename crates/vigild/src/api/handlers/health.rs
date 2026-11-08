@@ -2,7 +2,7 @@
 // Copyright (C) 2026 vigil-rs contributors
 
 use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response as HttpResponse};
 use serde::Deserialize;
@@ -14,7 +14,7 @@ use vigil_types::plan::CheckLevel;
 use crate::overlord::Cmd;
 
 use super::super::{ApiError, AppState, auth::Caller};
-use super::split_list;
+use super::{Params, query_params, split_list};
 
 #[derive(Deserialize, utoipa::IntoParams)]
 #[serde(deny_unknown_fields)]
@@ -42,11 +42,12 @@ pub(crate) struct HealthQuery {
 pub(crate) async fn health(
     caller: Caller,
     State(s): State<AppState>,
-    Query(q): Query<HealthQuery>,
+    q: Params<HealthQuery>,
 ) -> Result<HttpResponse, ApiError> {
     caller
         .require(IdentityAccess::Open)
         .map_err(ApiError::forbidden_from)?;
+    let q = query_params(q)?;
     let names = split_list(q.names.as_deref());
     let (tx, rx) = oneshot::channel();
     s.overlord

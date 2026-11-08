@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 vigil-rs contributors
 
-use axum::extract::{Query, State};
+use axum::extract::State;
 use tokio::sync::oneshot;
 use vigil_types::api::{CheckInfo, CheckRefresh, CheckRefreshRequest};
 use vigil_types::identity::IdentityAccess;
@@ -9,7 +9,7 @@ use vigil_types::identity::IdentityAccess;
 use crate::overlord::Cmd;
 
 use super::super::{ApiError, ApiResult, AppState, auth::Caller, ok};
-use super::{Body, NamesQuery, json_body, parse_names};
+use super::{Body, NamesQuery, Params, json_body, parse_names, query_params};
 
 #[utoipa::path(
     get, path = "/v1/checks",
@@ -19,19 +19,21 @@ use super::{Body, NamesQuery, json_body, parse_names};
     params(NamesQuery),
     responses(
         (status = 200, description = "List of check status entries.", body = Vec<CheckInfo>),
+        (status = 400, description = "Unknown query parameter."),
         (status = 500, description = "Internal error."),
     )
 )]
 pub(crate) async fn list_checks(
     caller: Caller,
     State(s): State<AppState>,
-    Query(q): Query<NamesQuery>,
+    q: Params<NamesQuery>,
 ) -> ApiResult<Vec<CheckInfo>> {
     // Open: only names and up/down state, needed by unauthenticated
     // Kubernetes probes (httpGet cannot send credentials).
     caller
         .require(IdentityAccess::Open)
         .map_err(ApiError::forbidden_from)?;
+    let q = query_params(q)?;
     let (tx, rx) = oneshot::channel();
     s.overlord
         .tx

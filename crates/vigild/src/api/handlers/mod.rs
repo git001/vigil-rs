@@ -17,7 +17,8 @@ pub(super) mod system;
 // ---------------------------------------------------------------------------
 
 use axum::Json;
-use axum::extract::rejection::JsonRejection;
+use axum::extract::Query;
+use axum::extract::rejection::{JsonRejection, QueryRejection};
 use serde::Deserialize;
 
 use super::ApiError;
@@ -35,7 +36,20 @@ pub(super) fn json_body<T>(body: Body<T>) -> Result<T, ApiError> {
         .map_err(|e| ApiError::with_status(e.status(), anyhow::anyhow!(e.body_text())))
 }
 
+/// Query parameters, taken as a `Result` for the same reason as [`Body`].
+/// Unwrap them with [`query_params`].
+pub(super) type Params<T> = Result<Query<T>, QueryRejection>;
+
+/// The parameters of [`Params`], or `400` as an error envelope (unknown
+/// parameter or invalid value).
+pub(super) fn query_params<T>(query: Params<T>) -> Result<T, ApiError> {
+    query
+        .map(|Query(q)| q)
+        .map_err(|e| ApiError::bad_request(anyhow::anyhow!(e.body_text())))
+}
+
 #[derive(Deserialize, utoipa::IntoParams)]
+#[serde(deny_unknown_fields)]
 pub(super) struct NamesQuery {
     /// Comma-separated list of names to filter by. Omit for all.
     names: Option<String>,

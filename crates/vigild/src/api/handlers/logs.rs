@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use axum::{
     body::Body,
-    extract::{Query, State, rejection::QueryRejection},
+    extract::State,
     http::header,
     response::{
         IntoResponse, Response,
@@ -21,7 +21,7 @@ use vigil_types::api::LogEntry;
 use vigil_types::identity::IdentityAccess;
 
 use super::super::{ApiError, AppState, auth::Caller, ok};
-use super::split_list;
+use super::{Params, query_params, split_list};
 
 /// Lines `GET /v1/logs` returns when `n` is not given.
 const DEFAULT_TAIL: usize = 100;
@@ -77,14 +77,12 @@ pub(crate) struct FollowQuery {
 pub(crate) async fn get_logs(
     caller: Caller,
     State(s): State<AppState>,
-    query: Result<Query<LogsQuery>, QueryRejection>,
+    q: Params<LogsQuery>,
 ) -> Result<Response, ApiError> {
     caller
         .require(IdentityAccess::Read)
         .map_err(ApiError::forbidden_from)?;
-    // Checked after the access check, so a caller without access learns
-    // nothing about the parameters.
-    let Query(q) = query.map_err(|e| ApiError::bad_request(anyhow::anyhow!(e.body_text())))?;
+    let q = query_params(q)?;
     let services = split_list(q.services.as_deref());
     let n = q.n.unwrap_or(DEFAULT_TAIL);
     if q.follow.unwrap_or(false) {
@@ -145,13 +143,12 @@ fn wanted(services: &[String], entry: &LogEntry) -> bool {
 pub(crate) async fn follow_logs(
     caller: Caller,
     State(s): State<AppState>,
-    query: Result<Query<FollowQuery>, QueryRejection>,
+    q: Params<FollowQuery>,
 ) -> Result<Response, ApiError> {
     caller
         .require(IdentityAccess::Read)
         .map_err(ApiError::forbidden_from)?;
-    // Checked after the access check, as in `get_logs`.
-    let Query(q) = query.map_err(|e| ApiError::bad_request(anyhow::anyhow!(e.body_text())))?;
+    let q = query_params(q)?;
     let services = split_list(q.services.as_deref());
     let format = q.format.unwrap_or_default();
     let rx = s.log_store.subscribe();

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 vigil-rs contributors
 
-use axum::extract::{Query, State};
+use axum::extract::State;
 use tokio::sync::oneshot;
 use vigil_types::api::AlertInfo;
 use vigil_types::identity::IdentityAccess;
@@ -9,7 +9,7 @@ use vigil_types::identity::IdentityAccess;
 use crate::overlord::Cmd;
 
 use super::super::{ApiError, ApiResult, AppState, auth::Caller, ok};
-use super::{NamesQuery, parse_names};
+use super::{NamesQuery, Params, parse_names, query_params};
 
 #[utoipa::path(
     get, path = "/v1/alerts",
@@ -19,6 +19,7 @@ use super::{NamesQuery, parse_names};
     params(NamesQuery),
     responses(
         (status = 200, description = "List of alert entries.", body = Vec<AlertInfo>),
+        (status = 400, description = "Unknown query parameter."),
         (status = 403, description = "Forbidden."),
         (status = 500, description = "Internal error."),
     )
@@ -26,11 +27,12 @@ use super::{NamesQuery, parse_names};
 pub(crate) async fn list_alerts(
     caller: Caller,
     State(s): State<AppState>,
-    Query(q): Query<NamesQuery>,
+    q: Params<NamesQuery>,
 ) -> ApiResult<Vec<AlertInfo>> {
     caller
         .require(IdentityAccess::Read)
         .map_err(ApiError::forbidden_from)?;
+    let q = query_params(q)?;
     let (tx, rx) = oneshot::channel();
     s.overlord
         .tx

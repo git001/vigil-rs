@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 vigil-rs contributors
 
-use axum::extract::{Query, State};
+use axum::extract::State;
 use vigil_types::identity::{
     AddIdentitiesRequest, Identity, IdentityAccess, RemoveIdentitiesRequest,
 };
 
 use super::super::{ApiError, ApiResult, AppState, auth::Caller, ok};
-use super::{Body, NamesQuery, json_body, parse_names};
+use super::{Body, NamesQuery, Params, json_body, parse_names, query_params};
 
 #[utoipa::path(
     get, path = "/v1/identities",
@@ -17,6 +17,7 @@ use super::{Body, NamesQuery, json_body, parse_names};
     params(NamesQuery),
     responses(
         (status = 200, description = "List of identities.", body = Vec<Identity>),
+        (status = 400, description = "Unknown query parameter."),
         (status = 403, description = "Forbidden."),
         (status = 500, description = "Internal error."),
     )
@@ -24,11 +25,12 @@ use super::{Body, NamesQuery, json_body, parse_names};
 pub(crate) async fn list_identities(
     caller: Caller,
     State(s): State<AppState>,
-    Query(q): Query<NamesQuery>,
+    q: Params<NamesQuery>,
 ) -> ApiResult<Vec<Identity>> {
     caller
         .require(IdentityAccess::Admin)
         .map_err(ApiError::forbidden_from)?;
+    let q = query_params(q)?;
     ok(s.identity_store.list(&parse_names(&q)).await)
 }
 

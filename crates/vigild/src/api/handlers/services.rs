@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 vigil-rs contributors
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use tokio::sync::oneshot;
 use vigil_types::api::{ChangeInfo, ServiceInfo, ServicesAction};
 use vigil_types::identity::IdentityAccess;
@@ -9,7 +9,7 @@ use vigil_types::identity::IdentityAccess;
 use crate::overlord::Cmd;
 
 use super::super::{ApiError, ApiResult, AppState, auth::Caller, ok};
-use super::{Body, NamesQuery, json_body, parse_names};
+use super::{Body, NamesQuery, Params, json_body, parse_names, query_params};
 
 #[utoipa::path(
     get, path = "/v1/services",
@@ -19,6 +19,7 @@ use super::{Body, NamesQuery, json_body, parse_names};
     params(NamesQuery),
     responses(
         (status = 200, description = "List of service status entries.", body = Vec<ServiceInfo>),
+        (status = 400, description = "Unknown query parameter."),
         (status = 403, description = "Forbidden."),
         (status = 500, description = "Internal error."),
     )
@@ -26,11 +27,12 @@ use super::{Body, NamesQuery, json_body, parse_names};
 pub(crate) async fn list_services(
     caller: Caller,
     State(s): State<AppState>,
-    Query(q): Query<NamesQuery>,
+    q: Params<NamesQuery>,
 ) -> ApiResult<Vec<ServiceInfo>> {
     caller
         .require(IdentityAccess::Read)
         .map_err(ApiError::forbidden_from)?;
+    let q = query_params(q)?;
     let (tx, rx) = oneshot::channel();
     s.overlord
         .tx
