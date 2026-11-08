@@ -130,11 +130,11 @@ pub struct ServiceConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logs_forward: Option<LogsForward>,
     /// Unix socket path to connect to and push log entries (ndjson by default).
-    /// Mutually exclusive with `logs_push_addr`.
+    /// May be combined with `logs_push_addr`; entries then go to both.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logs_push_socket: Option<String>,
     /// TCP address (`host:port`) to connect to and push log entries (ndjson by default).
-    /// Mutually exclusive with `logs_push_socket`.
+    /// May be combined with `logs_push_socket`; entries then go to both.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logs_push_addr: Option<String>,
     /// Format for pushed log lines. Default: `ndjson`.
