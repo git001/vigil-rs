@@ -12,6 +12,11 @@ use super::dependencies::{dependency_warnings, validate_dependency_names};
 use crate::duration::parse_field;
 
 pub(super) fn validate_service(plan: &Plan, name: &str, svc: &ServiceConfig) -> anyhow::Result<()> {
+    // Checked on the merged plan: a layer may leave `command` to an earlier one.
+    anyhow::ensure!(
+        svc.command.as_deref().is_some_and(|c| !c.trim().is_empty()),
+        "command is required"
+    );
     EnvPolicy::for_service(svc)?;
     if redundant_lists(svc.pass_env, &svc.pass_env_glob, &svc.pass_env_regex) {
         tracing::warn!(service = %name, "{REDUNDANT_LISTS}");

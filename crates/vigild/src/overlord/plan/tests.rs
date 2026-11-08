@@ -112,6 +112,30 @@ fn load_err(yaml: &str) -> String {
 }
 
 #[test]
+fn command_is_required_after_merging() {
+    for svc in ["startup: disabled", "command: \"  \""] {
+        let err = load_err(&format!("services:\n  app:\n    {svc}\n"));
+        assert!(
+            err.contains("service \"app\": command is required"),
+            "{err}"
+        );
+    }
+    // A later layer may leave the command to an earlier one.
+    let dir = TempDir::new().unwrap();
+    write(
+        &dir,
+        "001.yaml",
+        "services:\n  app:\n    command: sleep 9\n",
+    );
+    write(
+        &dir,
+        "002.yaml",
+        "services:\n  app:\n    override: merge\n    startup: enabled\n",
+    );
+    load_plan(dir.path()).unwrap();
+}
+
+#[test]
 fn dependency_names_must_be_other_services() {
     for (key, want) in [
         ("after: [dbb]", "after: \"dbb\" is not a service"),
