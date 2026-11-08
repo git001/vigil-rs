@@ -16,7 +16,7 @@ vigil [FLAGS] <COMMAND>
 | `--path-prefix <DIR>` | `VIGIL_PATH_PREFIX` | `/run/vigil` | Runtime directory of vigild (same variable as for vigild). The socket is `<path-prefix>/vigild.sock` unless `--socket` is set. |
 | `--socket <PATH>` | `VIGIL_SOCKET` | `<path-prefix>/vigild.sock` | Unix socket path. Ignored when `--url` is set. |
 | `--socket-uid <UID>` | `VIGIL_SOCKET_UID` | — | Also trust a daemon socket owned by this UID. By default `vigil` only talks to a vigild running as root or as your own UID and refuses any other listener. |
-| `--url <URL>` | `VIGIL_URL` | — | HTTP or HTTPS base URL (e.g. `http://host:8080`, `https://host:8443`). Overrides `--socket`. |
+| `--url <URL>` | `VIGIL_URL` | — | Base URL of vigild's HTTPS API (e.g. `https://host:8443`). Overrides `--socket`. vigild has no plain HTTP listener; `http://` only makes sense through a proxy or tunnel that adds TLS. |
 | `-k`, `--insecure` | `VIGIL_INSECURE` | false | Skip TLS certificate verification. Only effective with `--url https://...`. The variable takes `true` or `false`. |
 | `--cacert <PATH>` | `VIGIL_CACERT` | — | PEM file with CA certificate(s) to trust for the vigild server TLS connection. Supports chains. Only effective with `--url https://...` |
 
@@ -40,8 +40,8 @@ vigil [FLAGS] <COMMAND>
 
 | Flag | Description |
 |---|---|
-| `--help` | Print help. |
-| `--version` | Print version. |
+| `-h`, `--help` | Print help. |
+| `-V`, `--version` | Print version. |
 
 ### Transport selection
 
@@ -54,14 +54,13 @@ vigil services list
 # Explicit socket path
 vigil --socket /run/vigil/vigild.sock services list
 
-# HTTP URL (no TLS)
-vigil --url http://10.0.0.5:8080 services list
+# HTTPS with self-signed cert (skip verification); without credentials only
+# the open endpoints work (checks, health, system-info)
+vigil --url https://10.0.0.5:8443 --insecure checks list
 
-# HTTPS with self-signed cert (skip verification)
-vigil --url https://10.0.0.5:8443 --insecure services list
-
-# HTTPS with a trusted server CA
-vigil --url https://vigild.internal:8443 --cacert /etc/vigil/ca.pem services list
+# HTTPS with a trusted server CA and Basic Auth
+vigil --url https://vigild.internal:8443 --cacert /etc/vigil/ca.pem \
+      --user deploy:secret services list
 
 # HTTP Basic Auth
 vigil --url https://10.0.0.5:8443 --insecure --user deploy:secret services list
@@ -73,7 +72,7 @@ vigil --url https://10.0.0.5:8443 --insecure \
       services list
 
 # HTTPS through a corporate MITM proxy
-vigil --url https://vigild.internal:8443 \
+vigil --url https://vigild.internal:8443 --user deploy:secret \
       --proxy http://proxy.corp:3128 \
       --proxy-cacert /etc/corp-ca.pem \
       --no-proxy "localhost,internal.corp,192.168.0.0/16" \
@@ -100,11 +99,12 @@ vigil system-info
 Example output:
 
 ```
-version:       1.0.0
-boot-id:       a1b2c3d4-...
-http-address:  /run/vigil/vigild.sock
-https-address: 0.0.0.0:8443
+version:      4.0.0
+boot-id:      77984f0e-1f78-421b-b941-dc08b61f45d0
+http-address: /run/vigil/vigild.sock
 ```
+
+With `--tls-addr` an `https-address` line follows.
 
 > For a richer status view including uptime, use `vigil vigild status`.
 
@@ -151,6 +151,9 @@ before autostart starts it (`waiting for db`).
 | `backoff` | Waiting before the next restart attempt |
 | `error` | Gave up: the backoff limit was reached, or the process could not be started (for example an unknown user) |
 | `done` | A `type: oneshot` service finished successfully |
+
+A service that is being stopped still shows `active` until its process is
+gone.
 
 #### `services start [NAME...]`
 
@@ -224,13 +227,23 @@ vigil checks list myapp-alive
 Example output:
 
 ```
-Check                    Level    Status Failures   Next run   Last error
-------------------------------------------------------------------------------------------
-myapp-alive              alive    up     0/3        7s
-postgres-ready           ready    down   3/3        2s         exit status 2: localhost:5432 - no response
+Check                    Level    Status   Failures   Next run   Last error
+--------------------------------------------------------------------------------------------
+myapp-alive              alive    up       0/3        7s
+postgres-ready           ready    down     3/3        2s         exit status 2: localhost:5432 - no response
+debug-probe              alive    inactive 0/3        -
 ```
 
-**Status values:** `up` (healthy) | `down` (failed `threshold` times)
+**Status values:**
+
+| Status | Meaning |
+|---|---|
+| `up` | Healthy |
+| `down` | Failed `threshold` times in a row |
+| `inactive` | `startup: disabled` (the default for checks): the check does not run. `vigil checks run` still runs it once |
+
+**Next run:** time until the next run; `pending` during the initial `delay`,
+`-` for an inactive check.
 
 **Last error:** why the last run failed, until a run passes: the first line,
 cut to 60 characters. `GET /v1/checks` has the full text (`last-error`). See
@@ -259,8 +272,8 @@ failures 0/3)`), 1 when it failed or does not exist.
 ### `logs [SERVICE...] [-n N] [-f]`
 
 Show recent log output from services. Output is drawn from the in-memory
-log ring buffer; live streaming is backed by vigild's SSE endpoint
-(`GET /v1/logs/follow`).
+log ring buffer (`GET /v1/logs`); `-f` then streams new lines from
+`GET /v1/logs/follow` (SSE).
 
 ```bash
 vigil logs                      # last 100 lines, all services
@@ -273,13 +286,14 @@ vigil logs -f myapp sidecar     # follow specific services
 
 | Flag | Description |
 |---|---|
-| `-n <N>` | Number of buffered lines to show (default: 100) |
-| `-f`, `--follow` | Subscribe to the live SSE stream after showing buffered lines. |
+| `-n`, `--lines <N>` | Number of buffered lines to show (default: 100) |
+| `-f`, `--follow` | Stream new lines after showing the buffered ones, until Ctrl+C. |
 
-Each line is formatted as:
+Each line is formatted as (UTC):
 
 ```
-HH:MM:SS.mmm [service-name] [stdout|stderr] message
+2026-11-08 21:57:22.412 [web] [stdout] started
+2026-11-08 21:57:22.413 [job] [stderr] oops
 ```
 
 > Services with `logs-forward: passthrough` bypass the ring buffer
@@ -314,6 +328,35 @@ After replan:
 
 ---
 
+### `alerts`
+
+#### `alerts list [NAME...]`
+
+List the alerts of the plan, the status of the checks they watch, and what
+they are subscribed to (`GET /v1/alerts`).
+
+```bash
+vigil alerts list
+vigil alerts list ops-hook
+```
+
+Example output:
+
+```
+Alert                    Format         Status   On
+----------------------------------------------------------------------
+ops-hook                 webhook        down     web-alive, service:web
+audit                    cloudevents    unknown  vigild:layers
+```
+
+**Status:** `down` when one of the watched checks is down, `unknown` when
+none of them has reported yet (or the alert watches no check), otherwise
+`up`. **On:** the checks (`on-check`), services (`service:NAME`) and
+vigild events (`vigild:EVENT`) the alert fires on. See
+[Alerts](configuration.md#alerts).
+
+---
+
 ### `vigild`
 
 Control the vigild daemon itself.
@@ -329,8 +372,8 @@ vigil vigild status
 Example output:
 
 ```
-version:      1.0.0
-boot-id:      a1b2c3d4-e5f6-7890-abcd-ef1234567890
+version:      4.0.0
+boot-id:      77984f0e-1f78-421b-b941-dc08b61f45d0
 uptime:       0d 2h 15m 43s
 http-address: /run/vigil/vigild.sock
 ```
@@ -366,13 +409,15 @@ Manage named principals for the access control system.
 
 **Access levels** (least → most privileged):
 
-| Level | Permissions |
-|-------|-------------|
-| `open` | No auth required — system-info and checks endpoints |
-| `metrics` | `GET /v1/metrics` only |
-| `read` | All `GET` endpoints |
-| `write` | `read` + service/check control (start, stop, restart) |
-| `admin` | Full access including identity management |
+Each level includes everything of the levels above it.
+
+| Level | Adds |
+|-------|------|
+| `open` | `GET /v1/checks`, `/v1/health`, `/v1/system-info`, `/docs`, `/openapi.json` — no credentials needed |
+| `metrics` | `GET /v1/metrics` |
+| `read` | The other `GET` endpoints: services, logs, alerts, changes |
+| `write` | Changes: service actions, `replan`, signals, `checks/refresh` |
+| `admin` | `POST /v1/vigild` (stop, restart) and `/v1/identities` (list, add, remove) |
 
 **Bootstrap mode:** While no identity was added over the API, root and
 vigild's own UID get `admin` over the Unix socket, so the first identity can
@@ -403,7 +448,8 @@ ops-user                 admin    local(uid=1000)          api
 
 #### `identities add-local <NAME> [--access LEVEL] [--uid UID]`
 
-Add or update a local (Unix-socket UID) identity.
+Add or update a local (Unix-socket UID) identity. `--access` defaults to
+`read`; without `--uid` any local user matches.
 
 ```bash
 # Allow any local user with write access
@@ -438,6 +484,8 @@ vigil --url https://vigild.example.com:8443 --insecure \
 
 #### `identities remove <NAME...>`
 
+At least one name is required.
+
 ```bash
 vigil identities remove ci-bot
 vigil identities remove ci-bot ops-user
@@ -448,55 +496,77 @@ vigil identities remove ci-bot ops-user
 ## `vigil-log-relay`
 
 `vigil-log-relay` is a standalone binary that reads ndjson from a source and
-forwards it line-by-line to a TCP sink (Filebeat, Fluent Bit, Logstash, …).
-It is typically supervised by `vigild` as a regular service.
+forwards it line by line to a TCP sink (Filebeat, Fluent Bit, Logstash, …)
+or to stdout. It is typically supervised by `vigild` as a regular service;
+see [Logging](logging.md) for complete setups.
 
-### Source flags (mutually exclusive)
+Every option can also be set with the environment variable shown. Boolean
+variables take `true` or `false`. A repeatable regex option takes one regex
+from its variable; combine several with `|`.
 
-| Flag | Description |
-|---|---|
-| `--source-socket PATH` | Connect to a Unix-domain socket |
-| `--source-url URL` | Fetch from an HTTP/HTTPS URL |
-| `--kubernetes` | Stream pod logs via the Kubernetes API (in-cluster) |
+### Source (exactly one)
 
-If none is given, `--source-socket /run/vigil/vigild.sock` is used as default.
-
-### Source path
-
-| Flag | Default | Description |
+| Flag | Env var | Description |
 |---|---|---|
-| `--source-path PATH` | `/v1/logs/follow?format=ndjson` | HTTP path appended to the socket/URL base |
+| `--source-socket PATH` | `SOURCE_SOCKET` | Read the stream over a Unix socket, e.g. vigild's `<path-prefix>/vigild.sock` |
+| `--source-url URL` | `SOURCE_URL` | Read the stream from an HTTP(S) URL, e.g. `https://vigild:8443/v1/logs/follow?format=ndjson` |
+| `--kubernetes` | `SOURCE_KUBERNETES` | Stream the logs of Running pods via the Kubernetes API |
 
-### TCP sink
+There is no default source: the relay exits with `specify exactly one
+source: --kubernetes, --source-url, or --source-socket` when none or more
+than one is given.
 
-| Flag | Default | Description |
+| Flag | Env var | Default | Description |
+|---|---|---|---|
+| `--source-path PATH` | `SOURCE_PATH` | `/v1/logs/follow?format=ndjson` | HTTP path requested over `--source-socket` (only there; `--source-url` carries its own path) |
+
+### Source connection (`--source-url`, `--source-socket`)
+
+| Flag | Env var | Default | Description |
+|---|---|---|---|
+| `--source-connect-timeout MS` | `SOURCE_CONNECT_TIMEOUT` | `10000` | TCP connect timeout (`0` = none) |
+| `--source-read-timeout MS` | `SOURCE_READ_TIMEOUT` | `0` | Reconnect when no data arrives for this long (`0` = disabled) |
+| `--source-idle-timeout MS` | `SOURCE_IDLE_TIMEOUT` | `0` | Reconnect when no complete line arrives for this long (`0` = disabled); detects hung streams |
+| `--source-keepalive-interval SECS` | `SOURCE_KEEPALIVE_INTERVAL` | `0` | TCP keepalive: seconds between probes (`0` = off); 3 unanswered probes close the connection |
+| `--source-keepalive-timeout SECS` | `SOURCE_KEEPALIVE_TIMEOUT` | `0` | Seconds of silence before the first probe (`0` = 3 × interval) |
+
+### Source TLS and authentication (`--source-url` only)
+
+| Flag | Env var | Description |
 |---|---|---|
-| `--tcp-sink-host HOST` | `127.0.0.1` | Destination host |
-| `--tcp-sink-port PORT` | `5170` | Destination port |
+| `--source-cacert PATH` | `SOURCE_CACERT` | PEM CA certificate(s) to verify the source |
+| `--source-insecure` | `SOURCE_INSECURE` | Skip certificate verification (e.g. vigild's self-signed certificate) |
+| `--source-user-file PATH` | `SOURCE_USER_FILE` | File with Basic Auth credentials `user:password`, read on every (re)connect so a rotated Secret is picked up. Use a vigild identity of access `read` |
+| `--source-cert PATH` | `SOURCE_CERT` | PEM client certificate for mTLS (requires `--source-key`) |
+| `--source-key PATH` | `SOURCE_KEY` | PEM private key for `--source-cert` |
 
-### Line filters
+These options are rejected with `--kubernetes` (TLS and authentication for
+the Kubernetes API come from the kubeconfig or the ServiceAccount) and, apart
+from timeouts, with `--source-socket`.
 
-Both flags are repeatable. Evaluation: include-check first, then exclude-check.
+### Source proxy (`--source-url`, `--kubernetes`)
 
-| Flag | Description |
-|---|---|
-| `--include REGEX` | Forward line only if at least one include pattern matches |
-| `--exclude REGEX` | Drop line if any exclude pattern matches (applied after include) |
+| Flag | Env var | Description |
+|---|---|---|
+| `--source-proxy URL` | `SOURCE_PROXY` | HTTP or HTTPS proxy (overrides `HTTP_PROXY` / `HTTPS_PROXY`) |
+| `--source-proxy-insecure` | `SOURCE_PROXY_INSECURE` | Skip certificate verification of an HTTPS proxy |
+| `--source-proxy-cacert PATH` | `SOURCE_PROXY_CACERT` | PEM CA certificate(s) of the proxy |
+| `--source-no-proxy LIST` | `SOURCE_NO_PROXY` | Comma-separated hosts that bypass the proxy: hostnames, domain suffixes (`.corp`), IPv4 and IPv6 CIDRs. Only for `--source-url`; with `--kubernetes` there is one API server, so leave `--source-proxy` unset instead |
 
-```bash
-# Only forward error and warn lines, drop health-check noise
-vigil-log-relay \
-  --source-socket /tmp/vigil/vigild.sock \
-  --include '"level":"(error|warn)"' \
-  --exclude '"path":"/healthz"' \
-  --tcp-sink-host 127.0.0.1 \
-  --tcp-sink-port 5170
-```
+### Source reconnect
 
-### Kubernetes mode (`--kubernetes`)
+| Flag | Env var | Default | Description |
+|---|---|---|---|
+| `--source-reconnect-delay MS` | `SOURCE_RECONNECT_DELAY` | `500` | First retry delay; doubles each retry. Triggers: connection refused, timeout, HTTP non-2xx, read error. A clean end of the stream resets it |
+| `--source-reconnect-max MS` | `SOURCE_RECONNECT_MAX` | `30000` | Retry delay ceiling |
+| `--source-reconnect-retries N` | `SOURCE_RECONNECT_RETRIES` | `0` | Consecutive failures before the relay exits (`0` = unlimited); vigild then restarts it via `on-failure: restart` |
 
-Pod logs are streamed via the Kubernetes Watch API. vigil-log-relay must run
-inside the cluster (uses the in-cluster service account token).
+### Kubernetes (`--kubernetes`)
+
+The relay uses a kubeconfig (`KUBECONFIG` or `~/.kube/config`) when there is
+one, otherwise the in-cluster ServiceAccount. It needs `get`, `list` and
+`watch` on `pods` and `get` on `pods/log` in the namespace; see
+`examples/kubernetes-pod-logs/k8s/rbac.yaml`.
 
 Each log line is emitted as an ndjson object:
 
@@ -504,27 +574,25 @@ Each log line is emitted as an ndjson object:
 {"timestamp":"2026-03-21T21:09:29.722Z","namespace":"my-ns","pod":"myapp-abc","stream":"stdout","message":"..."}
 ```
 
-When streaming a specific container (`--container NAME`, `,`-list, or `all`),
-a `container` field is added:
+With `--container` a `container` field is added:
 
 ```json
 {"timestamp":"2026-03-21T21:09:29.722Z","namespace":"my-ns","pod":"myapp-abc","container":"sidecar","stream":"stdout","message":"..."}
 ```
 
-The `container` field is **omitted** when no `--container` flag is given (K8s
-default container). `stream` is `stdout` or `stderr` when the API server
-accepts the `stream=` parameter, otherwise `output` (one combined stream: older
-clusters, the feature gate is off, or `--no-stream-param` is set).
+`stream` is `stdout` or `stderr` when the API server accepts the `stream=`
+parameter, otherwise `output` (one combined stream: older clusters, the
+feature gate is off, or `--no-stream-param` is set).
 
 | Flag | Env var | Default | Description |
 |---|---|---|---|
-| `--namespace NS` | `NAMESPACE` | `default` | Kubernetes namespace to watch |
+| `--namespace NS` | `NAMESPACE` | `default` | Namespace to watch |
 | `--pod-selector SELECTOR` | `POD_SELECTOR` | _(all pods)_ | Label selector, e.g. `app=myapp` |
-| `--container NAME\|all\|n1,n2,...` | `CONTAINER_SELECTOR` | _(first / annotated container)_ | Container(s) to stream. `all` streams every container listed in `pod.spec.containers`; a comma-separated list (e.g. `app,sidecar`) streams exactly those containers. Omit to let K8s pick the default container. |
-| `--tail-lines N` | `TAIL_LINES` | `0` | Lines to fetch on first connect (`0` = from start) |
-| `--since-seconds N` | `SINCE_SECONDS` | `10` | Look-back window in seconds on reconnect |
-| `--watch-interval SECS` | `WATCH_INTERVAL` | `10` | Seconds between reconcile ticks (restart finished streams) |
-| `--exclude-pod REGEX` | — | — | Skip pods whose name matches (repeatable, OR-combined) |
+| `--container NAME\|all\|n1,n2,...` | `CONTAINER_SELECTOR` | _(default container)_ | Container(s) to stream: `all`, or a comma-separated list. Omit to let Kubernetes pick the default container |
+| `--exclude-pod REGEX` | `EXCLUDE_POD` | — | Skip pods whose name matches (repeatable, OR-combined) |
+| `--tail-lines N` | `TAIL_LINES` | `0` | Emit the last N lines of each pod when its stream starts, then go live (`0` = disabled) |
+| `--since-seconds SECS` | `SINCE_SECONDS` | `10` | Start this far back on (re)connect, to cover the reconnect gap; ignored when `--tail-lines` is set |
+| `--watch-interval SECS` | `WATCH_INTERVAL` | `10` | How quickly a stream is restarted after the API server closed it (about every 5 minutes). Pods are discovered by events, not by this interval |
 | `--max-log-requests N` | `MAX_LOG_REQUESTS` | `0` | Max concurrent pod log streams (`0` = unlimited) |
 | `--no-stream-param` | `NO_STREAM_PARAM` | `false` | Never try the `stream=Stdout/Stderr` query parameter; use the combined stream |
 
@@ -535,36 +603,58 @@ K8s ≥ 1.32 the relay tries it first; when the API server answers
 `"stream: Forbidden: may not be specified"`, it logs one warning and uses the
 combined stream for all pods from then on. The flag skips that first attempt.
 
-### Source proxy
+### Line filters
 
-Applies to `--source-url` mode. The `--source-no-proxy` flag is **not** available
-for `--kubernetes` mode (proxy settings for the Kubernetes client are handled
-separately by the kube library).
+Both flags are repeatable (OR-combined). A line is forwarded when it matches
+an include pattern (or none is given) and no exclude pattern.
+
+| Flag | Env var | Description |
+|---|---|---|
+| `--include REGEX` | `INCLUDE` | Forward only lines that match |
+| `--exclude REGEX` | `EXCLUDE` | Drop lines that match (applied after `--include`) |
+
+With `--kubernetes` the patterns are matched against the log message; with
+`--source-url` and `--source-socket` against the raw ndjson line as vigild
+sends it:
+
+```bash
+# Only forward lines whose message contains ERROR or WARN
+vigil-log-relay \
+  --source-socket /tmp/vigil/vigild.sock \
+  --include '"message":"[^"]*(ERROR|WARN)' \
+  --tcp-sink-host 127.0.0.1 \
+  --tcp-sink-port 5170
+```
+
+The patterns use Rust regex syntax.
+
+### Sink
 
 | Flag | Env var | Default | Description |
 |---|---|---|---|
-| `--source-proxy URL` | `SOURCE_PROXY` | — | HTTP or HTTPS proxy URL for the source connection. |
-| `--source-proxy-cacert PATH` | `SOURCE_PROXY_CACERT` | — | PEM CA cert (or chain) to verify the proxy's TLS. |
-| `--source-no-proxy LIST` | `SOURCE_NO_PROXY` | — | Comma-separated entries that bypass the proxy. Supports hostnames, domain suffixes, IPv4 CIDRs (`10.0.0.0/8`), and IPv6 CIDRs (`fd00::/8`). |
-
-### Reconnect / backoff
-
-| Flag | Default | Description |
-|---|---|---|
-| `--reconnect-delay MS` | `500` | Initial backoff delay in milliseconds |
-| `--reconnect-max MS` | `30000` | Backoff ceiling in milliseconds |
-| `--reconnect-retries N` | `0` | Max consecutive failures before exit (`0` = unlimited) |
+| `--stdout-sink` | `STDOUT_SINK` | `false` | Write the lines to stdout instead of TCP; the relay's own log goes to stderr |
+| `--tcp-sink-host HOST` | `TCP_SINK_HOST` | `127.0.0.1` | TCP sink host |
+| `--tcp-sink-port PORT` | `TCP_SINK_PORT` | `5170` | TCP sink port |
+| `--dest-connect-timeout MS` | `DEST_CONNECT_TIMEOUT` | `10000` | TCP connect timeout (`0` = none) |
+| `--dest-read-timeout MS` | `DEST_READ_TIMEOUT` | `0` | Reconnect when a write stalls this long (`0` = disabled) |
+| `--dest-idle-timeout MS` | `DEST_IDLE_TIMEOUT` | `0` | Reconnect when nothing was written for this long (`0` = disabled) |
+| `--dest-keepalive-interval SECS` | `DEST_KEEPALIVE_INTERVAL` | `0` | TCP keepalive: seconds between probes (`0` = off) |
+| `--dest-keepalive-timeout SECS` | `DEST_KEEPALIVE_TIMEOUT` | `0` | Seconds of silence before the first probe (`0` = 3 × interval) |
+| `--dest-reconnect-delay MS` | `DEST_RECONNECT_DELAY` | `500` | First reconnect delay; doubles each retry |
+| `--dest-reconnect-max MS` | `DEST_RECONNECT_MAX` | `30000` | Reconnect delay ceiling |
 
 ### Health check endpoint
 
-| Flag | Default | Description |
-|---|---|---|
-| `--healthcheck HOST:PORT` | `127.0.0.1:9091` | Listen address for `GET /healthz`; port `0` picks a free port (logged at startup). The relay does not start if the address cannot be bound |
-| `--healthcheck-max-age SECS` | `30` | Seconds without a tick before `/healthz` returns `503 stale` |
+| Flag | Env var | Default | Description |
+|---|---|---|---|
+| `--healthcheck HOST:PORT` | `HEALTHCHECK` | `127.0.0.1:9091` | Listen address for `GET /healthz` (`200 ok` / `503 stale`); port `0` picks a free port (logged at startup). The relay does not start if the address cannot be bound |
+| `--healthcheck-max-age SECS` | `HEALTHCHECK_MAX_AGE` | `30` | Seconds without a tick before `/healthz` returns 503. Kubernetes mode ticks once per watch cycle (keep it ≥ 3 × `--watch-interval`); the HTTP modes tick every 30 s |
 
-### Other
+### Logging and other flags
 
-| Flag | Description |
-|---|---|
-| `--log-format text\|json` | Log output format (default: `text`) |
-| `--version` | Print version and exit |
+| Flag | Env var | Default | Description |
+|---|---|---|---|
+| `--log-format text\|json` | `VIGIL_LOG_FORMAT` | `text` | Format of the relay's own log |
+| `--debug` | `RELAY_DEBUG` | `false` | Debug logging with timestamps |
+| `-h`, `--help` | | | Print help |
+| `-V`, `--version` | | | Print version |
