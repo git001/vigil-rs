@@ -3,12 +3,8 @@
 **vigil** is a service supervisor and container init daemon written in Rust.
 It manages multiple processes inside a single container — starting, stopping,
 restarting, and health-checking them — and exposes a REST API over a Unix
-socket for programmatic control.
-
-> vigil-rs is inspired by the layer-based service model pioneered by
-> [Canonical Pebble](https://github.com/canonical/pebble), implemented from
-> scratch in Rust with native PID 1 / container-init support and an extended
-> stop-signal model.
+socket (and optionally HTTPS) for programmatic control. It runs unprivileged,
+e.g. on OpenShift with a random UID.
 
 ---
 
@@ -18,21 +14,30 @@ socket for programmatic control.
 |---|---|
 | **PID 1 / zombie reaper** | Safe to run as container entrypoint; reaps orphaned child processes automatically |
 | **YAML layer config** | Declarative service & check definitions; multiple layers are merged in order |
-| **Service supervision** | Start, stop, restart with exponential backoff |
+| **Service supervision** | Start, stop, restart with exponential backoff; `healthy-time` resets the backoff |
+| **Oneshot jobs and cron schedules** | `type: oneshot` for migrations and jobs, `schedule` (cron, with time zone) instead of a cron daemon |
+| **Readiness** | `ready: process \| notify \| check`: dependents start when a service is ready (sd_notify `READY=1` or a passing check) |
 | **Custom stop signal** | Per-service `stop-signal` (SIGTERM, SIGUSR1, SIGHUP, …) + `kill-delay` |
 | **Startup ordering** | `after:` / `before:` / `requires:` dependency graph |
-| **Health checks** | HTTP, TCP, and exec checks with configurable period/timeout/threshold/delay |
+| **Health checks** | HTTP, TCP, and exec checks with configurable period/timeout/threshold/delay; levels `alive` and `ready` |
+| **`/v1/health`** | One endpoint for Kubernetes liveness and readiness probes, no credentials needed (`?level=alive\|ready`) |
 | **on-check-failure** | Automatic service restart (or shutdown) when a check goes down |
-| **Alerting** | HTTP(S) notifications on check state transitions — Alertmanager, CloudEvents, OTLP logs, or generic webhook; `env:VAR` values for `url`/headers/labels/proxy under the same `pass-env*` rules as services, checked when loading (an unset or not allowed variable is an error); proxy support; configurable retry with backoff; `body-template` uses [minijinja](https://github.com/mitsuhiko/minijinja) (Jinja2-compatible) for custom webhook payloads |
+| **Alerting** | HTTP(S) notifications on check state transitions, service failures (`on-service`) and invalid layers (`on-vigild`) — Alertmanager, CloudEvents, OTLP logs, or generic webhook; `env:VAR` values for `url`/headers/labels/proxy under the same `pass-env*` rules as services, checked when loading (an unset or not allowed variable is an error); proxy support; configurable retry with backoff; `body-template` uses [minijinja](https://github.com/mitsuhiko/minijinja) (Jinja2-compatible) for custom webhook payloads |
 | **on-success / on-failure** | Per-service exit policies: `restart`, `ignore`, `shutdown`, `failure-shutdown`, `success-shutdown` |
 | **Exit-code propagation** | vigild exits with the managed service's actual exit code |
 | **Log streaming** | stdout/stderr captured per service; `vigil logs` and SSE follow (`vigil logs -f`) |
+| **Log push** | `logs-push-socket` / `logs-push-addr`: vigild streams ndjson to a collector (Filebeat, Fluent Bit, …) |
+| **vigil-log-relay** | Forwards vigild's log stream or Kubernetes pod logs to a TCP sink |
+| **Environment and secrets** | Services get only a minimal environment unless `pass-env*` allows more; minijinja templates (`{{ file() }}`, `{{ mem() }}`, `{{ cpu() }}`) and `env-file` in `command` and `environment` |
+| **watch-files** | Restart or signal a service when a mounted Secret or config file changes |
+| **Prometheus metrics** | `GET /v1/metrics` (OpenMetrics): services, checks, health, alerts, layer reloads |
 | **REST API** | Full HTTP API over Unix socket; Swagger UI at `/docs` (assets loaded from unpkg.com — requires internet access; use `/openapi.json` in air-gapped environments) |
 | **OpenAPI** | Auto-generated spec via utoipa; served at `/openapi.json` |
 | **TLS listener** | Optional HTTPS API (`--tls-addr`); auto-generates self-signed cert |
-| **Identity management** | Named principals with `metrics`/`read`/`write`/`admin` access levels (Unix UID, HTTP Basic, TLS client certificate); defined in layer files (password hash or CA from a file, e.g. a Kubernetes Secret) or added over the API |
+| **Identity management** | Named principals with `open`/`metrics`/`read`/`write`/`admin` access levels (Unix UID, HTTP Basic, TLS client certificate); defined in layer files (password hash or CA from a file, e.g. a Kubernetes Secret) or added over the API |
 | **Signal forwarding** | SIGHUP / SIGUSR1 / SIGUSR2 forwarded to all running service process groups; `vigil services signal SIGHUP nginx` for single services |
-| **Replan** | Hot-reload layer YAML files without restarting the daemon |
+| **Replan** | Hot-reload layer YAML files without restarting the daemon; changed services restart; `--watch-layers` reloads by itself (e.g. a mounted ConfigMap) |
+| **Strict configuration** | An unknown key or invalid value in a layer file is an error that names it; nothing is silently ignored |
 | **mimalloc** | High-performance allocator enabled globally |
 
 ---
@@ -46,7 +51,7 @@ vigil-rs/
 │   ├── vigil-files/      # How all binaries read configured files (secrets, env files, certificates)
 │   ├── vigil-tls/        # TLS material for all binaries: CA bundles, cert + key, client settings
 │   ├── vigild/           # Daemon binary — axum HTTP server, overlord, service actors
-│   ├── vigil/            # CLI binary — hyper Unix-socket client
+│   ├── vigil/            # CLI binary — hyper (Unix socket) and reqwest (HTTPS) client
 │   └── vigil-log-relay/  # Standalone log forwarder — K8s pods / HTTP / Unix socket → TCP sink
 └── examples/
     ├── full-container/        # vigild + h2o (single service)
@@ -75,7 +80,10 @@ cargo build --release
 ### Run the daemon
 
 ```bash
-vigild --layers-dir /etc/vigil/layers --socket /run/vigil/vigild.sock
+vigild --layers-dir /etc/vigil/layers
+
+# Unprivileged (e.g. OpenShift): runtime files under /tmp/vigil
+vigild --layers-dir /etc/vigil/layers --path-prefix /tmp/vigil
 ```
 
 ### Use the CLI
@@ -90,14 +98,14 @@ vigil services start myservice
 vigil services restart myservice
 vigil services stop myservice
 
-# Connect via HTTP (when vigild is reachable over the network)
-vigil --url http://myhost:8080 services list
+# Same runtime directory as vigild (if not /run/vigil)
+VIGIL_PATH_PREFIX=/tmp/vigil vigil services list
 
-# Connect via HTTPS (vigild --tls-addr)
-vigil --url https://myhost:8443 services list
+# Connect via HTTPS (vigild --tls-addr); needs an identity, see TLS docs
+vigil --url https://myhost:8443 --cacert ca.pem --user deploy:secret services list
 
 # HTTPS with auto-generated self-signed cert
-vigil --url https://myhost:8443 --insecure services list
+vigil --url https://myhost:8443 --insecure --user deploy:secret services list
 ```
 
 ### API via curl
@@ -107,9 +115,9 @@ vigil --url https://myhost:8443 --insecure services list
 curl --unix-socket /run/vigil/vigild.sock http://localhost/v1/system-info
 curl --unix-socket /run/vigil/vigild.sock http://localhost/v1/services
 
-# HTTP / HTTPS
-curl http://myhost:8080/v1/services
-curl -k https://myhost:8443/v1/services
+# HTTPS: open endpoints without credentials, the rest with an identity
+curl -k https://myhost:8443/v1/health
+curl -k -u deploy:secret https://myhost:8443/v1/services
 ```
 
 ---
@@ -192,10 +200,12 @@ exec:
 vigild is designed to run as PID 1 inside a container.
 
 ```dockerfile
-ENTRYPOINT ["/usr/local/bin/vigild", \
-    "--layers-dir", "/etc/vigil/layers", \
-    "--socket",     "/run/vigil/vigild.sock"]
+ENTRYPOINT ["/usr/local/bin/vigild", "--layers-dir", "/etc/vigil/layers"]
 ```
+
+On OpenShift (random UID, `/run` not writable) set
+`ENV VIGIL_PATH_PREFIX=/tmp/vigil`; see
+[Container Setup](docs/operator-guide/container-setup.md).
 
 Interact with the running container:
 
@@ -222,11 +232,11 @@ See the [examples/](examples/) directory for complete, buildable examples.
 | HTTP check headers | ❌ | ✅ arbitrary key/value map |
 | HTTP check TLS and proxy (`tls:` / `proxy:`) | ❌ | ✅ custom CAs, client certificate, proxy |
 | Alerting (Alertmanager / CloudEvents / OTLP) | ❌ | ✅ |
-| Runtime API | ❌ | ✅ Unix-socket REST |
+| Runtime API | ❌ | ✅ REST over Unix socket and HTTPS |
 | Configuration | None (CLI args) | YAML layers |
 | Signal forwarding | ✅ | ✅ |
 | Zombie reaping | ✅ | ✅ |
-| Binary size | ~20 KB | ~10 MB |
+| Binary size | ~20 KB | ~16 MB (`vigild`, stripped) |
 
 **When to use dumb-init/tini:** You have exactly one process and only need
 zombie reaping + signal forwarding. Zero configuration overhead.
@@ -243,14 +253,14 @@ automatic restarts, and programmatic control.
 | Language | C | Rust |
 | Configuration | Directory-based (`/etc/s6-overlay/s6-rc.d/`) | YAML layers |
 | Health checks | ❌ (external tooling) | ✅ built-in |
+| Readiness | ✅ notification fd | ✅ `ready: notify \| check` |
 | HTTP check headers | ❌ | ✅ arbitrary key/value map |
 | HTTP check TLS and proxy (`tls:` / `proxy:`) | ❌ | ✅ custom CAs, client certificate, proxy |
 | Alerting (Alertmanager / CloudEvents / OTLP) | ❌ | ✅ |
-| Runtime API | ❌ | ✅ REST over Unix socket |
-| Log routing | ✅ (dedicated log daemon) | stdout/stderr → log store |
-| Dependency ordering | ✅ (`dependencies.d/`) | ✅ (`after:`) |
-| Custom stop signal | ❌ | ✅ per-service |
-| Programmatic control | ❌ | ✅ (`vigil` CLI / REST) |
+| Runtime API | ❌ (CLI tools `s6-svc`, `s6-rc`) | ✅ REST over Unix socket and HTTPS |
+| Log routing | ✅ `s6-log` per service, rotation to files | log buffer, API stream, ndjson push to collectors, `vigil-log-relay` |
+| Dependency ordering | ✅ (`dependencies.d/`) | ✅ (`after:` / `before:` / `requires:`) |
+| Custom stop signal | ✅ `down-signal` file, `timeout-kill` | ✅ `stop-signal`, `kill-delay` |
 | Used by | linuxserver.io images | - |
 
 **When to use s6-overlay:** Classic multi-service containers (nginx + cron +
@@ -262,21 +272,21 @@ from outside the container.
 
 ---
 
-### vs. supervisord
+### vs. supervisord / go-supervisord
 
-| | supervisord | vigil-rs |
-|---|---|---|
-| Language | Python | Rust |
-| Configuration | INI file | YAML layers |
-| Health checks | ❌ | ✅ |
-| HTTP check headers | ❌ | ✅ arbitrary key/value map |
-| HTTP check TLS and proxy (`tls:` / `proxy:`) | ❌ | ✅ custom CAs, client certificate, proxy |
-| Alerting (Alertmanager / CloudEvents / OTLP) | ❌ | ✅ |
-| REST API | XML-RPC | JSON over Unix socket |
-| Memory footprint | ~30 MB (Python) | ~10 MB |
-| PID 1 safe | ❌ (not designed for it) | ✅ |
-| Container-native | ❌ | ✅ |
-| Layer merging / replan | ❌ | ✅ |
+| | supervisord | go-supervisord | vigil-rs |
+|---|---|---|---|
+| Language | Python | Go | Rust |
+| Configuration | INI file (+ `[include]`) | INI file (+ `[include]`) | YAML layers, merged in order |
+| Custom stop signal | ✅ `stopsignal` | ✅ `stopsignal` | ✅ `stop-signal` |
+| Startup ordering | `priority` only | ✅ `depends_on` | ✅ `after` / `before` / `requires` |
+| Health checks | ❌ | ✅ liveness: HTTP, TCP, script; restart, stop or script on failure | ✅ HTTP / TCP / exec, levels `alive` / `ready`, `/v1/health` |
+| HTTP check headers, TLS, proxy | ❌ | headers, client cert, CA | ✅ headers, custom CAs, client certificate, proxy |
+| Alerting | via event listeners (e.g. superlance) | via event listeners | ✅ Alertmanager / CloudEvents / OTLP / webhook |
+| API | XML-RPC over HTTP (Unix socket or TCP) | XML-RPC + REST, web GUI | JSON REST over Unix socket and HTTPS, OpenAPI |
+| Prometheus metrics | ❌ | ✅ | ✅ |
+| Zombie reaping as PID 1 | ✅ `waitpid(-1)` reaps every child | ✅ | ✅ |
+| Layer merging / replan | ❌ (`reread` / `update`) | ❌ | ✅ |
 
 ---
 
@@ -323,9 +333,9 @@ behave differently:
   not supported.
 - The REST API has the same shape for `/v1/services`, `/v1/checks` and
   `/v1/system-info`, but `/v1/logs` returns a JSON envelope (with
-  `follow=true` an NDJSON stream without one), and service actions return a
-  finished change instead of an asynchronous one. Pebble clients need
-  adjusting.
+  `follow=true` an NDJSON stream without one), service actions return a
+  finished change instead of an asynchronous one, and unknown fields and
+  query parameters are rejected. Pebble clients need adjusting.
 
 ---
 
@@ -393,9 +403,9 @@ podman run --rm --network host --name vigil-hug vigil-hug
 Interact:
 
 ```bash
-podman exec vigil-hug vigil --socket /run/vigil/vigild.sock services list
-podman exec vigil-hug vigil --socket /run/vigil/vigild.sock checks list
-podman exec vigil-hug vigil --socket /run/vigil/vigild.sock logs
+podman exec vigil-hug vigil services list
+podman exec vigil-hug vigil checks list
+podman exec vigil-hug vigil logs
 ```
 
 ---
@@ -416,11 +426,12 @@ test starts a real `vigild` process (and sometimes `vigil-log-relay`) with a
 temporary layers directory and Unix socket, drives it through the HTTP API and
 the `vigil` CLI, and asserts on the responses.
 
-26 test files cover: system info, service/check/alert/identity CRUD, log
-streaming, TLS listener, reaper, mTLS, alert body templates, log-relay socket
-and URL sources, TCP reconnect, JSON log format, HTTPS transport, service
-alerts, layer watching, shutdown exit codes, identities in layer files, and
-more.
+32 test files cover: system info, service/check/alert/identity CRUD, log
+streaming and follow, TLS listener, reaper, mTLS, alert body templates,
+log-relay socket and URL sources, TCP reconnect, JSON log format, HTTPS
+transport, service alerts, layer watching, shutdown exit codes, identities in
+layer files, check failure reasons and metrics, signals, replan restarts,
+request validation, and more.
 
 ```sh
 # Run all VTest2 tests (requires VTest2 binary)
@@ -457,9 +468,9 @@ vigil-log-relay stays uncovered and the total is about 93.5 %.
 
 ### Two binaries: `vigild` and `vigil`
 
-vigil-rs deliberately splits into two separate binaries — a design choice that
-differs from Pebble, which ships a single binary that acts as both daemon and
-client depending on the subcommand used.
+vigil-rs deliberately splits into two separate binaries (plus the optional
+`vigil-log-relay`) instead of one binary that acts as daemon or client
+depending on the subcommand.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -483,31 +494,27 @@ client depending on the subcommand used.
 │        │                                      │              │
 │  ┌─────▼──────────────┐     ┌─────────────────▼──────────┐   │
 │  │  vigil  (CLI)      │     │  vigil  (CLI) /            │   │
-│  │  --socket ...      │     │  curl / K8s operator       │   │
+│  │  podman exec ...   │     │  curl / K8s probes         │   │
 │  └────────────────────┘     └────────────────────────────┘   │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 ### Why two binaries instead of one?
 
-**Pebble's approach** — single binary, mode-switched by subcommand:
-```bash
-pebble run      # starts the daemon
-pebble services # connects to the running daemon
-```
-This means the daemon binary must always carry the full client-side HTTP stack,
-CLI argument parsing, and output formatting — even when running as PID 1 where
-none of that code is ever needed.
+A single binary, mode-switched by subcommand (`app run` starts the daemon,
+`app services` talks to it), must always carry the full CLI argument
+parsing and output formatting, even when running as PID 1 where none of that
+code is ever needed.
 
 **vigil-rs's approach** — strict separation:
 
 | | `vigild` | `vigil` |
 |---|---|---|
 | Role | Daemon / PID 1 | CLI client |
-| Dependencies | axum, rustls, tokio, rcgen, … | hyper-util, reqwest |
+| Dependencies | axum, rustls, tokio, rcgen, reqwest (alerts, HTTP checks), … | hyper-util, reqwest |
 | Runs as | PID 1 in container | `podman exec` / host / CI |
 | Contains | API server, supervisor logic | HTTP client, output formatting |
-| Transports | Unix socket + optional TLS TCP | Unix socket **or** HTTP/HTTPS |
+| Transports | Unix socket + optional TLS TCP | Unix socket **or** HTTPS |
 | Final image | Required | Optional |
 
 **Benefits of the split:**
@@ -527,8 +534,8 @@ none of that code is ever needed.
    compile-time verification.
 
 4. **No PID 1 bloat.** In production containers `vigild` is PID 1 and runs for
-   the entire container lifetime. Keeping it lean (no CLI parsing, no output
-   formatting, no reqwest) means fewer dependencies and a faster startup.
+   the entire container lifetime. Keeping it lean (no subcommand parsing, no
+   output formatting) means fewer dependencies and a faster startup.
 
 5. **Mirrors real-world patterns.** Container orchestrators (Kubernetes,
    Nomad) interact with the daemon via the REST API, not the CLI. The CLI
@@ -551,14 +558,15 @@ main
 - **Overlord** owns the plan and routes commands from the API to the right
   actor. It is the only component that reads layer YAML files.
 - **ServiceActors** manage a single child process each: spawn, signal, wait,
-  backoff, restart. They are state machines
-  (`Inactive → Starting → Active → Stopping → Backoff → Error`).
+  backoff, restart. They are state machines (`Inactive`, `Starting`,
+  `Active`, `Stopping`, `Backoff`, `Error`, `Done` for a finished oneshot).
 - **CheckActors** run health checks on a timer and emit events back to the
   Overlord when a check transitions to `Down`.
 - **LogStore** holds a ring buffer of recent log lines and a broadcast channel
   for live SSE streaming to `vigil logs -f` clients.
-- All communication is via typed `mpsc` / `oneshot` channels — no shared
-  mutable state, no locks.
+- Service and check state belongs to its actor and changes only through
+  typed `mpsc` / `oneshot` messages. Stores shared with the API (log
+  buffer, identities, metrics) use locks.
 
 ## License
 
