@@ -53,8 +53,11 @@ pub(crate) async fn list_checks(
     request_body = CheckRefreshRequest,
     responses(
         (status = 200, description = "The check after the run.", body = CheckRefresh),
+        (status = 400, description = "Invalid JSON."),
         (status = 403, description = "Forbidden."),
         (status = 404, description = "No check of that name."),
+        (status = 415, description = "Content-Type is not `application/json`."),
+        (status = 422, description = "Unknown field or wrong type in the body."),
         (status = 500, description = "Internal error."),
     )
 )]

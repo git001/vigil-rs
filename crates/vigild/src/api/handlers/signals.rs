@@ -23,10 +23,13 @@ use super::{Body, json_body};
     request_body = SignalsRequest,
     responses(
         (status = 200, description = "The services that got the signal.", body = SignalsResult),
-        (status = 400, description = "Unknown signal, empty `services` or unknown field."),
+        (status = 400, description = "Invalid JSON, unknown signal or empty `services`."),
         (status = 403, description = "Forbidden."),
         (status = 404, description = "A name is not a service."),
         (status = 409, description = "A service has no running process."),
+        (status = 415, description = "Content-Type is not `application/json`."),
+        (status = 422, description = "Unknown field or wrong type in the body."),
+        (status = 500, description = "Internal error."),
     )
 )]
 pub(crate) async fn send_signals(

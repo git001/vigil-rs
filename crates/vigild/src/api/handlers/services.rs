@@ -52,7 +52,10 @@ pub(crate) async fn list_services(
     request_body = ServicesAction,
     responses(
         (status = 200, description = "Change record for the performed action.", body = ChangeInfo),
+        (status = 400, description = "Invalid JSON."),
         (status = 403, description = "Forbidden."),
+        (status = 415, description = "Content-Type is not `application/json`."),
+        (status = 422, description = "Unknown field or wrong type in the body."),
         (status = 500, description = "Internal error."),
     )
 )]

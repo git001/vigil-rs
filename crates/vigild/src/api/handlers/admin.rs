@@ -15,11 +15,11 @@ use super::{Body, json_body};
     post, path = "/v1/replan",
     tag = "replan",
     summary = "Reload layers and replan",
-    description = "Reads all layer YAML files from the layers directory, re-merges them, starts newly enabled services, and stops removed ones.\n\n**Required access:** `write` or higher.",
+    description = "Reads all layer YAML files from the layers directory, re-merges them, starts newly enabled services, restarts running services whose configuration changed (and the services that require them), and stops removed ones. An invalid layer changes nothing.\n\n**Required access:** `write` or higher.",
     responses(
         (status = 200, description = "Replan completed successfully."),
         (status = 403, description = "Forbidden."),
-        (status = 500, description = "Internal error."),
+        (status = 500, description = "A layer file is invalid (the message says why), or an internal error."),
     )
 )]
 pub(crate) async fn replan(caller: Caller, State(s): State<AppState>) -> ApiResult<()> {
@@ -40,7 +40,10 @@ pub(crate) async fn replan(caller: Caller, State(s): State<AppState>) -> ApiResu
     request_body = DaemonActionRequest,
     responses(
         (status = 200, description = "Action accepted."),
+        (status = 400, description = "Invalid JSON."),
         (status = 403, description = "Forbidden."),
+        (status = 415, description = "Content-Type is not `application/json`."),
+        (status = 422, description = "Unknown field or wrong type in the body."),
         (status = 500, description = "Internal error."),
     )
 )]

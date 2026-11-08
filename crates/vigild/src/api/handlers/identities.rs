@@ -42,8 +42,11 @@ pub(crate) async fn list_identities(
     request_body = AddIdentitiesRequest,
     responses(
         (status = 200, description = "Identities added or updated."),
+        (status = 400, description = "Invalid JSON."),
         (status = 403, description = "Forbidden."),
         (status = 409, description = "A name belongs to an identity from a layer file (read-only over the API)."),
+        (status = 415, description = "Content-Type is not `application/json`."),
+        (status = 422, description = "Unknown field or wrong type in the body."),
         (status = 500, description = "Internal error."),
     )
 )]
@@ -73,8 +76,11 @@ pub(crate) async fn add_identities(
     request_body = RemoveIdentitiesRequest,
     responses(
         (status = 200, description = "Names of the removed identities.", body = Vec<String>),
+        (status = 400, description = "Invalid JSON."),
         (status = 403, description = "Forbidden."),
         (status = 409, description = "A name belongs to an identity from a layer file; nothing was removed."),
+        (status = 415, description = "Content-Type is not `application/json`."),
+        (status = 422, description = "Unknown field or wrong type in the body."),
         (status = 500, description = "Internal error."),
     )
 )]
