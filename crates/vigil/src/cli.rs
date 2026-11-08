@@ -204,4 +204,10 @@ mod tests {
         assert_eq!(lines(&["vigil", "logs", "--n", "5"]), Some(5));
         assert_eq!(lines(&["vigil", "logs"]), None);
     }
+
+    #[test]
+    fn identities_remove_needs_a_name() {
+        assert!(Args::try_parse_from(["vigil", "identities", "remove"]).is_err());
+        assert!(Args::try_parse_from(["vigil", "identities", "remove", "ops"]).is_ok());
+    }
 }

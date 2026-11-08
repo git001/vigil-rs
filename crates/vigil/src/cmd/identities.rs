@@ -33,7 +33,11 @@ pub enum IdentitiesCmd {
 
     /// Remove identities by name.
     #[command(name = "remove")]
-    Remove { names: Vec<String> },
+    Remove {
+        /// Names of the identities to remove.
+        #[arg(required = true)]
+        names: Vec<String>,
+    },
 }
 
 pub async fn run(client: &VigilClient, sub: IdentitiesCmd) -> anyhow::Result<()> {
