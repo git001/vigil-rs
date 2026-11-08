@@ -71,21 +71,30 @@ shell {
 }
 
 # --stdout-sink: stdout carries only the forwarded ndjson lines (no blank
-# lines, no log messages); the relay's own logs go to stderr.
+# lines, no log messages); the relay's own logs go to stderr. This run is
+# configured through environment variables only. SOURCE_KUBERNETES=false
+# must not conflict with SOURCE_SOCKET. EXCLUDE drops the lines whose number
+# ends in 1.
 shell {
+	SOURCE_KUBERNETES=false \
+	SOURCE_SOCKET=${tmpdir}/vigild.sock \
+	SOURCE_PATH="/v1/logs/follow?format=ndjson" \
+	STDOUT_SINK=true \
+	INCLUDE=relay-test-line \
+	EXCLUDE='relay-test-line-[0-9]*1"' \
+	RELAY_DEBUG=false \
+	HEALTHCHECK=127.0.0.1:0 \
 	${vigil_log_relay} \
-		--source-socket ${tmpdir}/vigild.sock \
-		--stdout-sink \
-		--healthcheck 127.0.0.1:0 \
 		> ${tmpdir}/stdout-sink.out 2> ${tmpdir}/stdout-sink.err < /dev/null &
 	echo $! > ${tmpdir}/relay2.pid
 	for i in $(seq 1 50); do
-		test "$(grep -c relay-test-line ${tmpdir}/stdout-sink.out)" -ge 2 && break
+		test "$(grep -c relay-test-line ${tmpdir}/stdout-sink.out)" -ge 12 && break
 		sleep 0.2
 	done
 	kill $(cat ${tmpdir}/relay2.pid)
-	test "$(grep -c relay-test-line ${tmpdir}/stdout-sink.out)" -ge 2
+	test "$(grep -c relay-test-line ${tmpdir}/stdout-sink.out)" -ge 12
 	! grep -v '^{.*}$' ${tmpdir}/stdout-sink.out
+	! grep -q 'relay-test-line-[0-9]*1"' ${tmpdir}/stdout-sink.out
 	grep -q 'vigil-log-relay starting' ${tmpdir}/stdout-sink.err
 }
 

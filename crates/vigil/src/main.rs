@@ -25,9 +25,9 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Identities(sub) => cmd::identities::run(&client, sub).await?,
         Cmd::Logs {
             services,
-            n,
+            lines,
             follow,
-        } => cmd::logs::run(&client, &services, n, follow).await?,
+        } => cmd::logs::run(&client, &services, lines, follow).await?,
         Cmd::Replan => {
             client.replan().await?;
             println!("Replan completed.");

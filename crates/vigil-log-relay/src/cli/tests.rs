@@ -27,6 +27,20 @@ fn url_only_options_rejected_with_kubernetes() {
 }
 
 #[test]
+fn other_sources_rejected_with_kubernetes() {
+    let err = parse(&["--kubernetes", "--source-url", "https://x/"]).unwrap_err();
+    assert!(
+        err.contains("--source-url cannot be used with --kubernetes"),
+        "{err}"
+    );
+    let err = parse(&["--kubernetes", "--source-socket", "/s"]).unwrap_err();
+    assert!(
+        err.contains("--source-socket cannot be used with --kubernetes"),
+        "{err}"
+    );
+}
+
+#[test]
 fn url_only_options_rejected_with_socket() {
     assert!(parse(&["--source-socket", "/s", "--source-user-file", "f"]).is_err());
     assert!(parse(&["--source-socket", "/s", "--source-insecure"]).is_err());

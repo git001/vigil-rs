@@ -27,24 +27,33 @@ pub struct Cli {
     // ---- Source (exactly one required) ------------------------------------
     /// Watch Running pods via the Kubernetes API and stream their logs.
     /// Requires an in-cluster service account (KUBERNETES_SERVICE_HOST).
-    #[arg(long, help_heading = "Source")]
+    #[arg(long, env = "SOURCE_KUBERNETES", help_heading = "Source")]
     pub kubernetes: bool,
 
     /// Read ndjson stream from an HTTP/HTTPS URL (cannot combine with --source-socket).
-    #[arg(long, value_name = "URL",
-          conflicts_with_all = ["kubernetes", "source_socket"],
-          help_heading = "Source")]
+    #[arg(
+        long,
+        env = "SOURCE_URL",
+        value_name = "URL",
+        conflicts_with = "source_socket",
+        help_heading = "Source"
+    )]
     pub source_url: Option<String>,
 
     /// Read ndjson stream via a Unix-domain socket (cannot combine with --source-url).
-    #[arg(long, value_name = "PATH",
-          conflicts_with_all = ["kubernetes", "source_url"],
-          help_heading = "Source")]
+    #[arg(
+        long,
+        env = "SOURCE_SOCKET",
+        value_name = "PATH",
+        conflicts_with = "source_url",
+        help_heading = "Source"
+    )]
     pub source_socket: Option<PathBuf>,
 
     /// HTTP path to request over --source-socket.
     #[arg(
         long,
+        env = "SOURCE_PATH",
         value_name = "PATH",
         default_value = "/v1/logs/follow?format=ndjson",
         help_heading = "Source"
@@ -100,15 +109,30 @@ pub struct Cli {
     pub log_format: LogFormat,
 
     /// Enable debug logging with timestamps.
-    #[arg(long, help_heading = "Logging")]
+    #[arg(long, env = "RELAY_DEBUG", help_heading = "Logging")]
     pub debug: bool,
 }
 
 impl Cli {
-    /// Checks clap cannot express. `--source-insecure` is a flag that may come
-    /// from `SOURCE_INSECURE=false`, which clap would count as "present", so
-    /// its conflict is checked here on the actual value.
+    /// Checks clap cannot express. `--kubernetes` and `--source-insecure` are
+    /// flags that may come from `SOURCE_KUBERNETES=false` or
+    /// `SOURCE_INSECURE=false`, which clap would count as "present", so their
+    /// conflicts are checked here on the actual value.
     pub fn validate(&self) -> Result<(), String> {
+        if self.kubernetes {
+            let conn = &self.conn;
+            let other = [
+                (self.source_url.is_some(), "--source-url"),
+                (self.source_socket.is_some(), "--source-socket"),
+                (conn.source_cacert.is_some(), "--source-cacert"),
+                (conn.source_user_file.is_some(), "--source-user-file"),
+                (conn.source_cert.is_some(), "--source-cert"),
+                (conn.source_key.is_some(), "--source-key"),
+            ];
+            if let Some((_, flag)) = other.iter().find(|(set, _)| *set) {
+                return Err(format!("{flag} cannot be used with --kubernetes"));
+            }
+        }
         if self.conn.source_insecure && (self.kubernetes || self.source_socket.is_some()) {
             return Err(
                 "--source-insecure only applies to --source-url; with --kubernetes \

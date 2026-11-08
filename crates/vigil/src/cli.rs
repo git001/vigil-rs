@@ -132,8 +132,8 @@ pub(crate) enum Cmd {
         /// Filter by service name(s).
         services: Vec<String>,
         /// Number of lines to show (default 100).
-        #[arg(short, long)]
-        n: Option<usize>,
+        #[arg(short = 'n', long, alias = "n", value_name = "N")]
+        lines: Option<usize>,
         /// Follow the log stream (like tail -f).
         #[arg(short, long)]
         follow: bool,
@@ -182,5 +182,26 @@ impl Args {
             )
         };
         Ok(client)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Args, Cmd};
+    use clap::Parser;
+
+    fn lines(argv: &[&str]) -> Option<usize> {
+        match Args::try_parse_from(argv).unwrap().cmd {
+            Cmd::Logs { lines, .. } => lines,
+            other => panic!("not logs: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn logs_lines_has_short_long_and_old_alias() {
+        assert_eq!(lines(&["vigil", "logs", "-n", "3"]), Some(3));
+        assert_eq!(lines(&["vigil", "logs", "--lines", "4"]), Some(4));
+        assert_eq!(lines(&["vigil", "logs", "--n", "5"]), Some(5));
+        assert_eq!(lines(&["vigil", "logs"]), None);
     }
 }

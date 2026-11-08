@@ -12,14 +12,16 @@ pub struct Sink {
     ///
     /// Kubernetes: matched against the log message (after the timestamp prefix).
     /// URL / socket: matched against the full raw line.
-    #[arg(long, value_name = "REGEX", help_heading = "Filter")]
+    /// The environment variable holds one regex; combine several with `|`.
+    #[arg(long, env = "INCLUDE", value_name = "REGEX", help_heading = "Filter")]
     pub include: Vec<String>,
 
     /// Drop lines matching this regex (repeatable, OR-combined, applied after --include).
     ///
     /// Kubernetes: matched against the log message (after the timestamp prefix).
     /// URL / socket: matched against the full raw line.
-    #[arg(long, value_name = "REGEX", help_heading = "Filter")]
+    /// The environment variable holds one regex; combine several with `|`.
+    #[arg(long, env = "EXCLUDE", value_name = "REGEX", help_heading = "Filter")]
     pub exclude: Vec<String>,
 
     // ---- Sink -------------------------------------------------------------

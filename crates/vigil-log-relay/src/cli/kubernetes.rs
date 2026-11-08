@@ -74,7 +74,14 @@ pub struct Kubernetes {
     pub since_seconds: i64,
 
     /// Exclude pods whose name matches this regex (repeatable, OR-combined).
-    #[arg(long, value_name = "REGEX", help_heading = "Kubernetes")]
+    ///
+    /// The environment variable holds one regex; combine several with `|`.
+    #[arg(
+        long,
+        env = "EXCLUDE_POD",
+        value_name = "REGEX",
+        help_heading = "Kubernetes"
+    )]
     pub exclude_pod: Vec<String>,
 
     /// Maximum number of concurrent pod log streams (0 = unlimited).

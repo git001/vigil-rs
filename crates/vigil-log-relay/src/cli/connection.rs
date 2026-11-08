@@ -83,7 +83,7 @@ pub struct Connection {
     #[arg(
         long,
         env = "SOURCE_CACERT",
-        conflicts_with_all = ["kubernetes", "source_socket"],
+        conflicts_with = "source_socket",
         value_name = "PATH",
         help_heading = "Source Connection"
     )]
@@ -99,7 +99,7 @@ pub struct Connection {
     #[arg(
         long,
         env = "SOURCE_USER_FILE",
-        conflicts_with_all = ["kubernetes", "source_socket"],
+        conflicts_with = "source_socket",
         value_name = "PATH",
         help_heading = "Source Connection"
     )]
@@ -112,7 +112,7 @@ pub struct Connection {
     #[arg(
         long,
         env = "SOURCE_CERT",
-        conflicts_with_all = ["kubernetes", "source_socket"],
+        conflicts_with = "source_socket",
         value_name = "PATH",
         requires = "source_key",
         help_heading = "Source Connection"
@@ -125,7 +125,7 @@ pub struct Connection {
     #[arg(
         long,
         env = "SOURCE_KEY",
-        conflicts_with_all = ["kubernetes", "source_socket"],
+        conflicts_with = "source_socket",
         value_name = "PATH",
         requires = "source_cert",
         help_heading = "Source Connection"
