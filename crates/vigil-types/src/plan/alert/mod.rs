@@ -7,6 +7,10 @@ use utoipa::ToSchema;
 
 use super::{Override, ProxyConfig, TlsConfig, append_unique};
 
+mod block;
+
+pub use block::AlertsBlock;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum AlertFormat {
@@ -126,39 +130,6 @@ impl AlertConfig {
     pub fn format(&self) -> AlertFormat {
         self.format.unwrap_or_default()
     }
-}
-
-/// The `alerts:` block in a layer file.
-///
-/// Global queue settings (`max-queue-depth`, `max-queue-time`) are optional
-/// top-level keys in this block and apply to all alerts. Individual alert
-/// configurations are keyed by their name.
-///
-/// ```yaml
-/// alerts:
-///   max-queue-depth: 256   # optional — max pending delivery jobs
-///   max-queue-time:  60s   # optional — discard stale jobs after this age
-///
-///   my-webhook:
-///     url: https://hooks.example.com/alert
-///     format: webhook
-///     on-check: [website-alive]
-/// ```
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub struct AlertsBlock {
-    /// Maximum number of delivery jobs waiting in the queue. New jobs are
-    /// dropped (with a warning) when the queue is full. Default: 256.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_queue_depth: Option<usize>,
-    /// Maximum time a delivery job may wait before being discarded (e.g. "60s",
-    /// "2m"). Prevents a flood of stale alerts after an endpoint comes back
-    /// online. Default: "60s".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_queue_time: Option<String>,
-    /// Named alert configurations.
-    #[serde(flatten)]
-    pub entries: IndexMap<String, AlertConfig>,
 }
 
 pub(super) fn merge_alert(base: &mut AlertConfig, overlay: &AlertConfig) {

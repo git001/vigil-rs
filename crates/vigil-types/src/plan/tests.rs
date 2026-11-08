@@ -495,3 +495,30 @@ fn service_merge_rules() {
     assert_eq!(app.exit_code_map.len(), 2);
     assert_eq!(app.on_check_failure.len(), 2);
 }
+
+#[test]
+fn alerts_block_reads_settings_and_alerts() {
+    let block: AlertsBlock =
+        serde_yaml::from_str("max-queue-depth: 5\nmax-queue-time: 30s\nhook:\n  url: http://x/\n")
+            .unwrap();
+    assert_eq!(block.max_queue_depth, Some(5));
+    assert_eq!(block.max_queue_time.as_deref(), Some("30s"));
+    assert_eq!(block.entries["hook"].url, "http://x/");
+}
+
+#[test]
+fn alerts_block_errors_name_the_key() {
+    let err = serde_yaml::from_str::<AlertsBlock>("max-queue-depht: 5\n")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("expected an alert (a mapping)"), "{err}");
+    assert!(
+        err.contains("\"max-queue-depht\" is not a setting either"),
+        "{err}"
+    );
+
+    let err = serde_yaml::from_str::<AlertsBlock>("hook:\n  url: http://x/\n  urll: y\n")
+        .unwrap_err()
+        .to_string();
+    assert!(err.starts_with("hook: unknown field `urll`"), "{err}");
+}
