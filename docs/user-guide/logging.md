@@ -7,7 +7,8 @@ paths:
 | Path | When to use |
 |------|-------------|
 | **vigild's own stdout/stderr** (`podman logs`) | Default; each line is prefixed with `[service-name]`. Enabled by `logs-forward: enabled`. |
-| **SSE log-stream API** (`/v1/logs/follow`) | Consumed by `vigil logs -f`, external collectors (Vector, Filebeat, …), or any HTTP client. Always active regardless of `logs-forward`. |
+| **Log API** (`/v1/logs`, `/v1/logs/follow`) | Recent lines and a live stream, for `vigil logs`, external collectors (Vector, Filebeat, `vigil-log-relay`, …) or any HTTP client. Always active regardless of `logs-forward`. |
+| **Push** (`logs-push-socket`, `logs-push-addr`) | vigild connects to a collector and streams ndjson; see [Push mode](#push-mode-recommended). |
 
 ---
 
@@ -59,12 +60,13 @@ service). Old lines are evicted as new ones arrive.
 Default: **1000 lines** per service.
 
 ```bash
-vigild --log-buffer 5000 --layers-dir /etc/vigil/layers --socket /run/vigil/vigild.sock
+vigild --log-buffer 5000 --layers-dir /etc/vigil/layers
 ```
 
-The buffer size also governs the SSE broadcast channel: the channel holds
-`max(64, min(buffer/2, 4096))` entries. Slow SSE consumers that fall behind
-this limit receive a "lagged" error and are disconnected.
+The buffer size also governs the live stream: the broadcast channel holds
+`max(64, min(buffer/2, 4096))` entries. A consumer of `/v1/logs/follow` that
+falls this far behind skips the entries it missed and continues; see
+[Slow consumer](#slow-consumer--lagged).
 
 ### What is stored
 
@@ -81,7 +83,8 @@ The ring buffer is filled regardless of the `logs-forward` setting (except
 ## Daemon log format
 
 vigild's **own** internal log messages (startup, service lifecycle events,
-errors) are written to stderr. The format is configurable:
+errors) are written to stdout, like the forwarded service output. The format
+is configurable:
 
 | Method | Description |
 |--------|-------------|
@@ -91,8 +94,11 @@ errors) are written to stderr. The format is configurable:
 
 ```bash
 # JSON format — useful when vigild itself is ingested by a log shipper
-vigild --log-format json --layers-dir /etc/vigil/layers --socket /run/vigil/vigild.sock
+vigild --log-format json --layers-dir /etc/vigil/layers
 ```
+
+See [Container Setup](../operator-guide/container-setup.md#log-format) for
+sample lines.
 
 > This controls vigild's *own* diagnostic output, not the forwarded service
 > logs. Service logs are always forwarded as plain text lines (with the
@@ -111,33 +117,46 @@ vigil logs -f                   # follow live (Ctrl+C to stop)
 vigil logs -f myapp sidecar     # follow specific services
 ```
 
-Output format:
+Output format (UTC):
 
 ```
-11:23:45.123 [myapp] [stdout] Server listening on :8080
-11:23:45.456 [myapp] [stderr] WARN: deprecated config key 'timeout'
+2026-03-18 11:23:45.123 [myapp] [stdout] Server listening on :8080
+2026-03-18 11:23:45.456 [myapp] [stderr] WARN: deprecated config key 'timeout'
 ```
 
-`vigil logs -f` subscribes to the SSE stream (`GET /v1/logs/follow`).
-Buffered lines from before the subscription opened are replayed first, then
-live lines follow.
+`vigil logs` reads the buffered lines (`GET /v1/logs`); with `-f` it then
+follows the live stream (`GET /v1/logs/follow`).
 
 ---
 
-## SSE log-stream API
+## Log API
 
-The raw SSE endpoint is available at:
+All log endpoints need access `read` (see
+[access levels](cli-reference.md#identities)).
+
+### Recent lines: `GET /v1/logs`
 
 ```
-GET /v1/logs/follow
+GET /v1/logs?services=myapp,sidecar&n=50
 ```
 
-### Query parameters
+Returns the last `n` lines (default 100) of the given services (default:
+all) from the ring buffer, in the usual JSON envelope. With `follow=true` the
+response is a stream instead: the last `n` lines, then each new line, as
+ndjson (`application/x-ndjson`), with nothing lost or doubled in between.
+This is the endpoint to use when a collector must not miss the lines from
+before it connected.
+
+### Live stream: `GET /v1/logs/follow`
+
+Only new lines, from the moment the client connects.
 
 | Parameter | Values | Default | Description |
 |-----------|--------|---------|-------------|
-| `service` | service name | *(all)* | Filter to a single service |
+| `services` | comma-separated service names | *(all)* | Only these services |
 | `format` | `json` \| `text` \| `ndjson` | `json` | Output format |
+
+Any other parameter is rejected with `400`.
 
 ### Format: `json` (default)
 
@@ -197,11 +216,35 @@ curl -sN --unix-socket /run/vigil/vigild.sock \
 
 # Stream a single service as text (SSE)
 curl -sN --unix-socket /run/vigil/vigild.sock \
-  'http://localhost/v1/logs/follow?format=text&service=myapp'
+  'http://localhost/v1/logs/follow?format=text&services=myapp'
 
 # Newline-delimited JSON — one object per line, no SSE framing (best for collectors)
 curl -sN --unix-socket /run/vigil/vigild.sock \
   'http://localhost/v1/logs/follow?format=ndjson'
+
+# The last 20 lines of myapp, then live, as ndjson
+curl -sN --unix-socket /run/vigil/vigild.sock \
+  'http://localhost/v1/logs?services=myapp&n=20&follow=true'
+
+# Over TLS: an identity of access `read` is needed
+curl -sN -k -u viewer:secret \
+  'https://myhost:8443/v1/logs/follow?format=ndjson'
+```
+
+### Access over the Unix socket
+
+Until the first identity is added over the API, root and vigild's own UID
+are admin on the socket (bootstrap), so a collector running as either can
+read the logs without credentials. Once an identity is added over the API,
+that ends: give the collector's UID a local identity of access `read`, for
+example in a layer file:
+
+```yaml
+identities:
+  log-collector:
+    access: read
+    local:
+      user-id: 1001     # the UID the collector runs as
 ```
 
 ---
@@ -237,8 +280,9 @@ services:
 ```
 
 Key points:
-- `logs-push-socket` (Unix socket) or `logs-push-addr` (TCP `host:port`) are
-  per-service — each service can push to a different collector.
+- `logs-push-socket` (Unix socket) and `logs-push-addr` (TCP `host:port`) are
+  per-service — each service can push to a different collector. A service
+  may set both; its lines then go to both targets.
 - vigild retries the connection with exponential backoff (500 ms → 30 s), so
   no `after:` dependency is needed; logs during reconnect are best-effort.
 - The collector needs no vigil-specific plugin — it just listens on a socket
@@ -256,7 +300,7 @@ myapp:
   logs-push-socket: /run/collector/input.sock
 
 filebeat:
-  command: sh -c 'filebeat run --strict.perms=false -c /etc/filebeat/vigil.yml 2>/dev/null'
+  command: sh -c 'filebeat run --strict.perms=false -c /usr/share/filebeat/vigil-filebeat.yml 2>/dev/null'
   startup: enabled
   logs-forward: passthrough
 ```
@@ -427,13 +471,16 @@ podman run --rm vigil-filebeat
 
 `vigil-log-relay` is a standalone binary that reads ndjson from an HTTP
 source and forwards it to a TCP sink (Filebeat, Fluent Bit, Logstash, …).
-Three source modes are available:
+Three source modes are available; exactly one must be given:
 
 | Flag | Source |
 |---|---|
-| `--kubernetes` | Kubernetes pod logs via the K8s API (in-cluster) |
+| `--kubernetes` | Kubernetes pod logs via the K8s API |
 | `--source-socket PATH` | Unix-domain socket (e.g. vigild's `/tmp/vigil/vigild.sock`) |
-| `--source-url URL` | HTTP/HTTPS URL |
+| `--source-url URL` | HTTP/HTTPS URL, e.g. vigild's TLS API on another host |
+
+All options and their environment variables are listed in the
+[CLI reference](cli-reference.md#vigil-log-relay).
 
 **Streaming vigild logs to Filebeat via TCP:**
 
@@ -450,11 +497,14 @@ services:
     startup: enabled
     after: [filebeat]
     on-failure: restart
+    on-check-failure:
+      vigil-log-relay-healthz: restart    # restart a stalled relay
     logs-forward: disabled
 
 checks:
   vigil-log-relay-healthz:
     level: alive
+    startup: enabled                      # checks are disabled by default
     period: 30s
     timeout: 5s
     http:
@@ -464,19 +514,36 @@ checks:
 Key parameters:
 
 ```
---source-socket PATH       Unix socket to connect to
---source-path PATH         HTTP path (default: /v1/logs/follow?format=ndjson)
---stdout-sink              Write to stdout instead of TCP (ignores all TCP sink options)
---tcp-sink-host HOST       TCP sink host (default: 127.0.0.1)
---tcp-sink-port PORT       TCP sink port (default: 5170)
---reconnect-delay MS       Initial backoff delay in ms (default: 500)
---reconnect-max MS         Backoff ceiling in ms (default: 30000)
---reconnect-retries N      Max failures before exit, 0 = unlimited (default: 0)
---healthcheck HOST:PORT    Address for GET /healthz endpoint (default: 127.0.0.1:9091)
---healthcheck-max-age SECS Seconds without tick before /healthz returns 503 (default: 30)
---include REGEX            Forward a line only if it matches this regex (repeatable)
---exclude REGEX            Drop a line if it matches this regex (applied after --include, repeatable)
+--source-socket PATH             Unix socket to connect to
+--source-path PATH               HTTP path (default: /v1/logs/follow?format=ndjson)
+--stdout-sink                    Write to stdout instead of TCP (ignores all TCP sink options)
+--tcp-sink-host HOST             TCP sink host (default: 127.0.0.1)
+--tcp-sink-port PORT             TCP sink port (default: 5170)
+--source-reconnect-delay MS      Initial backoff delay in ms (default: 500)
+--source-reconnect-max MS        Backoff ceiling in ms (default: 30000)
+--source-reconnect-retries N     Max failures before exit, 0 = unlimited (default: 0)
+--dest-reconnect-delay MS        Initial TCP sink reconnect delay in ms (default: 500)
+--dest-reconnect-max MS          TCP sink reconnect ceiling in ms (default: 30000)
+--healthcheck HOST:PORT          Address for GET /healthz endpoint (default: 127.0.0.1:9091)
+--healthcheck-max-age SECS       Seconds without tick before /healthz returns 503 (default: 30)
+--include REGEX                  Forward a line only if it matches this regex (repeatable)
+--exclude REGEX                  Drop a line if it matches this regex (applied after --include, repeatable)
 ```
+
+**From vigild's TLS API** — a relay on another host (or in another
+container) reads the stream over HTTPS with a `read` identity. The password
+file is read on every reconnect, so a rotated Secret is picked up:
+
+```bash
+vigil-log-relay \
+  --source-url 'https://vigild.example:8443/v1/logs/follow?format=ndjson' \
+  --source-cacert /etc/vigil/ca.pem \
+  --source-user-file /var/run/secrets/vigil/log-relay \
+  --tcp-sink-host 127.0.0.1 --tcp-sink-port 5170
+```
+
+The file holds `user:password`; the identity can come from a layer file (see
+[Identities](configuration.md#identities)).
 
 **Stdout sink** — `--stdout-sink` writes all forwarded lines directly to stdout instead of
 opening a TCP connection. Useful for debugging or piping output to another process.
@@ -487,23 +554,27 @@ forwarded ndjson lines:
 vigil-log-relay --source-socket /tmp/vigil/vigild.sock --stdout-sink
 ```
 
-**Line filtering** — `--include` and `--exclude` accept Go-compatible regular expressions
-and can be repeated any number of times. Evaluation order:
+**Line filtering** — `--include` and `--exclude` take regular expressions
+in Rust regex syntax and can be repeated any number of times. In socket and
+URL mode they are matched against the raw ndjson line as vigild sends it,
+e.g. `{"timestamp":"…","service":"myapp","stream":"stdout","message":"…"}`.
+Evaluation order:
 
 1. If any `--include` pattern is given, a line must match at least one to proceed.
 2. If the line then matches any `--exclude` pattern, it is dropped.
 3. Otherwise the line is forwarded to the TCP sink (or stdout).
 
 ```yaml
-# Only forward ERROR and WARN lines, suppress noisy health-check pings
+# Only forward lines whose message contains ERROR or WARN, but not the
+# health-check requests
 services:
   vigil-log-relay:
     command: >
       vigil-log-relay
       --source-socket /tmp/vigil/vigild.sock
       --source-path /v1/logs/follow?format=ndjson
-      --include '"level":"(error|warn)"'
-      --exclude '"path":"/healthz"'
+      --include '"message":"[^"]*(ERROR|WARN)'
+      --exclude 'GET /healthz'
       --tcp-sink-host 127.0.0.1
       --tcp-sink-port 5170
     startup: enabled
@@ -578,12 +649,14 @@ service is also printing the same lines, you have two delivery paths active.
 Set `logs-forward: disabled` on the application to suppress the raw lines
 from `podman logs`; keep `logs-forward: passthrough` on the collector.
 
-### Slow consumer / "lagged" disconnect
+### Slow consumer / "lagged"
 
-The SSE broadcast channel has a finite depth (`buffer/2`, clamped to
-64–4096). A consumer that cannot keep up is disconnected with a "lagged"
-error. The collector service's `on-failure: restart` will reconnect it.
-To increase headroom, raise `--log-buffer`:
+The broadcast channel behind `/v1/logs/follow` has a finite depth
+(`buffer/2`, clamped to 64–4096). A consumer that cannot keep up is not
+disconnected: it skips the entries it missed and continues with the newest
+ones. With `format=json` or `text` the stream carries an SSE comment
+`: lagged: skipped N entries` at that point; with `ndjson` the lines are
+just missing. To increase headroom, raise `--log-buffer`:
 
 ```bash
 vigild --log-buffer 4000 ...

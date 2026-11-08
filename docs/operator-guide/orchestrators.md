@@ -78,14 +78,6 @@ services:
     watch-files: {}     # restart api when the Secret changes
 ```
 
-```yaml
-services:
-  api:
-    command: /usr/local/bin/api
-    environment:
-      DB_PASSWORD: "{{ file('/etc/secrets/db-password') }}"
-```
-
 #### Vault Agent and other env files
 
 The Vault Agent Injector writes rendered secrets to `/vault/secrets/<name>`,
@@ -259,7 +251,12 @@ Configure which pods to collect via env vars in the Deployment manifest:
 |---|---|---|
 | `NAMESPACE` | `default` | Namespace to watch |
 | `POD_SELECTOR` | *(all pods)* | Label selector, e.g. `app=myapp` |
-| `WATCH_INTERVAL` | `30` | Seconds between pod-list refreshes |
+| `CONTAINER_SELECTOR` | *(default container)* | Container(s) to stream: a name, a comma-separated list, or `all` |
+| `WATCH_INTERVAL` | `10` | How quickly a stream is restarted after the API server closed it; pods are discovered by events |
+| `HEALTHCHECK_MAX_AGE` | `30` | Seconds without a watch tick before `/healthz` returns 503 (keep ≥ 3 × `WATCH_INTERVAL`) |
+
+Every other option has a variable too; see the
+[vigil-log-relay reference](../user-guide/cli-reference.md#vigil-log-relay).
 
 **OpenShift:** the image uses `WORKDIR /tmp` and `VIGIL_PATH_PREFIX=/tmp/vigil`
 because OpenShift mounts `/run` as a root-owned tmpfs at runtime. vigild
@@ -320,10 +317,10 @@ ConfigMap:
 kubectl exec <pod> -- vigil replan
 ```
 
-or over the REST API:
+or over the REST API, with an identity of access `write`:
 
 ```bash
-curl -k -X POST https://<pod-ip>:8443/v1/replan
+curl -k -u deploy:secret -X POST https://<pod-ip>:8443/v1/replan
 ```
 
 ### Identities from a ConfigMap and a Secret
@@ -460,22 +457,19 @@ EOF
 
 ### Nomad replan on template change
 
-Nomad re-renders templates on change. You can trigger a replan via a
-`sidecar_task` or a lifecycle hook:
+Nomad re-renders templates on change. Let vigild pick the change up itself
+with [`--watch-layers`](#replan-on-configmap-change):
 
 ```hcl
-task "replan-on-change" {
-  driver = "exec"
-  lifecycle {
-    hook    = "poststart"
-    sidecar = true
-  }
-  config {
-    command = "/bin/sh"
-    args    = ["-c", "inotifywait -m -e close_write /local/vigil/layers/ | while read; do vigil --url https://localhost:8443 --insecure replan; done"]
-  }
-}
+      env {
+        VIGIL_TLS_ADDR     = "0.0.0.0:8443"
+        VIGIL_LAYERS       = "/local/vigil/layers"
+        VIGIL_WATCH_LAYERS = "10s"
+      }
 ```
+
+Set `change_mode = "noop"` on the `template` block so Nomad does not restart
+the task as well.
 
 ---
 
@@ -495,7 +489,8 @@ services:
       - ./layers:/etc/vigil/layers:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "vigil", "--url", "https://localhost:8443", "--insecure", "checks"]
+      # /v1/health is open: 200 while no check is down, 502 otherwise.
+      test: ["CMD", "curl", "-fsk", "https://localhost:8443/v1/health"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -507,22 +502,27 @@ services:
 ## CI / CD integration
 
 With the TLS listener enabled, you can control vigild from a CI pipeline
-without `exec`-ing into the container:
+without `exec`-ing into the container. The pipeline needs an identity of
+access `write` (see [TLS](tls.md#who-may-do-what-over-tls)):
 
 ```bash
-# Restart a service after a deployment
-vigil --url https://myhost:8443 --insecure services restart myapp
+export VIGIL_URL=https://myhost:8443
+export VIGIL_CACERT=/path/to/ca.pem      # or VIGIL_INSECURE=true
+export VIGIL_USER=deploy:secret
 
-# Wait until no check is down
-while vigil --url https://myhost:8443 --insecure checks list | grep -q ' down '; do
+# Restart a service after a deployment
+vigil services restart myapp
+
+# Wait until no check is down (/v1/health is 502 while one is)
+until curl -fs --cacert "$VIGIL_CACERT" "$VIGIL_URL/v1/health"; do
   sleep 2
 done
 
 # Trigger a hot config reload
-vigil --url https://myhost:8443 --insecure replan
+vigil replan
 
 # Stream logs during a deployment
-vigil --url https://myhost:8443 --insecure logs -f myapp &
+vigil logs -f myapp &
 LOG_PID=$!
 # ... run deployment ...
 kill $LOG_PID

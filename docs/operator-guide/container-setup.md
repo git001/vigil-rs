@@ -8,7 +8,7 @@ exec checks, helper scripts, etc.) are reaped automatically so they do not
 accumulate as zombies.
 
 If you run vigild as a non-PID-1 process and still want zombie reaping, pass
-`--reaper` or set `VIGIL_REAPER=1`. vigild will then register itself as a
+`--reaper` or set `VIGIL_REAPER=true`. vigild will then register itself as a
 subreaper via `prctl(PR_SET_CHILD_SUBREAPER)`.
 
 ## Minimal Dockerfile
@@ -30,12 +30,38 @@ COPY --from=builder /src/target/release/vigil  /usr/local/bin/vigil
 
 COPY layers/ /etc/vigil/layers/
 
-RUN mkdir -p /run/vigil
-
-ENTRYPOINT ["/usr/local/bin/vigild", \
-    "--layers-dir", "/etc/vigil/layers", \
-    "--socket",     "/run/vigil/vigild.sock"]
+ENTRYPOINT ["/usr/local/bin/vigild", "--layers-dir", "/etc/vigil/layers"]
 ```
+
+vigild creates its runtime directory (`--path-prefix`, default `/run/vigil`)
+itself, so no `mkdir` is needed.
+
+### Unprivileged / OpenShift
+
+OpenShift runs containers with a random UID in group `0`, without
+capabilities, and `/run` is a root-owned tmpfs. Put the runtime files under
+`/tmp` and let group `0` own what vigild must read, as the release image
+([Dockerfile](../../Dockerfile)) does:
+
+```dockerfile
+FROM docker.io/library/alpine:3.21
+
+COPY --from=builder /src/target/release/vigild /usr/local/bin/vigild
+COPY --from=builder /src/target/release/vigil  /usr/local/bin/vigil
+COPY layers/ /etc/vigil/layers/
+
+RUN chown -R 1001:0 /etc/vigil && chmod -R g=u /etc/vigil
+
+# vigild creates /tmp/vigil (mode 0711); vigil reads the same variable.
+ENV VIGIL_LAYERS=/etc/vigil/layers \
+    VIGIL_PATH_PREFIX=/tmp/vigil
+
+USER 1001
+ENTRYPOINT ["/usr/local/bin/vigild"]
+```
+
+`vigil` inside the container finds the socket through `VIGIL_PATH_PREFIX`;
+no `--socket` is needed on either side.
 
 ## OCI image labels
 
@@ -56,12 +82,17 @@ LABEL org.opencontainers.image.description="My application supervised by vigil-r
 | `--socket <PATH>` | `VIGIL_SOCKET` | `<path-prefix>/vigild.sock` | Unix socket path for the HTTP API. vigild refuses to start if the path is a symlink, a non-socket file, or a stale socket it cannot remove. |
 | `--socket-mode <OCTAL>` | `VIGIL_SOCKET_MODE` | `600` | Permission bits of the Unix socket. While no identity was added over the API, root and vigild's own UID are admin on the socket (bootstrap); widen this (e.g. `660`) only together with local identities. |
 | `--tls-addr <ADDR>` | `VIGIL_TLS_ADDR` | — | Enable HTTPS listener, e.g. `0.0.0.0:8443` |
+| `--tls-client-ca <PATH>` | `VIGIL_TLS_CLIENT_CA` | — | PEM CA certificate(s) to verify client certificates (mTLS); see [TLS](tls.md) |
 | `--exit-code <MODE>` | `VIGIL_EXIT_CODE` | `propagate` | vigild's exit code when a policy shuts it down: `propagate` (the service's code, `128+signal` for signals) or `fixed` (`0`/`10`, v3 behaviour) |
-| `--tls-anonymous-access <LEVEL>` | `VIGIL_TLS_ANONYMOUS_ACCESS` | `metrics` | Access of TLS callers without a matching identity: `metrics` (`/v1/metrics`, `/v1/checks`, `/v1/health`, `/v1/system-info`) or `open` (without metrics). Logs, services and state changes always need an identity over TLS. |
+| `--tls-anonymous-access <LEVEL>` | `VIGIL_TLS_ANONYMOUS_ACCESS` | `metrics` | Access of TLS callers without a matching identity: `open` (`/v1/checks`, `/v1/health`, `/v1/system-info`, API docs) or `metrics` (also `/v1/metrics`). Logs, services and state changes always need an identity over TLS. |
 | `--cert <PATH>` | `VIGIL_CERT` | — | PEM certificate file for TLS (auto-generated if omitted) |
 | `--key <PATH>` | `VIGIL_KEY` | — | PEM private key file for TLS (auto-generated if omitted) |
 | `--reaper` | `VIGIL_REAPER` | — | Force subreaper mode (automatic when PID 1) |
-| `--log-format <FMT>` | — | `text` | Log format: `text` or `json` |
+| `--log-format <FMT>` | `VIGIL_LOG_FORMAT` | `text` | Log format: `text` or `json` |
+| `--log-buffer <N>` | `VIGIL_LOG_BUFFER` | `1000` | Per-service log ring-buffer size (lines); see [Logging](../user-guide/logging.md) |
+| `--watch-layers <INTERVAL>` | `VIGIL_WATCH_LAYERS` | — | Reload the layers when their files change, checking every `INTERVAL` (`1s` to `24h`); see [Orchestrators](orchestrators.md#replan-on-configmap-change) |
+
+Boolean variables such as `VIGIL_REAPER` take `true` or `false`.
 
 ## Signal forwarding
 
@@ -99,8 +130,8 @@ and [`POST /v1/signals`](../api-reference/rest-api.md#post-v1signals).
 ### Text (default)
 
 ```
-2026-03-18T10:00:00.123456Z  INFO vigild starting version=1.0.0 layers_dir=/etc/vigil/layers socket=/run/vigil/vigild.sock
-2026-03-18T10:00:00.150000Z  INFO service=haproxy starting service
+2026-11-08T22:10:33.089809Z  INFO vigild: vigild starting version="4.0.0" layers_dir=/etc/vigil/layers path_prefix=/run/vigil
+2026-11-08T22:10:33.090233Z  INFO vigild::server::unix: API listening on "/run/vigil/vigild.sock" (mode 600)
 ```
 
 ### JSON
@@ -110,8 +141,11 @@ vigild --log-format json ...
 ```
 
 ```json
-{"timestamp":"2026-03-18T10:00:00.123456Z","level":"INFO","message":"vigild starting","version":"1.0.0"}
+{"timestamp":"2026-11-08T22:10:34.818174Z","level":"INFO","fields":{"message":"vigild starting","version":"4.0.0","layers_dir":"/etc/vigil/layers","path_prefix":"/run/vigil"},"target":"vigild"}
 ```
+
+The message and its key-value pairs are in `fields`; `target` names the
+module that logged.
 
 JSON format is recommended for log aggregators (Loki, Elasticsearch, etc.).
 

@@ -9,7 +9,6 @@ CI pipelines, or from container orchestrators.
 ```bash
 vigild \
   --layers-dir /etc/vigil/layers \
-  --socket     /run/vigil/vigild.sock \
   --tls-addr   0.0.0.0:8443
 ```
 
@@ -25,8 +24,32 @@ In a Dockerfile:
 EXPOSE 8443
 ENTRYPOINT ["/usr/local/bin/vigild", \
     "--layers-dir", "/etc/vigil/layers", \
-    "--socket",     "/run/vigil/vigild.sock", \
     "--tls-addr",   "0.0.0.0:8443"]
+```
+
+## Who may do what over TLS
+
+The TLS listener never trusts a caller just because it can connect:
+
+- A caller with a matching identity gets that identity's access level:
+  HTTP Basic Auth (`basic` identities) or a client certificate (`tls`
+  identities, see [mTLS](#mutual-tls-mtls)).
+- Any other caller gets `--tls-anonymous-access`: `metrics` by default
+  (`/v1/metrics`, `/v1/checks`, `/v1/health`, `/v1/system-info`, the API
+  docs), or `open` (the same without `/v1/metrics`).
+
+So services, logs and every change need an identity over TLS. The bootstrap
+admin access (no identity added over the API yet) exists only on the Unix
+socket. Create identities there first, or in a layer file (see
+[Identities](../user-guide/configuration.md#identities)).
+
+```bash
+# Anonymous: only the open endpoints
+curl -k https://myhost:8443/v1/checks
+
+# Basic Auth with a `read` identity
+curl -k -u viewer:secret https://myhost:8443/v1/services
+vigil --url https://myhost:8443 --insecure --user viewer:secret services list
 ```
 
 ## Auto-generated self-signed certificate
@@ -34,21 +57,24 @@ ENTRYPOINT ["/usr/local/bin/vigild", \
 When `--tls-addr` is set without `--cert` / `--key`, vigild generates a
 self-signed certificate automatically at startup:
 
-- RSA 2048-bit key (generated fresh each run)
-- Subject: `CN=localhost` (or the hostname part of `--tls-addr`)
-- Valid for 365 days from startup
+- ECDSA P-256 key, generated fresh at every start
+- Subject `CN=rcgen self signed cert`; subject alternative names `localhost`
+  and the host part of `--tls-addr`
+- Valid from 1975 to 4096 (it is replaced at every start anyway)
 
-The certificate is held in memory only — it is not written to disk.
-
-Connect with certificate verification disabled:
+The certificate is held in memory only — it is not written to disk, and
+clients cannot pin it. Connect with certificate verification disabled:
 
 ```bash
 # vigil CLI
-vigil --url https://myhost:8443 --insecure services list
+vigil --url https://myhost:8443 --insecure --user viewer:secret services list
 
 # curl
-curl -k https://myhost:8443/v1/services
+curl -k -u viewer:secret https://myhost:8443/v1/services
 ```
+
+For anything beyond testing, use your own certificate so clients can verify
+it with `--cacert`.
 
 ## Using a custom certificate
 
@@ -99,25 +125,30 @@ podman run \
 ## Connecting with the vigil CLI
 
 ```bash
-# With a valid/trusted certificate
-vigil --url https://myhost:8443 services list
+# With a certificate from a CA the system trusts
+vigil --url https://myhost:8443 --user viewer:secret services list
+
+# With a certificate from your own CA
+vigil --url https://myhost:8443 --cacert /path/to/ca.pem --user viewer:secret services list
 
 # With a self-signed or untrusted certificate
-vigil --url https://myhost:8443 --insecure services list
+vigil --url https://myhost:8443 --insecure --user viewer:secret services list
 
 # Via environment
 export VIGIL_URL=https://myhost:8443
-vigil --insecure logs -f
+export VIGIL_CACERT=/path/to/ca.pem
+export VIGIL_USER=viewer:secret
+vigil logs -f
 ```
 
 ## Connecting with curl
 
 ```bash
-# Self-signed (skip verification)
-curl -k https://myhost:8443/v1/services
+# Self-signed (skip verification), Basic Auth
+curl -k -u viewer:secret https://myhost:8443/v1/services
 
 # With a custom CA
-curl --cacert /path/to/ca.pem https://myhost:8443/v1/services
+curl --cacert /path/to/ca.pem -u viewer:secret https://myhost:8443/v1/services
 
 # With a client certificate (mTLS — see section below)
 curl --insecure --cert client.crt --key client.key \
@@ -128,8 +159,10 @@ curl --insecure --cert client.crt --key client.key \
 
 mTLS lets vigild authenticate callers by verifying the TLS client certificate
 they present during the handshake.  It is **optional** at the transport level —
-connections without a client certificate are accepted but treated as
-unauthenticated (Open access) unless another auth method matches.
+connections without a client certificate are accepted and get
+`--tls-anonymous-access` unless Basic Auth matches. A certificate that is
+presented must be signed by one of the `--tls-client-ca` CAs, or the
+handshake fails.
 
 ### How it works
 
@@ -140,15 +173,15 @@ unauthenticated (Open access) unless another auth method matches.
    `POST /v1/identities` — it stores the CA's PEM and the access level to
    grant when a cert signed by that CA is presented.
 3. **At request time:** if a client cert is present, vigild verifies it
-   cryptographically against every registered TLS identity.  The most-permissive
-   matching level is used.  No match → Open (fallback).
+   against the CA of every TLS identity. The highest matching level is used.
+   No match → `--tls-anonymous-access`. Basic Auth is checked first; when it
+   matches, the certificate is not consulted.
 
 ### Step 1 — Start vigild with `--tls-client-ca`
 
 ```bash
 vigild \
   --layers-dir /etc/vigil/layers \
-  --socket     /run/vigil/vigild.sock \
   --tls-addr   0.0.0.0:8443 \
   --tls-client-ca /etc/vigil/certs/client-ca.pem
 ```
@@ -167,10 +200,13 @@ vigild --layers-dir /etc/vigil/layers
 ### Step 2 — Register a TLS identity
 
 Add an identity whose `tls.ca-cert` matches the CA that signed the client
-certificate.  This can be done via the Unix socket (no auth required for root
-or vigild's own UID while no identity exists yet, or with an existing admin
-identity). It cannot be done over TLS without an identity: anonymous TLS
-callers get at most `--tls-anonymous-access` (`metrics` by default).
+certificate. Over the API this works on the Unix socket: root and vigild's
+own UID are admin there until the first identity is added over the API
+(identities from layer files do not end this bootstrap); afterwards an admin
+identity is needed. It cannot be done over TLS without an identity: anonymous
+TLS callers get at most `--tls-anonymous-access`. In a layer file, `tls.ca`
+names a PEM file instead (see
+[Identities](../user-guide/configuration.md#identities)).
 
 ```bash
 curl --unix-socket /run/vigil/vigild.sock \
@@ -188,10 +224,11 @@ curl --unix-socket /run/vigil/vigild.sock \
   }'
 ```
 
-Or embed the CA cert inline in the JSON by reading the file:
+Or embed the CA cert inline in the JSON by reading the file (`jq -Rs`
+turns the file into one JSON string):
 
 ```bash
-CA=$(python3 -c "import json,sys; print(json.dumps(open('/etc/vigil/certs/client-ca.pem').read()))")
+CA=$(jq -Rs . /etc/vigil/certs/client-ca.pem)
 curl --unix-socket /run/vigil/vigild.sock \
   -X POST http://localhost/v1/identities \
   -H "Content-Type: application/json" \
@@ -213,7 +250,7 @@ curl --insecure \
      --key  /path/to/client.key \
      https://myhost:8443/v1/services
 
-# Without client cert → Open access → 403 on protected endpoints
+# Without client cert → --tls-anonymous-access → 403 on protected endpoints
 vigil --url https://myhost:8443 --insecure services list
 curl --insecure https://myhost:8443/v1/services
 ```
@@ -261,13 +298,13 @@ Unix socket and TLS listener run in parallel. You can connect via either:
 vigil services list
 
 # From outside (HTTPS)
-vigil --url https://myhost:8443 --insecure services list
+vigil --url https://myhost:8443 --insecure --user viewer:secret services list
 
 # Via curl (Unix socket)
 curl --unix-socket /run/vigil/vigild.sock http://localhost/v1/services
 
 # Via curl (HTTPS)
-curl -k https://myhost:8443/v1/services
+curl -k -u viewer:secret https://myhost:8443/v1/services
 ```
 
 ## Swagger UI over TLS
