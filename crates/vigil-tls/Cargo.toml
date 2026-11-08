@@ -2,6 +2,7 @@
 name    = "vigil-tls"
 version = "3.2.2"
 edition = "2024"
+rust-version = "1.88"
 license = "AGPL-3.0-only"
 description = "TLS material for vigild, vigil and vigil-log-relay: CA bundles, certificate and key, client settings"
 

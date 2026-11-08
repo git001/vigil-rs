@@ -107,7 +107,7 @@ pub struct CheckConfig {
     pub startup: Option<Startup>,
     /// Initial delay before the first check is performed (vigil extension).
     /// Useful to avoid false failures while a service is still starting up.
-    /// Example: "5s", "500ms". Default: no delay (first check runs immediately).
+    /// Example: "5s", "500ms", "0s" (run at once). Default: 3s.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delay: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

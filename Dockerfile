@@ -28,7 +28,7 @@ LABEL org.opencontainers.image.title="vigil-rs" \
 
 # Runtime files go to /tmp/vigil: /run is a root-owned tmpfs on OpenShift and
 # any chmod done in the image layer is lost at runtime. vigild creates the
-# directory itself (mode 0700); the vigil client reads the same variable.
+# directory itself (mode 0711); the vigil client reads the same variable.
 ENV VIGIL_LAYERS=/etc/vigil/layers \
     VIGIL_PATH_PREFIX=/tmp/vigil
 

@@ -2,6 +2,7 @@
 name    = "vigil-files"
 version = "3.2.2"
 edition = "2024"
+rust-version = "1.88"
 license = "AGPL-3.0-only"
 description = "How vigild, vigil and vigil-log-relay read configured files (secrets, env files, certificates)"
 

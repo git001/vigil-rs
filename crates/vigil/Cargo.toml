@@ -2,6 +2,7 @@
 name        = "vigil"
 version     = "3.2.2"
 edition     = "2024"
+rust-version = "1.88"
 license     = "AGPL-3.0-only"
 description = "vigil — CLI client for the vigild service supervisor"
 homepage    = "https://github.com/git001/vigil-rs"

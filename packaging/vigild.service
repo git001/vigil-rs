@@ -7,7 +7,9 @@ After=network.target
 Type=simple
 ExecStart=/usr/local/bin/vigild \
     --layers-dir /etc/vigil/layers \
-    --socket /run/vigil/vigild.sock
+    --path-prefix /run/vigil
+# vigild forwards SIGHUP to all running services (they reload their own
+# configuration); it does not reload the layers. Use `vigil replan` for that.
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5s

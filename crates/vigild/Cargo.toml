@@ -2,6 +2,7 @@
 name        = "vigild"
 version     = "3.2.2"
 edition     = "2024"
+rust-version = "1.88"
 license     = "AGPL-3.0-only"
 description = "vigild — Rust service supervisor and container init daemon"
 homepage    = "https://github.com/git001/vigil-rs"

@@ -171,7 +171,8 @@ pub struct Connection {
     /// Supports exact hostnames (`internal.corp`), domain suffixes
     /// (`.corp` matches `api.corp`), IPv4 CIDRs (`192.168.0.0/16`),
     /// and IPv6 CIDRs (`fd00::/8`).
-    /// Applies to --source-url and --kubernetes modes.
+    /// Only for --source-url; with --kubernetes it has no effect (there is
+    /// one API server: leave --source-proxy unset to connect directly).
     #[arg(
         long,
         env = "SOURCE_NO_PROXY",
