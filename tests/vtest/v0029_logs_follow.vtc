@@ -1,4 +1,4 @@
-vtest "GET /v1/logs?follow=true: the last n lines, then new lines as NDJSON; unknown parameters are 400"
+vtest "GET /v1/logs?follow=true: the last n lines, then new lines as NDJSON; unknown parameters are 400 on /v1/logs and /v1/logs/follow"
 
 # vigild loads the static layer directory and logs to stdout, the terminal
 # of p1; -expect-text waits there for a line. A wide terminal keeps long log
@@ -54,6 +54,22 @@ client c4 -connect ${tmpdir}/vigild.sock {
 	rxresp
 	expect resp.status == 400
 	expect resp.body ~ "unknown field `format`"
+} -run
+
+# /v1/logs/follow rejects unknown parameters too: "service" (singular)
+# would otherwise stream every service.
+client c6 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/logs/follow?service=web" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 400
+	expect resp.body ~ "unknown field `service`"
+} -run
+
+client c7 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/logs/follow?format=xml" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 400
+	expect resp.body ~ "unknown variant `xml`"
 } -run
 
 # follow takes true or false.

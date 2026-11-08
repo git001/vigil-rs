@@ -53,6 +53,7 @@ pub(crate) struct LogsQuery {
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct FollowQuery {
     /// Comma-separated list of service names to filter by. Omit for all services.
     services: Option<String>,
@@ -133,21 +134,24 @@ fn wanted(services: &[String], entry: &LogEntry) -> bool {
     get, path = "/v1/logs/follow",
     tag = "logs",
     summary = "Stream live log output",
-    description = "Streams log entries in real time.\n\n**Formats** (`?format=`):\n- `json` *(default)* — SSE (`text/event-stream`), each event is `{\"timestamp\":\"…\",\"service\":\"…\",\"stream\":\"…\",\"message\":\"…\"}`. Keep-alive comments (`: ping`) every 15 s.\n- `text` — SSE, each event is `[service] message`.\n- `ndjson` — `application/x-ndjson`, one JSON object per line, no SSE framing. Best for log collectors.\n\n**Required access:** `read` or higher.",
+    description = "Streams log entries in real time.\n\n**Formats** (`?format=`):\n- `json` *(default)* — SSE (`text/event-stream`), each event is `{\"timestamp\":\"…\",\"service\":\"…\",\"stream\":\"…\",\"message\":\"…\"}`. Keep-alive comments (`: ping`) every 15 s.\n- `text` — SSE, each event is `[service] message`.\n- `ndjson` — `application/x-ndjson`, one JSON object per line, no SSE framing. Best for log collectors.\n\nAn unknown query parameter or an invalid `format` is `400`.\n\n**Required access:** `read` or higher.",
     params(FollowQuery),
     responses(
         (status = 200, description = "Log stream (content-type depends on `format`).", content_type = "text/event-stream"),
+        (status = 400, description = "Unknown query parameter or invalid value."),
         (status = 403, description = "Forbidden."),
     )
 )]
 pub(crate) async fn follow_logs(
     caller: Caller,
     State(s): State<AppState>,
-    Query(q): Query<FollowQuery>,
+    query: Result<Query<FollowQuery>, QueryRejection>,
 ) -> Result<Response, ApiError> {
     caller
         .require(IdentityAccess::Read)
         .map_err(ApiError::forbidden_from)?;
+    // Checked after the access check, as in `get_logs`.
+    let Query(q) = query.map_err(|e| ApiError::bad_request(anyhow::anyhow!(e.body_text())))?;
     let services = split_list(q.services.as_deref());
     let format = q.format.unwrap_or_default();
     let rx = s.log_store.subscribe();
