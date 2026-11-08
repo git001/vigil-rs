@@ -1,16 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 vigil-rs contributors
 
-use axum::{
-    Json,
-    extract::{Query, State},
-};
+use axum::extract::{Query, State};
 use vigil_types::identity::{
     AddIdentitiesRequest, Identity, IdentityAccess, RemoveIdentitiesRequest,
 };
 
 use super::super::{ApiError, ApiResult, AppState, auth::Caller, ok};
-use super::{NamesQuery, parse_names};
+use super::{Body, NamesQuery, json_body, parse_names};
 
 #[utoipa::path(
     get, path = "/v1/identities",
@@ -51,11 +48,12 @@ pub(crate) async fn list_identities(
 pub(crate) async fn add_identities(
     caller: Caller,
     State(s): State<AppState>,
-    Json(body): Json<AddIdentitiesRequest>,
+    body: Body<AddIdentitiesRequest>,
 ) -> ApiResult<()> {
     caller
         .require(IdentityAccess::Admin)
         .map_err(ApiError::forbidden_from)?;
+    let body = json_body(body)?;
     for (name, spec) in body.identities {
         s.identity_store
             .add(name, spec)
@@ -81,11 +79,12 @@ pub(crate) async fn add_identities(
 pub(crate) async fn remove_identities(
     caller: Caller,
     State(s): State<AppState>,
-    Json(body): Json<RemoveIdentitiesRequest>,
+    body: Body<RemoveIdentitiesRequest>,
 ) -> ApiResult<Vec<String>> {
     caller
         .require(IdentityAccess::Admin)
         .map_err(ApiError::forbidden_from)?;
+    let body = json_body(body)?;
     s.identity_store
         .remove(&body.identities)
         .await

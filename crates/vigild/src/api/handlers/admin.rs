@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 vigil-rs contributors
 
-use axum::Json;
 use axum::extract::State;
 use tokio::sync::oneshot;
 use vigil_types::api::DaemonActionRequest;
@@ -10,6 +9,7 @@ use vigil_types::identity::IdentityAccess;
 use crate::overlord::Cmd;
 
 use super::super::{ApiError, ApiResult, AppState, auth::Caller, ok};
+use super::{Body, json_body};
 
 #[utoipa::path(
     post, path = "/v1/replan",
@@ -47,11 +47,12 @@ pub(crate) async fn replan(caller: Caller, State(s): State<AppState>) -> ApiResu
 pub(crate) async fn daemon_action(
     caller: Caller,
     State(s): State<AppState>,
-    Json(body): Json<DaemonActionRequest>,
+    body: Body<DaemonActionRequest>,
 ) -> ApiResult<()> {
     caller
         .require(IdentityAccess::Admin)
         .map_err(ApiError::forbidden_from)?;
+    let body = json_body(body)?;
     let _ = s.shutdown_tx.send(body.action).await;
     ok(())
 }

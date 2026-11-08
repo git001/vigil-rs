@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 vigil-rs contributors
 
-use axum::Json;
 use axum::extract::{Query, State};
 use tokio::sync::oneshot;
 use vigil_types::api::{CheckInfo, CheckRefresh, CheckRefreshRequest};
@@ -10,7 +9,7 @@ use vigil_types::identity::IdentityAccess;
 use crate::overlord::Cmd;
 
 use super::super::{ApiError, ApiResult, AppState, auth::Caller, ok};
-use super::{NamesQuery, parse_names};
+use super::{Body, NamesQuery, json_body, parse_names};
 
 #[utoipa::path(
     get, path = "/v1/checks",
@@ -60,11 +59,12 @@ pub(crate) async fn list_checks(
 pub(crate) async fn refresh_check(
     caller: Caller,
     State(s): State<AppState>,
-    Json(body): Json<CheckRefreshRequest>,
+    body: Body<CheckRefreshRequest>,
 ) -> ApiResult<CheckRefresh> {
     caller
         .require(IdentityAccess::Write)
         .map_err(ApiError::forbidden_from)?;
+    let body = json_body(body)?;
     let (tx, rx) = oneshot::channel();
     s.overlord
         .tx

@@ -3,7 +3,6 @@
 
 use std::str::FromStr;
 
-use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use nix::sys::signal::Signal;
@@ -14,6 +13,7 @@ use vigil_types::identity::IdentityAccess;
 use crate::overlord::{Cmd, SignalError};
 
 use super::super::{ApiError, ApiResult, AppState, auth::Caller, ok};
+use super::{Body, json_body};
 
 #[utoipa::path(
     post, path = "/v1/signals",
@@ -32,11 +32,12 @@ use super::super::{ApiError, ApiResult, AppState, auth::Caller, ok};
 pub(crate) async fn send_signals(
     caller: Caller,
     State(s): State<AppState>,
-    Json(body): Json<SignalsRequest>,
+    body: Body<SignalsRequest>,
 ) -> ApiResult<SignalsResult> {
     caller
         .require(IdentityAccess::Write)
         .map_err(ApiError::forbidden_from)?;
+    let body = json_body(body)?;
     let signal = Signal::from_str(&body.signal).map_err(|_| {
         ApiError::bad_request(anyhow::anyhow!(
             "unknown signal {:?} (write it like SIGHUP)",

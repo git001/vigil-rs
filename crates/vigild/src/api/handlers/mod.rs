@@ -16,7 +16,24 @@ pub(super) mod system;
 // Query helpers — shared across submodules
 // ---------------------------------------------------------------------------
 
+use axum::Json;
+use axum::extract::rejection::JsonRejection;
 use serde::Deserialize;
+
+use super::ApiError;
+
+/// A JSON request body, taken as a `Result` so the handler can check the
+/// caller's access first: a caller without access learns nothing about the
+/// body. Unwrap it with [`json_body`].
+pub(super) type Body<T> = Result<Json<T>, JsonRejection>;
+
+/// The body of [`Body`], or its rejection as an error envelope with the
+/// rejection's status (415 wrong content type, 400 invalid JSON, 422 unknown
+/// field or wrong type).
+pub(super) fn json_body<T>(body: Body<T>) -> Result<T, ApiError> {
+    body.map(|Json(b)| b)
+        .map_err(|e| ApiError::with_status(e.status(), anyhow::anyhow!(e.body_text())))
+}
 
 #[derive(Deserialize, utoipa::IntoParams)]
 pub(super) struct NamesQuery {

@@ -1,0 +1,65 @@
+vtest "Invalid JSON bodies get an error envelope, checked after access"
+
+# vigild with an empty layers directory. It logs to stdout, the terminal of
+# p1; -expect-text waits there for a line. A wide terminal keeps long log
+# lines on one row.
+process p1 -winsz 200 400 "${vigild} --layers-dir ${vtestdir}/fixtures/empty --socket ${tmpdir}/vigild.sock" -start
+process p1 -expect-text 0 0 "API listening"
+
+# No identities yet (bootstrap): any local caller is admin. In the body
+# patterns each "." matches one character of a JSON escape.
+
+# Without Content-Type: application/json the body is 415, as an error
+# envelope like every other error.
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/signals -hdr "Host: localhost" \
+		-body "{\"signal\":\"SIGHUP\",\"services\":[\"web\"]}"
+	rxresp
+	expect resp.status == 415
+	expect resp.http.content-type == "application/json"
+	expect resp.body ~ "type.:.error."
+	expect resp.body ~ "status-code.:415"
+	expect resp.body ~ "Content-Type"
+} -run
+
+# Invalid JSON is 400.
+client c2 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/signals -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "not json"
+	rxresp
+	expect resp.status == 400
+	expect resp.body ~ "type.:.error."
+} -run
+
+# An unknown field is 422.
+client c3 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/signals -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"signal\":\"SIGHUP\",\"service\":[\"web\"]}"
+	rxresp
+	expect resp.status == 422
+	expect resp.body ~ "type.:.error."
+	expect resp.body ~ "unknown field `service`"
+} -run
+
+# End the bootstrap with an identity for another UID: this caller is now
+# only `open`.
+client c4 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/identities -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"identities\":{\"ops\":{\"access\":\"admin\",\"local\":{\"user-id\":4242}}}}"
+	rxresp
+	expect resp.status == 200
+} -run
+
+# The access check comes first: 403, not 415, for a caller without access.
+client c5 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/signals -hdr "Host: localhost" \
+		-body "{\"signal\":\"SIGHUP\",\"services\":[\"web\"]}"
+	rxresp
+	expect resp.status == 403
+} -run
+
+process p1 -kill TERM
+process p1 -wait
