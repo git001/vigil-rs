@@ -96,3 +96,6 @@ wiremock           = { workspace = true }
 serde_json         = { workspace = true }
 http-body-util     = { workspace = true }
 vigil-types        = { path = "../vigil-types" }
+
+[lints]
+workspace = true

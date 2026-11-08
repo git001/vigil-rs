@@ -16,3 +16,6 @@ vigil-files       = { workspace = true }
 [dev-dependencies]
 rcgen    = { workspace = true }
 tempfile = { workspace = true }
+
+[lints]
+workspace = true

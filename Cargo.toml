@@ -9,6 +9,12 @@ members = [
 ]
 resolver = "2"
 
+# Locks across .await: a std or parking_lot guard held over an await point
+# can block a runtime worker or deadlock. tokio's locks are made for that.
+[workspace.lints.clippy]
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
+
 [workspace.dependencies]
 # Async runtime
 tokio              = { version = "1",    features = ["full"] }
