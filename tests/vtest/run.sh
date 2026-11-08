@@ -60,6 +60,21 @@ fi
 
 cd "${REPO_ROOT}"
 
+# vigild's runtime directory (--path-prefix). Its default /run/vigil can only
+# be created as root or where the user owns /run (e.g. a Flatpak sandbox), so
+# the tests get their own, removed at the end. vigild and vigil inherit it.
+if [[ -z "${VIGIL_PATH_PREFIX:-}" ]]; then
+    VTEST_RUNTIME="$(mktemp -d)"
+    trap 'rm -rf "${VTEST_RUNTIME}"' EXIT
+    export VIGIL_PATH_PREFIX="${VTEST_RUNTIME}/vigil"
+fi
+
+# VTest2 keeps each test's log in a buffer of 1 MiB by default. A failing
+# test dumps the 200x400 screen of its processes into it, and the load test
+# (v0034) logs over a thousand requests; when the buffer is full VTest2
+# aborts instead of reporting. 64 MiB, mapped per test, are enough.
+VTEST_BUFFER=(-b 64M)
+
 # ---------------------------------------------------------------------------
 # Normal mode — just run VTest2
 # ---------------------------------------------------------------------------
@@ -81,13 +96,14 @@ if [[ "${COVERAGE}" == false ]]; then
         exit 1
     fi
 
-    exec "${VTEST}" \
+    "${VTEST}" "${VTEST_BUFFER[@]}" \
         -Dvigild="${VIGILD_BIN}" \
         -Dvigil="${VIGIL_BIN}" \
         -Dvigil_log_relay="${VIGIL_LOG_RELAY_BIN}" \
         -Dvtestdir="${REPO_ROOT}/tests/vtest" \
         "${VTEST_OPTS[@]}" \
         "${VTC_FILES[@]}"
+    exit
 fi
 
 # ---------------------------------------------------------------------------
@@ -131,7 +147,7 @@ echo "==> Running VTest2 tests…"
 # every subprocess spawned by VTest2 (vigild, vigil, vigil-log-relay) writes
 # its profraw into the same target directory and is picked up by the report.
 export LLVM_PROFILE_FILE="${LLVM_PROFILE_FILE}"
-"${VTEST}" \
+"${VTEST}" "${VTEST_BUFFER[@]}" \
     -Dvigild="${VIGILD_BIN}" \
     -Dvigil="${VIGIL_BIN}" \
     -Dvigil_log_relay="${VIGIL_LOG_RELAY_BIN}" \
