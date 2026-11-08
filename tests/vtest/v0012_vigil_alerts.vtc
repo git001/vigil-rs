@@ -1,49 +1,24 @@
 vtest "vigil alerts list — unknown / down / up status branches"
 
-shell { mkdir -p ${tmpdir}/layers }
+# fixtures/v0012: ghost-check (startup: disabled) stays "unknown";
+# flap-check fails until the marker file exists, then passes. vigild gets
+# the marker path as CHECK_MARKER. It logs to stdout, the terminal of p1;
+# -expect-text waits there for a line. A wide terminal keeps long log lines
+# on one row.
+process p1 -winsz 200 400 "env CHECK_MARKER=${tmpdir}/check_marker ${vigild} --layers-dir ${vtestdir}/fixtures/v0012 --socket ${tmpdir}/vigild.sock" -start
+process p1 -expect-text 0 0 "API listening"
+process p1 -expect-text 0 0 "check is down"
 
-process p1 "env CHECK_MARKER=${tmpdir}/check_marker ${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
-
-shell {
-	for i in $(seq 1 50); do
-		test -S ${tmpdir}/vigild.sock && break
-		sleep 0.1
-	done
-	test -S ${tmpdir}/vigild.sock
+shell -match {(?s)alert-ghost +webhook +unknown +ghost-check.*alert-flap +webhook +down +flap-check} {
+	${vigil} --socket ${tmpdir}/vigild.sock alerts list
 }
 
-# Layer fixtures/v0012/alerts.yaml: ghost-check stays "unknown", flap-check goes
-# Down and, once the marker exists, Up.
-shell {
-	cp ${vtestdir}/fixtures/v0012/alerts.yaml ${tmpdir}/layers/
-	${vigil} --socket ${tmpdir}/vigild.sock replan
-}
+# The marker appears: flap-check passes, Down -> Up.
+filewrite ${tmpdir}/check_marker ""
+process p1 -expect-text 0 0 "check recovered"
 
-# Poll until alert-ghost shows "unknown" AND alert-flap shows "down".
-# ghost-check is startup: disabled → always unknown.
-# flap-check fails on first run (no marker file) → Down.
-shell {
-	for i in $(seq 1 40); do
-		${vigil} --socket ${tmpdir}/vigild.sock alerts list > ${tmpdir}/alerts1.txt 2>&1
-		grep -q unknown ${tmpdir}/alerts1.txt && \
-			grep -q down    ${tmpdir}/alerts1.txt && break
-		sleep 0.3
-	done
-	grep -q unknown ${tmpdir}/alerts1.txt
-	grep -q down    ${tmpdir}/alerts1.txt
-}
-
-# Create the marker → flap-check passes → Down→Up transition → "up" status.
-shell { touch ${tmpdir}/check_marker }
-
-# Poll until alert-flap shows "up".
-shell {
-	for i in $(seq 1 40); do
-		${vigil} --socket ${tmpdir}/vigild.sock alerts list > ${tmpdir}/alerts2.txt 2>&1
-		grep -q ' up ' ${tmpdir}/alerts2.txt && break
-		sleep 0.3
-	done
-	grep -q ' up ' ${tmpdir}/alerts2.txt
+shell -match {alert-flap +webhook +up +flap-check} {
+	${vigil} --socket ${tmpdir}/vigild.sock alerts list
 }
 
 process p1 -kill TERM

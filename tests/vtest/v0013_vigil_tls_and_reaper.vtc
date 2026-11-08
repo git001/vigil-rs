@@ -1,119 +1,61 @@
 vtest "vigild TLS listener (server.rs) and subreaper (reaper.rs)"
 
-shell { mkdir -p ${tmpdir}/layers }
+# vigild with a TLS listener on a free port and subreaper mode (--reaper:
+# prctl(PR_SET_CHILD_SUBREAPER) and the SIGCHLD task). Without --cert/--key
+# it generates a self-signed certificate. fixtures/v0013 has quick-exit, a
+# service that exits at once and is restarted after 100ms, so SIGCHLD keeps
+# coming. vigild logs to stdout, the terminal of p1; -expect-text waits
+# there for a line. A wide terminal keeps long log lines on one row.
+process p1 -winsz 200 400 "${vigild} --layers-dir ${vtestdir}/fixtures/v0013 --socket ${tmpdir}/vigild.sock --tls-addr 127.0.0.1:0 --reaper" -start
+process p1 -expect-text 0 0 "API listening"
+process p1 -expect-text 0 0 "subreaper mode enabled"
 
-# Start vigild with TLS listener + subreaper mode.
-# --reaper calls prctl(PR_SET_CHILD_SUBREAPER) and spawns the SIGCHLD task.
-# Self-signed cert is auto-generated when --cert/--key are omitted.
-shell {
-	${vigild} \
-		--layers-dir ${tmpdir}/layers \
-		--socket     ${tmpdir}/vigild.sock \
-		--tls-addr   127.0.0.1:0 \
-		--reaper \
-		>> ${tmpdir}/vigild.log 2>&1 < /dev/null &
-	echo $! > ${tmpdir}/vigild.pid
+# Identities (the TLS API has no anonymous admin): a local admin keeps the
+# Unix socket working once bootstrap ends; TLS calls below authenticate as
+# admin-user / admpass (see fixtures/README.md).
+shell -expect "Identity 'local-admin' added." {
+	${vigil} --socket ${tmpdir}/vigild.sock identities add-local local-admin --access admin
 }
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/identities -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-bodyfrom ${vtestdir}/fixtures/identities/admin-user.json
+	rxresp
+	expect resp.status == 200
+} -run
 
-# Wait for Unix socket (signals daemon is up, TLS listener starts at the same time).
-shell {
-	for i in $(seq 1 50); do
-		test -S ${tmpdir}/vigild.sock && break
-		sleep 0.1
-	done
-	test -S ${tmpdir}/vigild.sock
-}
-
-# vigild binds a free TLS port (--tls-addr 127.0.0.1:0); vigil system-info
-# shows the one it got.
+# The TLS port vigild got is known only at run time: vigil system-info
+# shows it. VTest2 cannot connect to such a port, so the TLS calls use vigil
+# (self-signed certificate: --insecure).
 shell {
 	${vigil} --socket ${tmpdir}/vigild.sock system-info \
-		| sed -n 's/^https-address: .*:\([0-9]*\)$/\1/p' > ${tmpdir}/tls_port.txt
-	test -s ${tmpdir}/tls_port.txt
+		| sed -n 's/^https-address: 127.0.0.1:\([0-9]*\)$/\1/p' > ${tmpdir}/tls_port
+	test -s ${tmpdir}/tls_port
 }
 
-# ---------------------------------------------------------------------------
-# Identities (since v4 the TLS API has no anonymous admin, S5): create them
-# over the Unix socket first; TLS calls below authenticate as admin-user.
-# The local identity keeps Unix-socket access working after bootstrap ends.
-# ---------------------------------------------------------------------------
-
-shell {
-	${vigil} --socket ${tmpdir}/vigild.sock \
-		identities add-local local-admin --access admin
+shell -match {(?s)version: +[0-9.]+.*https-address: 127[.]0[.]0[.]1:[0-9]+} {
+	${vigil} --url https://127.0.0.1:$(cat ${tmpdir}/tls_port) --insecure \
+		--user admin-user:admpass system-info
+}
+shell -match {quick-exit +enabled} {
+	${vigil} --url https://127.0.0.1:$(cat ${tmpdir}/tls_port) --insecure \
+		--user admin-user:admpass services list
+}
+shell -expect "No checks." {
+	${vigil} --url https://127.0.0.1:$(cat ${tmpdir}/tls_port) --insecure \
+		--user admin-user:admpass checks list
+}
+shell -expect "No log entries." {
+	${vigil} --url https://127.0.0.1:$(cat ${tmpdir}/tls_port) --insecure \
+		--user admin-user:admpass logs
 }
 
-# admin-user / admpass, see tests/vtest/fixtures/README.md
-shell {
-	curl -sf \
-		--unix-socket ${tmpdir}/vigild.sock \
-		-X POST http://localhost/v1/identities \
-		-H "Content-Type: application/json" \
-		-d @${vtestdir}/fixtures/identities/admin-user.json > /dev/null
+# The subreaper reaps quick-exit, which vigild restarts after its backoff.
+process p1 -expect-text 0 0 "process exited service=quick-exit success=true"
+process p1 -expect-text 0 0 "backoff elapsed, restarting service=quick-exit"
+shell -match {quick-exit +enabled +[a-z]+ +restart +restart +SIGTERM +0} {
+	${vigil} --socket ${tmpdir}/vigild.sock services list
 }
 
-# Also wait briefly for the TLS port to open.
-shell {
-	PORT=$(cat ${tmpdir}/tls_port.txt)
-	for i in $(seq 1 30); do
-		${vigil} --url https://127.0.0.1:$PORT --insecure --user admin-user:admpass system-info \
-			> /dev/null 2>&1 && break
-		sleep 0.2
-	done
-}
-
-# --- server.rs: TLS accept loop coverage ---
-
-# system-info via HTTPS (self-signed → --insecure)
-shell {
-	PORT=$(cat ${tmpdir}/tls_port.txt)
-	${vigil} --url https://127.0.0.1:$PORT --insecure --user admin-user:admpass system-info \
-		> ${tmpdir}/sysinfo_tls.txt
-	grep -q version ${tmpdir}/sysinfo_tls.txt
-}
-
-# services list via HTTPS
-shell {
-	PORT=$(cat ${tmpdir}/tls_port.txt)
-	${vigil} --url https://127.0.0.1:$PORT --insecure --user admin-user:admpass services list
-}
-
-# checks list via HTTPS
-shell {
-	PORT=$(cat ${tmpdir}/tls_port.txt)
-	${vigil} --url https://127.0.0.1:$PORT --insecure --user admin-user:admpass checks list
-}
-
-# logs via HTTPS
-shell {
-	PORT=$(cat ${tmpdir}/tls_port.txt)
-	${vigil} --url https://127.0.0.1:$PORT --insecure --user admin-user:admpass logs
-}
-
-# --- reaper.rs: subreaper + SIGCHLD coverage ---
-
-# Add a service that exits immediately (on-success: restart) so that
-# SIGCHLD fires repeatedly → reap_children() is called.
-shell {
-	cp ${vtestdir}/fixtures/v0013/quick.yaml ${tmpdir}/layers/
-	${vigil} --socket ${tmpdir}/vigild.sock replan
-}
-
-# Give the service a moment to start and exit a few times → SIGCHLD fires.
-shell { sleep 0.5 }
-
-# Verify service is cycling (state is active or restarting).
-shell {
-	${vigil} --socket ${tmpdir}/vigild.sock services list > ${tmpdir}/svcs.txt
-	grep -q quick-exit ${tmpdir}/svcs.txt
-}
-
-# Tear down.
-shell {
-	kill $(cat ${tmpdir}/vigild.pid) 2>/dev/null || true
-	# Wait for vigild to exit
-	for i in $(seq 1 30); do
-		kill -0 $(cat ${tmpdir}/vigild.pid) 2>/dev/null || break
-		sleep 0.1
-	done
-}
+process p1 -kill TERM
+process p1 -wait

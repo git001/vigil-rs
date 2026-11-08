@@ -1,65 +1,27 @@
 vtest "body_template: webhook alert uses Jinja2 template instead of default payload"
 
-shell { mkdir -p ${tmpdir}/layers }
+# The webhook endpoint: one POST whose body must be exactly the rendered
+# template, its three fields and nothing else (no timestamp, labels or info
+# of the built-in webhook format). vigild parses and re-serialises the
+# rendered JSON, so the keys come sorted.
+server s1 {
+	rxreq
+	expect req.method == POST
+	expect req.url == /webhook
+	expect req.body == "{\"check\":\"tmpl-check\",\"status\":\"down\",\"text\":\"tmpl-check is down\"}"
+	txresp -hdr "Connection: close"
+} -start
 
+# fixtures/v0016: tmpl-check fails (no marker file), the alert has a
+# body-template. vigild gets the webhook URL and the marker path from its
+# environment (url "env:WEBHOOK_URL", pass-env-glob CHECK_MARKER). It logs to
+# stdout, the terminal of p1; -expect-text waits there for a line. A wide
+# terminal keeps long log lines on one row.
+process p1 -winsz 200 400 "env CHECK_MARKER=${tmpdir}/check_marker WEBHOOK_URL=http://${s1_sock}/webhook ${vigild} --layers-dir ${vtestdir}/fixtures/v0016 --socket ${tmpdir}/vigild.sock" -start
+process p1 -expect-text 0 0 "API listening"
+process p1 -expect-text 0 0 "check is down"
 
-
-# Start a minimal HTTP server (tests/vtest/helpers/http_capture.py) that appends every
-# POST body to received.json; it picks a free port and writes it to
-# webhook_port.txt once it listens.
-shell {
-	${vtestdir}/helpers/http_capture.py ${tmpdir}/webhook_port.txt ${tmpdir}/received.json \
-		> /dev/null 2>&1 &
-	echo $! > ${tmpdir}/webhook_server.pid
-	for i in $(seq 1 50); do
-		test -s ${tmpdir}/webhook_port.txt && break
-		sleep 0.1
-	done
-	test -s ${tmpdir}/webhook_port.txt
-}
-
-# vigild learns the webhook URL and the marker path from its environment
-# (alert url "env:WEBHOOK_URL", check pass-env-glob CHECK_MARKER).
-process p1 "env CHECK_MARKER=${tmpdir}/check_marker WEBHOOK_URL=http://127.0.0.1:$(cat ${tmpdir}/webhook_port.txt)/webhook ${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
-
-shell {
-	for i in $(seq 1 50); do
-		test -S ${tmpdir}/vigild.sock && break
-		sleep 0.1
-	done
-	test -S ${tmpdir}/vigild.sock
-}
-
-# Layer fixtures/v0016/tmpl-alert.yaml: a failing check and an alert with a
-# body-template.
-shell {
-	cp ${vtestdir}/fixtures/v0016/tmpl-alert.yaml ${tmpdir}/layers/
-	${vigil} --socket ${tmpdir}/vigild.sock replan
-}
-
-# Wait until vigild fires the alert (check fails → Down → POST sent).
-shell {
-	for i in $(seq 1 50); do
-		test -s ${tmpdir}/received.json && break
-		sleep 0.2
-	done
-	test -s ${tmpdir}/received.json
-}
-
-# The first POST must be exactly the rendered template: its three fields and
-# nothing else (no timestamp/labels/info of the built-in webhook format).
-# vigild parses and re-serialises the rendered JSON, so keys come sorted.
-shell {
-	expected='{"check":"tmpl-check","status":"down","text":"tmpl-check is down"}'
-	actual=$(head -n 1 ${tmpdir}/received.json)
-	if [ "$actual" != "$expected" ]; then
-		echo "unexpected body: $actual"
-		exit 1
-	fi
-}
-
-# Tear down
-shell { kill $(cat ${tmpdir}/webhook_server.pid) 2>/dev/null || true }
+server s1 -wait
 
 process p1 -kill TERM
 process p1 -wait

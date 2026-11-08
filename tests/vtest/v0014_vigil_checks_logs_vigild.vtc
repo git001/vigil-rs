@@ -1,68 +1,36 @@
 vtest "vigil checks list (formatting + next_run branches), logs, vigild status/stop"
 
-shell { mkdir -p ${tmpdir}/layers }
+# fixtures/v0014: logger echoes a line and is restarted, so `vigil logs` has
+# entries; four checks cover the four "Next run" formats:
+#   pending-check  delay: 1h             still in its initial delay: "pending"
+#   fast-check     period: 30s, delay 0  after its first run ~30s:   "Xs"
+#   medium-check   period: 2m,  delay 0  ~120s:                      "Xm Xs"
+#   slow-check     period: 2h,  delay 0  ~7200s:                     "Xh Xm"
+# vigild logs to stdout, the terminal of p1; -expect-text waits there for a
+# line. A wide terminal keeps long log lines on one row.
+process p1 -winsz 200 400 "${vigild} --layers-dir ${vtestdir}/fixtures/v0014 --socket ${tmpdir}/vigild.sock" -start
+process p1 -expect-text 0 0 "API listening"
 
-process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
-
-shell {
-	for i in $(seq 1 50); do
-		test -S ${tmpdir}/vigild.sock && break
-		sleep 0.1
-	done
-	test -S ${tmpdir}/vigild.sock
+shell -match {(?s)version: +[0-9.]+.*uptime: +[0-9]+d [0-9]+h [0-9]+m [0-9]+s} {
+	${vigil} --socket ${tmpdir}/vigild.sock vigild status
 }
 
-# --- vigil vigild status → VigilDCmd::Status branch ---
+# The logger line reaches vigild's log once logger ran.
+process p1 -expect-text 0 0 "[logger] vigil-log-entry"
+# The checks with delay 0 run at once; exec "true" takes a few milliseconds.
+delay 0.5
 
-shell {
-	${vigil} --socket ${tmpdir}/vigild.sock vigild status > ${tmpdir}/vstatus.txt
-	grep -q version ${tmpdir}/vstatus.txt
-	grep -q uptime  ${tmpdir}/vstatus.txt
+shell -match {(?s)pending-check +alive +up +0/3 +pending.*fast-check +alive +up +0/3 +[0-9]+s.*medium-check +alive +up +0/3 +[0-9]+m [0-9]+s.*slow-check +alive +up +0/3 +[0-9]+h [0-9]+m} {
+	${vigil} --socket ${tmpdir}/vigild.sock checks list
 }
 
-# --- Add YAML: logger service + checks with different periods ---
-#
-# pending-check:  delay: 1h  → still in initial-delay loop → next_run_in_secs: None → "pending"
-# fast-check:     period: 30s, delay: 0s → after first tick: ~30s  → "Xs"   branch
-# medium-check:   period: 2m,  delay: 0s → after first tick: ~120s → "Xm Xs" branch
-# slow-check:     period: 2h,  delay: 0s → after first tick: ~7200s → "Xh Xm" branch
-#
-# logger: echoes a line, restarts → produces log entries for `vigil logs`.
-
-shell {
-	cp ${vtestdir}/fixtures/v0014/checks.yaml ${tmpdir}/layers/
-	${vigil} --socket ${tmpdir}/vigild.sock replan
+shell -match {[[]logger[]] [[]stdout[]] vigil-log-entry} {
+	${vigil} --socket ${tmpdir}/vigild.sock logs
 }
 
-# Give fast/medium/slow checks time to complete their first tick (delay: 0s →
-# interval fires immediately; exec "true" is nearly instant).
-shell { sleep 0.5 }
-
-# checks list — exercises the formatting loop and all four next_run_in_secs branches.
-shell {
-	${vigil} --socket ${tmpdir}/vigild.sock checks list > ${tmpdir}/checks.txt
-	grep -q fast-check    ${tmpdir}/checks.txt
-	grep -q medium-check  ${tmpdir}/checks.txt
-	grep -q slow-check    ${tmpdir}/checks.txt
-	grep -q pending-check ${tmpdir}/checks.txt
-	grep -q pending       ${tmpdir}/checks.txt
+# vigil vigild stop: vigild shuts down and exits with 0.
+shell -expect "Daemon stop initiated." {
+	${vigil} --socket ${tmpdir}/vigild.sock vigild stop
 }
-
-# Poll until the logger service has produced at least one log entry.
-shell {
-	for i in $(seq 1 30); do
-		${vigil} --socket ${tmpdir}/vigild.sock logs > ${tmpdir}/logs.txt 2>&1
-		grep -q vigil-log-entry ${tmpdir}/logs.txt && break
-		sleep 0.2
-	done
-	grep -q vigil-log-entry ${tmpdir}/logs.txt
-}
-
-# --- vigil vigild stop → VigilDCmd::Stop branch ---
-
-shell {
-	${vigil} --socket ${tmpdir}/vigild.sock vigild stop > ${tmpdir}/stop.txt
-	grep -q "stop initiated" ${tmpdir}/stop.txt
-}
-
+process p1 -expect-text 0 0 "daemon stop requested via API"
 process p1 -wait

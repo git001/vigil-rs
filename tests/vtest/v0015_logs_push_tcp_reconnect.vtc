@@ -1,21 +1,10 @@
 vtest "logs-push-addr: vigild reconnects TCP sink after disconnect"
 
-shell { mkdir -p ${tmpdir}/layers }
-
-process p1 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
-
-shell {
-	for i in $(seq 1 50); do
-		test -S ${tmpdir}/vigild.sock && break
-		sleep 0.1
-	done
-	test -S ${tmpdir}/vigild.sock
-}
-
-# --- Round 1: start the sink on a free port, verify logs arrive ---
-# tests/vtest/helpers/tcp_capture.py binds a free port and writes it to
-# sink_port.txt once it listens.
-
+# VTest2 cannot check the content of a raw TCP stream, so the sink is a
+# helper (tests/vtest/helpers/tcp_capture.py): it binds a free port, writes
+# it to sink_port.txt once it listens and appends what it receives to a
+# file. All three fds are redirected so it does not hold the VTest2 output
+# pipe open.
 shell {
 	${vtestdir}/helpers/tcp_capture.py ${tmpdir}/sink_port.txt ${tmpdir}/sink1.txt \
 		> /dev/null 2>&1 < /dev/null &
@@ -27,33 +16,35 @@ shell {
 	test -s ${tmpdir}/sink_port.txt
 }
 
-# Layer fixtures/v0015/log-svc.yaml: a service pushing its logs to the sink;
-# logs-push-addr has no env: support, so the port placeholder is replaced.
+# fixtures/v0015/log-svc.yaml: a service pushing its log lines to the sink.
+# logs-push-addr has no env: support, so the port placeholder is filled in.
 shell {
+	mkdir ${tmpdir}/layers
 	sed "s/@SINK_PORT@/$(cat ${tmpdir}/sink_port.txt)/" \
 		${vtestdir}/fixtures/v0015/log-svc.yaml > ${tmpdir}/layers/log-svc.yaml
-	${vigil} --socket ${tmpdir}/vigild.sock replan
 }
 
+# vigild logs to stdout, the terminal of p1; -expect-text waits there for a
+# line. A wide terminal keeps long log lines on one row. The push task logs
+# a lost connection at debug level.
+process p1 -winsz 200 400 "env RUST_LOG=info,vigild::logs::push=debug ${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+process p1 -expect-text 0 0 "API listening"
+
+# Round 1: the log lines arrive.
 shell {
 	for i in $(seq 1 40); do
-		test -s ${tmpdir}/sink1.txt && \
-			grep -q push-line ${tmpdir}/sink1.txt && break
+		grep -q push-line ${tmpdir}/sink1.txt 2>/dev/null && break
 		sleep 0.2
 	done
 	grep -q push-line ${tmpdir}/sink1.txt
 }
 
-# --- Kill the sink (simulates crash / network outage) ---
+# The sink goes away (a crash, a network outage); vigild notices.
+shell { kill $(cat ${tmpdir}/sink1.pid) }
+process p1 -expect-text 0 0 "push TCP lost, reconnecting"
 
-shell { kill $(cat ${tmpdir}/sink1.pid) 2>/dev/null || true }
-
-# Give vigild time to notice the broken connection and enter backoff (500ms)
-shell { sleep 1 }
-
-# --- Round 2: restart the sink on the same port (vigild is configured for
-# it), verify vigild reconnects and logs resume ---
-
+# Round 2: a sink on the same port (vigild is configured for it); vigild
+# reconnects and the lines arrive again.
 shell {
 	${vtestdir}/helpers/tcp_capture.py --port $(cat ${tmpdir}/sink_port.txt) \
 		${tmpdir}/sink2_port.txt ${tmpdir}/sink2.txt \
@@ -65,20 +56,15 @@ shell {
 	done
 	test -s ${tmpdir}/sink2_port.txt
 }
-
 shell {
 	for i in $(seq 1 40); do
-		test -s ${tmpdir}/sink2.txt && \
-			grep -q push-line ${tmpdir}/sink2.txt && break
+		grep -q push-line ${tmpdir}/sink2.txt 2>/dev/null && break
 		sleep 0.2
 	done
 	grep -q push-line ${tmpdir}/sink2.txt
 }
 
-# Tear down
-shell {
-	kill $(cat ${tmpdir}/sink2.pid) 2>/dev/null || true
-}
+shell { kill $(cat ${tmpdir}/sink2.pid) }
 
 process p1 -kill TERM
 process p1 -wait
