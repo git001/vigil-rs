@@ -42,7 +42,7 @@ pub struct LocalIdentity {
 /// The password is verified against a SHA-512-crypt hash (format: `$6$salt$hash`).
 /// Generate a hash with: `openssl passwd -6`
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct BasicIdentity {
     /// SHA-512-crypt password hash (`$6$...`).
     pub password_hash: String,
@@ -50,7 +50,7 @@ pub struct BasicIdentity {
 
 /// Matches a TLS connection whose client cert was signed by the given CA.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct TlsIdentity {
     /// PEM-encoded CA certificate used to verify the client cert.
     pub ca_cert: String,
@@ -93,13 +93,14 @@ pub struct Identity {
 
 /// Body for `POST /v1/identities` (add or update identities).
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AddIdentitiesRequest {
     pub identities: HashMap<String, IdentitySpec>,
 }
 
 /// Spec used when adding/updating an identity (no `name` field — that's the key).
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct IdentitySpec {
     pub access: IdentityAccess,
     #[serde(default)]
@@ -112,6 +113,7 @@ pub struct IdentitySpec {
 
 /// Body for `DELETE /v1/identities`.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RemoveIdentitiesRequest {
     pub identities: Vec<String>,
 }

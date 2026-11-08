@@ -43,9 +43,20 @@ client c3 -connect ${tmpdir}/vigild.sock {
 	expect resp.body ~ "unknown field `service`"
 } -run
 
+# Every request body is strict: an extra field is 422, not ignored (here it
+# would otherwise stop every service).
+client c4 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/services -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"action\":\"stop\",\"services\":[],\"force\":true}"
+	rxresp
+	expect resp.status == 422
+	expect resp.body ~ "unknown field `force`"
+} -run
+
 # An unknown query parameter is 400: "name" (singular) would otherwise list
 # every service.
-client c4 -connect ${tmpdir}/vigild.sock {
+client c5 -connect ${tmpdir}/vigild.sock {
 	txreq -method GET -url "/v1/services?name=web" -hdr "Host: localhost"
 	rxresp
 	expect resp.status == 400
@@ -55,7 +66,7 @@ client c4 -connect ${tmpdir}/vigild.sock {
 
 # End the bootstrap with an identity for another UID: this caller is now
 # only `open`.
-client c5 -connect ${tmpdir}/vigild.sock {
+client c6 -connect ${tmpdir}/vigild.sock {
 	txreq -method POST -url /v1/identities -hdr "Host: localhost" \
 		-hdr "Content-Type: application/json" \
 		-body "{\"identities\":{\"ops\":{\"access\":\"admin\",\"local\":{\"user-id\":4242}}}}"
@@ -64,7 +75,7 @@ client c5 -connect ${tmpdir}/vigild.sock {
 } -run
 
 # The access check comes first: 403, not 415, for a caller without access.
-client c6 -connect ${tmpdir}/vigild.sock {
+client c7 -connect ${tmpdir}/vigild.sock {
 	txreq -method POST -url /v1/signals -hdr "Host: localhost" \
 		-body "{\"signal\":\"SIGHUP\",\"services\":[\"web\"]}"
 	rxresp
@@ -72,14 +83,14 @@ client c6 -connect ${tmpdir}/vigild.sock {
 } -run
 
 # Query parameters are checked after access as well.
-client c7 -connect ${tmpdir}/vigild.sock {
+client c8 -connect ${tmpdir}/vigild.sock {
 	txreq -method GET -url "/v1/services?name=web" -hdr "Host: localhost"
 	rxresp
 	expect resp.status == 403
 } -run
 
 # /v1/health is open, so this caller gets the 400, as an envelope.
-client c8 -connect ${tmpdir}/vigild.sock {
+client c9 -connect ${tmpdir}/vigild.sock {
 	txreq -method GET -url "/v1/health?level=up" -hdr "Host: localhost"
 	rxresp
 	expect resp.status == 400

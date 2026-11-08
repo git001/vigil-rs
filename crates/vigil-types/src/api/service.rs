@@ -71,6 +71,7 @@ pub struct ServiceInfo {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ServicesAction {
     pub action: ServiceAction,
     pub services: Vec<String>,

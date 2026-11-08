@@ -78,7 +78,7 @@ tests/vtest/run.sh
 | `v0029_logs_follow.vtc` | `GET /v1/logs?follow=true`: the last `n` lines, then new lines as NDJSON; unknown parameters are 400 on `/v1/logs` and `/v1/logs/follow` |
 | `v0030_replan_restart.vtc` | Replan restarts a running service whose config changed, then the services that require it |
 | `v0031_check_metrics.vtc` | Check metrics: `level` label, `vigil_health` per level, outages, time down, run durations |
-| `v0032_api_request_errors.vtc` | Invalid JSON bodies (415/400/422) and unknown query parameters (400) get the error envelope, and only after the access check (403 first) |
+| `v0032_api_request_errors.vtc` | Invalid JSON bodies (415/400/422, also an unknown field) and unknown query parameters (400) get the error envelope, and only after the access check (403 first) |
 
 ## How it works
 

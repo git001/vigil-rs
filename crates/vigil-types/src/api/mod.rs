@@ -9,6 +9,8 @@ use utoipa::ToSchema;
 
 mod check;
 mod service;
+#[cfg(test)]
+mod tests;
 
 pub use check::{
     AlertCheckStatus, AlertInfo, CheckInfo, CheckRefresh, CheckRefreshRequest, CheckStatus,
@@ -68,6 +70,7 @@ pub enum DaemonAction {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DaemonActionRequest {
     pub action: DaemonAction,
 }

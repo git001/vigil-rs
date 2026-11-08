@@ -594,6 +594,7 @@ components:
             $ref: '#/components/schemas/IdentitySpec'
           propertyNames:
             type: string
+      additionalProperties: false
     AlertCheckStatus:
       type: object
       required:
@@ -662,6 +663,7 @@ components:
         password-hash:
           type: string
           description: SHA-512-crypt password hash (`$6$...`).
+      additionalProperties: false
     ChangeInfo:
       type: object
       required:
@@ -787,6 +789,7 @@ components:
       properties:
         action:
           $ref: '#/components/schemas/DaemonAction'
+      additionalProperties: false
     ExitInfo:
       type: object
       description: How a service process ended.
@@ -887,6 +890,7 @@ components:
           oneOf:
           - type: 'null'
           - $ref: '#/components/schemas/TlsIdentity'
+      additionalProperties: false
     LocalIdentity:
       type: object
       description: Matches a connection coming in over the Unix socket by the caller's UID.
@@ -931,6 +935,7 @@ components:
           type: array
           items:
             type: string
+      additionalProperties: false
     ServiceAction:
       type: string
       enum:
@@ -1015,6 +1020,7 @@ components:
           type: array
           items:
             type: string
+      additionalProperties: false
     SignalsRequest:
       type: object
       description: Body of `POST /v1/signals`.
@@ -1086,6 +1092,7 @@ components:
         ca-cert:
           type: string
           description: PEM-encoded CA certificate used to verify the client cert.
+      additionalProperties: false
 tags:
 - name: system info
 - name: services
