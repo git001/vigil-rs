@@ -1,0 +1,28 @@
+vtest "vigild's own log outside a terminal: no colours, plain pid and path values"
+
+# vigild's stdout goes into a pipe, as with `podman logs`: not a terminal,
+# so vigild must not write ANSI colour codes. `cat -v` passes the log on to
+# the terminal of the process and shows an escape character as the visible
+# text "^[", so the patterns below only match when there is none between the
+# fields. fixtures/v0010 has one service, log-svc. A wide terminal keeps the
+# lines on one row. -match-text does not wait, so -expect-text waits for the
+# line first; screen rows are padded with spaces, so a pattern ends with the
+# space after the value instead of "$".
+
+# Part 1: text format. The pid is a number, not Some(…); the path has no
+# quotes.
+process p1 -winsz 200 400 "sh -c '${vigild} --layers-dir ${vtestdir}/fixtures/v0010 --socket ${tmpdir}/text.sock --path-prefix ${tmpdir}/text 2>&1 | cat -v'" -start
+process p1 -expect-text 0 0 "process started"
+process p1 -match-text 0 0 "INFO vigild::service::actor::spawn: process started service=log-svc pid=[0-9]+ "
+process p1 -match-text 0 0 "created path prefix directory path=${tmpdir}/text/notify mode="
+process p1 -kill TERM
+process p1 -wait
+
+# Part 2: JSON format. The pid is a JSON number (a digit, then no quote), the
+# path a plain string.
+process p2 -winsz 200 400 "sh -c '${vigild} --layers-dir ${vtestdir}/fixtures/v0010 --socket ${tmpdir}/json.sock --path-prefix ${tmpdir}/json --log-format json 2>&1 | cat -v'" -start
+process p2 -expect-text 0 0 "process started"
+process p2 -match-text 0 0 "\"message\":\"process started\",\"service\":\"log-svc\",\"pid\":[0-9]+[^0-9\"]"
+process p2 -expect-text 0 0 "\"path\":\"${tmpdir}/json/notify\""
+process p2 -kill TERM
+process p2 -wait

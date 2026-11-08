@@ -153,7 +153,7 @@ impl Actor {
             }
         }
 
-        info!(service = %self.name, pid = ?child.id(), "process started");
+        info!(service = %self.name, pid = child.id(), "process started");
         self.child = Some(child);
         self.notify = notify;
         self.start_watching(reads).await;

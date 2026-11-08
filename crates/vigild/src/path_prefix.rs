@@ -92,7 +92,7 @@ fn create_last(prefix: &Path, what: &str) -> anyhow::Result<()> {
             // DirBuilder honours the umask; set the exact mode explicitly.
             std::fs::set_permissions(prefix, std::fs::Permissions::from_mode(mode))
                 .with_context(|| format!("chmod {mode:o} {prefix:?}"))?;
-            info!(path = ?prefix, mode = format!("{mode:o}"), "created path prefix directory");
+            info!(path = %prefix.display(), mode = format!("{mode:o}"), "created path prefix directory");
             Ok(())
         }
         // Created concurrently by someone else: validate() decides.

@@ -39,7 +39,14 @@ fn main() -> anyhow::Result<()> {
                 .init();
         }
         LogFormat::Text => {
-            tracing_subscriber::fmt().with_env_filter(env_filter).init();
+            // Colours only on a terminal (not in `podman logs` or a file),
+            // and not with NO_COLOR set.
+            let colour = std::io::IsTerminal::is_terminal(&std::io::stdout())
+                && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
+            tracing_subscriber::fmt()
+                .with_ansi(colour)
+                .with_env_filter(env_filter)
+                .init();
         }
     }
 

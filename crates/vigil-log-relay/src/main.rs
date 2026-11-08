@@ -71,9 +71,13 @@ async fn main() -> Result<()> {
                 .init();
         }
         _ => {
+            // Colours only on a terminal, and not with NO_COLOR set.
+            let colour = std::io::IsTerminal::is_terminal(&std::io::stderr())
+                && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
             if cli.debug || std::env::var("RUST_LOG").is_ok() {
                 tracing_subscriber::fmt()
                     .with_writer(std::io::stderr)
+                    .with_ansi(colour)
                     .with_target(true)
                     .with_timer(tracing_subscriber::fmt::time::SystemTime)
                     .with_env_filter(env_filter)
@@ -81,6 +85,7 @@ async fn main() -> Result<()> {
             } else {
                 tracing_subscriber::fmt()
                     .with_writer(std::io::stderr)
+                    .with_ansi(colour)
                     .with_target(false)
                     .without_time()
                     .with_env_filter(env_filter)

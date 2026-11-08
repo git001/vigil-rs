@@ -62,9 +62,9 @@ impl Actor {
         info!(
             service = %self.name,
             success,
-            exit_code = ?exit_info.and_then(|e| e.code),
-            signal = ?exit_info.and_then(|e| e.signal),
-            mapped_code = ?code,
+            exit_code = exit_info.and_then(|e| e.code),
+            signal = exit_info.and_then(|e| e.signal),
+            mapped_code = code,
             "process exited"
         );
         self.child = None;
