@@ -56,13 +56,29 @@ tests/vtest/run.sh
 | `v0007_daemon_stop.vtc` | `POST /v1/vigild {"action":"stop"}` — daemon exits cleanly |
 | `v0008_logs_query.vtc` | `GET /v1/logs` with `?n=` and `?services=` query parameters |
 | `v0009_vigil_cli.vtc` | `vigil` CLI: system-info, services list/start/restart/stop, checks list, alerts list, logs, replan, identities add-local/list/remove |
-| `v0010_log_relay_socket.vtc` | `vigil-log-relay --source-socket` — streams ndjson lines from vigild Unix socket |
-| `v0011_log_relay_url.vtc` | `vigil-log-relay --source-url` — streams from an HTTP endpoint |
+| `v0010_vigil_log_relay.vtc` | `vigil-log-relay --source-socket` — forwards ndjson lines from the vigild Unix socket to a TCP sink; a second run configured only by environment variables (`--stdout-sink`, `INCLUDE`/`EXCLUDE`) |
+| `v0011_vigil_log_relay_source_url.vtc` | `vigil-log-relay --source-url` — forwards an HTTP ndjson stream to a TCP sink |
 | `v0012_vigil_alerts.vtc` | `vigil alerts list` — unknown / down / up display branches |
 | `v0013_vigil_tls_and_reaper.vtc` | vigild TLS listener (`--tls-addr`), `vigil --insecure`, subreaper (`--reaper`) + SIGCHLD handling |
 | `v0014_vigil_checks_logs_vigild.vtc` | `vigil checks list` (all four `next_run` formatting branches), `vigil logs` with entries, `vigil vigild status/stop` |
+| `v0015_logs_push_tcp_reconnect.vtc` | `logs-push-addr`: vigild reconnects to the TCP sink after a disconnect |
+| `v0016_vigil_alerts_body_template.vtc` | `body-template`: a webhook alert sends the rendered template instead of the default payload |
+| `v0017_mtls.vtc` | mTLS client certificate authentication |
+| `v0018_vigil_auth.vtc` | `vigil` CLI: local, Basic auth and mTLS authentication |
+| `v0019_vigild_json_log_format_signals_restart.vtc` | `--log-format json`, SIGHUP/SIGUSR1/SIGUSR2 forwarding, daemon restart |
+| `v0020_metrics_dynamic.vtc` | Metrics follow runtime state: `service_active`, `alert_fire_count` |
+| `v0021_vigil_logs_follow.vtc` | `vigil logs`: `--follow`, service filter, `-n` limit, empty output |
+| `v0022_vigil_https_transport.vtc` | `vigil` CLI over HTTPS: post, post_void, delete, follow_logs |
+| `v0023_service_alerts.vtc` | Service alerts: backoff, recovered after `healthy-time`; checks of an unhealthy service stay quiet |
+| `v0024_watch_layers.vtc` | `--watch-layers`: changed layers apply without replan; an invalid layer raises an alert |
+| `v0025_shutdown_exit_codes.vtc` | Shutdown policies end vigild with the documented exit code |
+| `v0026_layer_identities.vtc` | Identities in layer files: read-only over the API, rotated secret, removed by replan |
 | `v0027_check_failure_reason.vtc` | Why a check fails: `last-error` in `GET /v1/checks` and `vigil checks list`, the reason in the `check failed` log line and in the alert message, cleared by a pass; `vigil checks run` (exit codes, reason, unknown check); `GET /v1/health` (200/502 by level and name, 404, 400) |
 | `v0028_service_signals.vtc` | `vigil services signal` / `POST /v1/signals`: SIGHUP reaches a trapping service that keeps running; all or nothing with a stopped service; unknown service and signal name |
+| `v0029_logs_follow.vtc` | `GET /v1/logs?follow=true`: the last `n` lines, then new lines as NDJSON; unknown parameters are 400 on `/v1/logs` and `/v1/logs/follow` |
+| `v0030_replan_restart.vtc` | Replan restarts a running service whose config changed, then the services that require it |
+| `v0031_check_metrics.vtc` | Check metrics: `level` label, `vigil_health` per level, outages, time down, run durations |
+| `v0032_api_request_errors.vtc` | Invalid JSON bodies (415/400/422) and unknown query parameters (400) get the error envelope, and only after the access check (403 first) |
 
 ## How it works
 
