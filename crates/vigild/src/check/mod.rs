@@ -80,6 +80,20 @@ pub async fn run_once_detached(
     }
 }
 
+/// What `GET /v1/checks` reports for a check with `startup: disabled`,
+/// which has no actor: `inactive`, no failures, no next run.
+pub fn inactive_info(name: String, config: &CheckConfig) -> CheckInfo {
+    CheckInfo {
+        name,
+        level: config.level(),
+        status: CheckStatus::Inactive,
+        failures: 0,
+        threshold: config.threshold.unwrap_or(actor::DEFAULT_THRESHOLD),
+        next_run_in_secs: None,
+        last_error: None,
+    }
+}
+
 pub struct CheckEvent {
     pub check: String,
     pub status: CheckStatus,

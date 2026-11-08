@@ -58,7 +58,7 @@ tests/vtest/run.sh
 | `v0009_vigil_cli.vtc` | `vigil` CLI: system-info, services list/start/restart/stop, checks list, alerts list, logs, replan, identities add-local/list/remove |
 | `v0010_vigil_log_relay.vtc` | `vigil-log-relay --source-socket` — forwards ndjson lines from the vigild Unix socket to a TCP sink; a second run configured only by environment variables (`--stdout-sink`, `INCLUDE`/`EXCLUDE`) |
 | `v0011_vigil_log_relay_source_url.vtc` | `vigil-log-relay --source-url` — forwards an HTTP ndjson stream to a TCP sink |
-| `v0012_vigil_alerts.vtc` | `vigil alerts list` — unknown / down / up display branches |
+| `v0012_vigil_alerts.vtc` | `vigil alerts list` — unknown / down / up display branches; a check with `startup: disabled` is `inactive` in `vigil checks list` and `GET /v1/checks` |
 | `v0013_vigil_tls_and_reaper.vtc` | vigild TLS listener (`--tls-addr`), `vigil --insecure`, subreaper (`--reaper`) + SIGCHLD handling |
 | `v0014_vigil_checks_logs_vigild.vtc` | `vigil checks list` (all four `next_run` formatting branches), `vigil logs` with entries, `vigil vigild status/stop` |
 | `v0015_logs_push_tcp_reconnect.vtc` | `logs-push-addr`: vigild reconnects to the TCP sink after a disconnect |

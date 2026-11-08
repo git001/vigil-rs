@@ -50,21 +50,28 @@ impl Overlord {
             .collect()
     }
 
+    /// The checks of the plan among `names` (empty: all), in plan order. A
+    /// check with `startup: disabled` has no actor and is `inactive`.
     pub(super) async fn query_checks(&self, names: &[String]) -> Vec<vigil_types::api::CheckInfo> {
         let mut infos = Vec::new();
-        for (name, entry) in &self.checks {
-            if names.is_empty() || names.contains(name) {
-                let (tx, rx) = oneshot::channel();
-                if entry
-                    .handle
-                    .tx
-                    .send(check::Cmd::GetStatus(tx))
-                    .await
-                    .is_ok()
-                    && let Ok(info) = rx.await
-                {
-                    infos.push(info);
-                }
+        for (name, config) in &self.plan.checks {
+            if !names.is_empty() && !names.contains(name) {
+                continue;
+            }
+            let Some(entry) = self.checks.get(name) else {
+                infos.push(check::inactive_info(name.clone(), config));
+                continue;
+            };
+            let (tx, rx) = oneshot::channel();
+            if entry
+                .handle
+                .tx
+                .send(check::Cmd::GetStatus(tx))
+                .await
+                .is_ok()
+                && let Ok(info) = rx.await
+            {
+                infos.push(info);
             }
         }
         infos

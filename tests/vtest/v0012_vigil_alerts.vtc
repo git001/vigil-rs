@@ -1,4 +1,4 @@
-vtest "vigil alerts list — unknown / down / up status branches"
+vtest "vigil alerts list — unknown / down / up status branches; a disabled check is listed as inactive"
 
 # fixtures/v0012: ghost-check (startup: disabled) stays "unknown";
 # flap-check fails until the marker file exists, then passes. vigild gets
@@ -12,6 +12,20 @@ process p1 -expect-text 0 0 "check is down"
 shell -match {(?s)alert-ghost +webhook +unknown +ghost-check.*alert-flap +webhook +down +flap-check} {
 	${vigil} --socket ${tmpdir}/vigild.sock alerts list
 }
+
+# ghost-check does not run, but it is listed as inactive: no failures, no
+# next run. In the body pattern each "." matches one character of a JSON
+# escape.
+shell -match {ghost-check +alive +inactive +0/3 +-} {
+	${vigil} --socket ${tmpdir}/vigild.sock checks list
+}
+
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/checks?names=ghost-check" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "name.:.ghost-check.,.level.:.alive.,.status.:.inactive.,.failures.:0"
+} -run
 
 # The marker appears: flap-check passes, Down -> Up.
 filewrite ${tmpdir}/check_marker ""

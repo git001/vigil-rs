@@ -3,6 +3,7 @@
 
 use clap::Subcommand;
 use vigil_client::client::VigilClient;
+use vigil_types::api::CheckStatus;
 
 #[derive(Debug, Subcommand)]
 pub enum ChecksCmd {
@@ -58,19 +59,20 @@ async fn list(client: &VigilClient, names: &[String]) -> anyhow::Result<()> {
         return Ok(());
     }
     println!(
-        "{:<24} {:<8} {:<6} {:<10} {:<10} Last error",
+        "{:<24} {:<8} {:<8} {:<10} {:<10} Last error",
         "Check", "Level", "Status", "Failures", "Next run"
     );
-    println!("{}", "-".repeat(90));
+    println!("{}", "-".repeat(92));
     for chk in checks {
         let next = match chk.next_run_in_secs {
+            None if chk.status == CheckStatus::Inactive => "-".to_string(),
             None => "pending".to_string(),
             Some(s) if s < 60 => format!("{}s", s),
             Some(s) if s < 3600 => format!("{}m {}s", s / 60, s % 60),
             Some(s) => format!("{}h {}m", s / 3600, (s % 3600) / 60),
         };
         let line = format!(
-            "{:<24} {:<8} {:<6} {:<10} {:<10} {}",
+            "{:<24} {:<8} {:<8} {:<10} {:<10} {}",
             chk.name,
             format!("{:?}", chk.level).to_lowercase(),
             format!("{:?}", chk.status).to_lowercase(),

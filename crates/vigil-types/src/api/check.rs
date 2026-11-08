@@ -11,6 +11,9 @@ use utoipa::ToSchema;
 pub enum CheckStatus {
     Up,
     Down,
+    /// `startup: disabled`: the check does not run (only `GET /v1/checks`
+    /// reports it).
+    Inactive,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

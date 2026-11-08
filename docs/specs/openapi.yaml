@@ -774,6 +774,7 @@ components:
       enum:
       - up
       - down
+      - inactive
     DaemonAction:
       type: string
       enum:
