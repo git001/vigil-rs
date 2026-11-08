@@ -32,6 +32,16 @@ spec:
         initialDelaySeconds: 10
         periodSeconds: 15
 
+      # Size these for the services vigild runs; vigild itself needs a few
+      # millicores and about 20 MiB. VIGIL_WORKER_THREADS is not a CPU
+      # request, see container-setup.md.
+      resources:
+        requests:
+          cpu: 250m
+          memory: 256Mi
+        limits:
+          memory: 512Mi
+
       volumeMounts:
         - name: vigil-layers
           mountPath: /etc/vigil/layers
@@ -41,6 +51,10 @@ spec:
       configMap:
         name: myapp-vigil-layers
 ```
+
+The example sets no CPU limit, a common choice to avoid throttling. vigild
+then sees every CPU of the node but still uses only 2 worker threads (see
+[`VIGIL_WORKER_THREADS`](container-setup.md#vigild-cli-flags)).
 
 ### Environment variables and Secrets
 

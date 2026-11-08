@@ -111,6 +111,17 @@ pub struct Cli {
     /// Enable debug logging with timestamps.
     #[arg(long, env = "RELAY_DEBUG", help_heading = "Logging")]
     pub debug: bool,
+
+    // ---- Runtime ----------------------------------------------------------
+    /// Worker threads of the async runtime. Default: 2, or 1 with a single
+    /// CPU. Each costs about 2 MiB; raise it only when watching very many pods.
+    #[arg(
+        long,
+        env = "VIGIL_LOG_WORKER_THREADS",
+        value_name = "N",
+        help_heading = "Runtime"
+    )]
+    pub worker_threads: Option<std::num::NonZeroUsize>,
 }
 
 impl Cli {

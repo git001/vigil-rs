@@ -42,13 +42,23 @@ pub use tcp_sink::SinkConfig;
 // Main
 // ---------------------------------------------------------------------------
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(vigil_types::runtime::worker_threads(
+            cli.worker_threads,
+            vigil_types::runtime::available_cpus(),
+        ))
+        .enable_all()
+        .build()?
+        .block_on(run(cli))
+}
+
+async fn run(cli: Cli) -> Result<()> {
     rustls::crypto::ring::default_provider()
         .install_default()
         .ok();
 
-    let cli = Cli::parse();
     if let Err(msg) = cli.validate() {
         bail!("{msg}");
     }

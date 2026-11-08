@@ -73,6 +73,10 @@ fn main() -> anyhow::Result<()> {
     }
 
     tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(vigil_types::runtime::worker_threads(
+            args.worker_threads,
+            vigil_types::runtime::available_cpus(),
+        ))
         .enable_all()
         .build()?
         .block_on(async_main(args, use_reaper))

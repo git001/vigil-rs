@@ -91,8 +91,18 @@ LABEL org.opencontainers.image.description="My application supervised by vigil-r
 | `--log-format <FMT>` | `VIGIL_LOG_FORMAT` | `text` | Log format: `text` or `json` |
 | `--log-buffer <N>` | `VIGIL_LOG_BUFFER` | `1000` | Per-service log ring-buffer size (lines); see [Logging](../user-guide/logging.md) |
 | `--watch-layers <INTERVAL>` | `VIGIL_WATCH_LAYERS` | — | Reload the layers when their files change, checking every `INTERVAL` (`1s` to `24h`); see [Orchestrators](orchestrators.md#replan-on-configmap-change) |
+| `--worker-threads <N>` | `VIGIL_WORKER_THREADS` | `2` (1 with a single CPU) | Worker threads of the async runtime; each costs about 2 MiB. Without a limit tokio would start one per CPU of the node |
 
 Boolean variables such as `VIGIL_REAPER` take `true` or `false`.
+
+**`VIGIL_WORKER_THREADS` is not a CPU request.** It sets how many threads
+vigild uses to wait for events (processes, checks, API requests); almost all
+of that time is idle, so 2 threads need far less than 2 CPUs. Do not size
+`resources.requests.cpu` or `resources.limits.cpu` after it: give the
+container what its services need, plus a few millicores for vigild. The
+other direction applies too: with a CPU limit below 1 CPU vigild uses one
+thread, and you do not need to raise the limit to get two. The same holds
+for `VIGIL_LOG_WORKER_THREADS` of `vigil-log-relay`.
 
 ## Signal forwarding
 

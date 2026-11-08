@@ -13,7 +13,8 @@ use clap::Parser;
 
 use cli::{Args, Cmd};
 
-#[tokio::main]
+// A single thread: the CLI sends one request (or follows one stream) and exits.
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 

@@ -656,5 +656,6 @@ The patterns use Rust regex syntax.
 |---|---|---|---|
 | `--log-format text\|json` | `VIGIL_LOG_FORMAT` | `text` | Format of the relay's own log |
 | `--debug` | `RELAY_DEBUG` | `false` | Debug logging with timestamps |
+| `--worker-threads N` | `VIGIL_LOG_WORKER_THREADS` | `2` (1 with a single CPU) | Worker threads of the async runtime; raise it only when watching very many pods |
 | `-h`, `--help` | | | Print help |
 | `-V`, `--version` | | | Print version |

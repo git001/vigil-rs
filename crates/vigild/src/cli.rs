@@ -117,6 +117,12 @@ pub(crate) struct Args {
     /// for a slow log-stream consumer before it starts skipping.
     #[arg(long, env = "VIGIL_LOG_BUFFER", default_value_t = logs::DEFAULT_BUFFER_CAPACITY)]
     pub(crate) log_buffer: usize,
+
+    /// Worker threads of the async runtime. Default: 2, or 1 with a single
+    /// CPU. Each costs about 2 MiB; raise it only for very many services
+    /// or checks.
+    #[arg(long, env = "VIGIL_WORKER_THREADS", value_name = "N")]
+    pub(crate) worker_threads: Option<std::num::NonZeroUsize>,
 }
 
 impl Args {
