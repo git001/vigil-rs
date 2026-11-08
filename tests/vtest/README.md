@@ -51,7 +51,7 @@ tests/vtest/run.sh
 | `v0002_api_lists.vtc` | `GET /v1/services`, `/v1/checks`, `/v1/alerts`, `/v1/logs`, `/v1/identities` — all 200, result field present |
 | `v0003_metrics.vtc` | `GET /v1/metrics` — 200, Content-Type contains `openmetrics` |
 | `v0004_openapi.vtc` | `GET /openapi.json` — 200, spec contains `"vigil API"`, `info`, `paths` |
-| `v0005_replan.vtc` | `POST /v1/replan` before and after writing a layer — service appears in list |
+| `v0005_replan.vtc` | `POST /v1/replan` before and after the layers symlink points to a layer — service appears in list |
 | `v0006_identities.vtc` | Identity CRUD: add alice (bootstrap auth), list (Unix UID auth), remove |
 | `v0007_daemon_stop.vtc` | `POST /v1/vigild {"action":"stop"}` — daemon exits cleanly |
 | `v0008_logs_query.vtc` | `GET /v1/logs` with `?n=` and `?services=` query parameters |
@@ -70,7 +70,7 @@ VTest2 provides three key primitives used here:
 
 - **`process`** — spawns a binary as a subprocess, capturing stdout/stderr; supports `-start`, `-kill`, `-wait`
 - **`client -connect <path>`** — opens an HTTP/1.1 connection to a Unix socket
-- **`shell`** — runs a POSIX sh snippet for setup, teardown, polling loops, or output assertions
+- **`shell`** — runs a POSIX sh snippet: the vigil CLI (`-expect`, `-match`), symlinks, TLS files and what else VTest2 cannot do
 
 The macros passed via `-D` hold paths:
 
@@ -91,10 +91,10 @@ on its own:
 - `fixtures/`: static input files, e.g. request bodies
   (`${vtestdir}/fixtures/identities/admin-user.json`); see
   [fixtures/README.md](fixtures/README.md) for the test users.
-- `helpers/`: small standalone scripts, e.g. `helpers/http_capture.py` (an
-  HTTP server that records POST bodies and reports its port in a file),
-  `helpers/tcp_capture.py` (a TCP sink, the same for raw TCP; `--port` binds
-  a given port again, e.g. to test a reconnect) or
+- `helpers/`: small standalone scripts for what VTest2 cannot do:
+  `helpers/tcp_capture.py` (a TCP sink that appends what it receives to a
+  file and reports its port in a file; `--port` binds a given port again,
+  e.g. to test a reconnect; VTest2 cannot check raw TCP content) and
   `helpers/tls_identity.py` (request body for a TLS identity whose CA the
   test creates at runtime).
 
@@ -129,36 +129,32 @@ In `expect … ~` patterns each `.` can stand for one character of a JSON
 escape (`\"`, `\n`, `[`), which keeps them readable:
 `"not running: ..idle.."`.
 
-### Background process (POSIX sh / dash)
+### What stays in shell
 
-Use this pattern when a process must run in the background but is not started
-via VTest2's `process` directive (e.g. when extra flags like `--tls-addr` are
-needed):
+VTest2 has no TLS, cannot check the content of a raw TCP stream and cannot
+connect to a port known only at run time (`--tls-addr 127.0.0.1:0`, a
+healthcheck on `:0`). So TLS calls use `vigil --url https://… --insecure`
+(with `--cert`/`--key` for mTLS), certificates come from `openssl`, a TCP
+sink is `helpers/tcp_capture.py`, and the TLS port is read from `vigil
+system-info` into a file. VTest2 cannot make symlinks either: `ln -s` and
+`ln -sfn` switch a layers directory between fixtures.
 
-```sh
-cmd >> output.txt 2>/dev/null < /dev/null &
-echo $! > ${tmpdir}/pid.txt
-```
+A helper started in the background redirects all three file descriptors
+(`> /dev/null 2>&1 < /dev/null &`), or it holds VTest2's output pipe open.
+VTest2 shells run under `dash`: no `disown`, no bash syntax.
 
-The `2>/dev/null < /dev/null` prevents the spawned process from inheriting
-VTest2's internal pipe file descriptors, which would cause it to block.
-`disown` is bash-only and must not be used — VTest2 shells run under `dash`.
+### Signals and exit codes
 
-### Variable expansion in heredocs
-
-Use an unquoted delimiter (`<<EOF`, not `<<'EOF'`) when VTest2 variables like
-`${tmpdir}` need to expand into the heredoc body (e.g. embedding a temp path
-into a YAML layer file).
-
-Use a quoted delimiter (`<<'EOF'`) when the body contains literal dollar signs
-that must not be expanded (e.g. YAML with no VTest2 variables).
+`process p1 -kill HUP` sends a signal; VTest2 knows TERM, INT, KILL and HUP
+by name, others as a negative number (`-kill -10` for SIGUSR1 on Linux).
+For a process that ends by itself, set `-expect-exit N` on the line with
+`-start`: it may exit before `-wait`.
 
 ### Alert config: `retry-attempts: 1`
 
 Always set `retry-attempts: 1` on alerts in tests. Without it, the overlord
 blocks for ~3 seconds per failed HTTP delivery (3 retries with 1s + 2s
-backoff). This delay makes polling loops time out and `vigil alerts list`
-return stale data.
+backoff). This delay makes `vigil alerts list` return stale data.
 
 ### Alert status transitions
 
@@ -186,9 +182,9 @@ field. To cover all four in one test:
 | `< 3600 s` → `"Xm Xs"` | `period: 2m, delay: 0s` — after first tick, ~120 s remain |
 | `≥ 3600 s` → `"Xh Xm"` | `period: 2h, delay: 0s` — after first tick, ~7200 s remain |
 
-With `delay: 0s`, Tokio's interval fires its first tick immediately, so a
-`sleep 0.5` after `replan` is sufficient to ensure all three timed checks have
-completed their first run.
+With `delay: 0s` the first run starts at once, so a `delay 0.5` after vigild
+is up is enough for all three timed checks to have run once (passing exec
+checks log nothing to wait for).
 
 ### VTest2 server macro
 

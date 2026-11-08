@@ -1,46 +1,23 @@
 vtest "vigild: shutdown policies end vigild with the documented exit code"
 
-# Each part runs vigild in the foreground on a static layers directory and
-# checks its exit code. `timeout` keeps a broken policy from hanging the test
-# (it would exit with 124).
+# Each part runs vigild on a static layers directory until a policy shuts
+# it down, and checks its exit code with -expect-exit. vigild logs to
+# stdout, the terminal of the process; -expect-text waits there for a line.
+# -expect-exit is set at the start, as vigild may exit before -wait.
+# A wide terminal keeps long log lines on one row.
 
-# ---------------------------------------------------------------------------
-# Part 1: on-check-failure: shutdown, --exit-code fixed
-# ---------------------------------------------------------------------------
-shell {
-	rc=0
-	timeout 20 ${vigild} \
-		--layers-dir ${vtestdir}/fixtures/v0025/check-shutdown \
-		--socket     ${tmpdir}/check.sock \
-		--exit-code  fixed \
-		> ${tmpdir}/check.log 2>&1 < /dev/null || rc=$?
-	echo "exit code: $rc"
-	test "$rc" -eq 10
-	grep -q 'on-check-failure: shutdown' ${tmpdir}/check.log
-}
+# Part 1: on-check-failure: shutdown, --exit-code fixed: 10.
+process p1 -winsz 200 400 "${vigild} --layers-dir ${vtestdir}/fixtures/v0025/check-shutdown --socket ${tmpdir}/check.sock --exit-code fixed" -expect-exit 10 -start
+process p1 -expect-text 0 0 "on-check-failure: shutdown"
+process p1 -wait
 
-# ---------------------------------------------------------------------------
-# Part 2: on-failure: shutdown, service exits 3, --exit-code propagate
-# ---------------------------------------------------------------------------
-shell {
-	rc=0
-	timeout 20 ${vigild} \
-		--layers-dir ${vtestdir}/fixtures/v0025/service-exit \
-		--socket     ${tmpdir}/propagate.sock \
-		> ${tmpdir}/propagate.log 2>&1 < /dev/null || rc=$?
-	echo "exit code: $rc"
-	test "$rc" -eq 3
-}
+# Part 2: on-failure: shutdown, the service exits 3, --exit-code propagate
+# (the default): 3.
+process p2 -winsz 200 400 "${vigild} --layers-dir ${vtestdir}/fixtures/v0025/service-exit --socket ${tmpdir}/propagate.sock" -expect-exit 3 -start
+process p2 -expect-text 0 0 "shutting down on policy"
+process p2 -wait
 
-# ---------------------------------------------------------------------------
-# Part 3: the same service with --exit-code fixed
-# ---------------------------------------------------------------------------
-shell {
-	rc=0
-	VIGIL_EXIT_CODE=fixed timeout 20 ${vigild} \
-		--layers-dir ${vtestdir}/fixtures/v0025/service-exit \
-		--socket     ${tmpdir}/fixed.sock \
-		> ${tmpdir}/fixed.log 2>&1 < /dev/null || rc=$?
-	echo "exit code: $rc"
-	test "$rc" -eq 10
-}
+# Part 3: the same service with --exit-code fixed, set by its variable: 10.
+process p3 -winsz 200 400 "env VIGIL_EXIT_CODE=fixed ${vigild} --layers-dir ${vtestdir}/fixtures/v0025/service-exit --socket ${tmpdir}/fixed.sock" -expect-exit 10 -start
+process p3 -expect-text 0 0 "shutting down on policy"
+process p3 -wait

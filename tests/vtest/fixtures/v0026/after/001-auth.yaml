@@ -1,0 +1,3 @@
+# The same layer without the identity: the test points the layers
+# symlink here, and the replan removes its access.
+identities: {}

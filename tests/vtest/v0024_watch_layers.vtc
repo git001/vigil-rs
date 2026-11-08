@@ -1,87 +1,61 @@
 vtest "--watch-layers: apply changed layers without replan, alert on invalid layers"
 
-shell { mkdir -p ${tmpdir}/layers }
+# The webhook endpoint gets the two layer events, one connection each:
+# invalid, then recovered. vigild parses and re-serialises the rendered
+# JSON, so the keys come sorted.
+server s1 {
+	rxreq
+	expect req.url == /webhook
+	expect req.body == "{\"event\":\"invalid\",\"name\":\"layers\",\"source\":\"vigild\"}"
+	txresp -hdr "Connection: close"
+	accept
+	rxreq
+	expect req.body == "{\"event\":\"recovered\",\"name\":\"layers\",\"source\":\"vigild\"}"
+	txresp -hdr "Connection: close"
+} -start
 
-# Start a minimal HTTP server (tests/vtest/helpers/http_capture.py) that appends every
-# POST body to received.json; it picks a free port and writes it to
-# webhook_port.txt once it listens.
-shell {
-	${vtestdir}/helpers/http_capture.py ${tmpdir}/webhook_port.txt ${tmpdir}/received.json \
-		> /dev/null 2>&1 &
-	echo $! > ${tmpdir}/webhook_server.pid
-	for i in $(seq 1 50); do
-		test -s ${tmpdir}/webhook_port.txt && break
-		sleep 0.1
-	done
-	test -s ${tmpdir}/webhook_port.txt
-}
+# The layers directory is a symlink to a static fixture directory; the test
+# changes the plan by pointing it to another one, the way Kubernetes swaps
+# the ..data symlink of a ConfigMap volume. VTest2 cannot make symlinks.
+shell {ln -s ${vtestdir}/fixtures/v0024/start ${tmpdir}/layers}
 
-# vigild checks the layers dir every second (--watch-layers 1s).
-process p1 "env WEBHOOK_URL=http://127.0.0.1:$(cat ${tmpdir}/webhook_port.txt)/webhook ${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock --watch-layers 1s" -start
+# vigild checks the layers every second (--watch-layers 1s) and gets the
+# webhook URL as WEBHOOK_URL. It logs to stdout, the terminal of p1;
+# -expect-text waits there for a line. A wide terminal keeps long log lines
+# on one row.
+process p1 -winsz 200 400 "env WEBHOOK_URL=http://${s1_sock}/webhook ${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock --watch-layers 1s" -start
+process p1 -expect-text 0 0 "API listening"
 
-shell {
-	for i in $(seq 1 50); do
-		test -S ${tmpdir}/vigild.sock && break
-		sleep 0.1
-	done
-	test -S ${tmpdir}/vigild.sock
-}
+# 1. A new layer is applied without "vigil replan": web shows up and starts.
+shell {ln -sfn ${vtestdir}/fixtures/v0024/app ${tmpdir}/layers}
+process p1 -expect-text 0 0 "process started service=web"
+shell -match {web +enabled +active} { ${vigil} --socket ${tmpdir}/vigild.sock services list }
 
-# 1. A new layer (fixtures/v0024/app.yaml) is applied without "vigil replan":
-#    the service web shows up and starts.
-shell {
-	cp ${vtestdir}/fixtures/v0024/app.yaml ${tmpdir}/layers/
-	for i in $(seq 1 50); do
-		${vigil} --socket ${tmpdir}/vigild.sock services list > ${tmpdir}/svc1.txt 2>&1
-		grep -q 'web.*active' ${tmpdir}/svc1.txt && break
-		sleep 0.2
-	done
-	grep -q 'web.*active' ${tmpdir}/svc1.txt
-}
+# 2. A broken layer next to it: the running plan stays, the alert reports
+# it.
+shell {ln -sfn ${vtestdir}/fixtures/v0024/broken ${tmpdir}/layers}
+process p1 -expect-text 0 0 "layers are invalid, keeping the running plan"
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /v1/services -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "name.:.web.,.startup.:.enabled.,.current.:.active."
+	expect resp.body !~ "worker"
+} -run
 
-# 2. A broken layer: the running plan stays, the alert reports it.
-shell {
-	cp ${vtestdir}/fixtures/v0024/broken.yaml ${tmpdir}/layers/
-	for i in $(seq 1 50); do
-		test -s ${tmpdir}/received.json && break
-		sleep 0.2
-	done
-	expected='{"event":"invalid","name":"layers","source":"vigild"}'
-	actual=$(sed -n 1p ${tmpdir}/received.json)
-	if [ "$actual" != "$expected" ]; then
-		echo "unexpected alert: $actual"
-		exit 1
-	fi
-	${vigil} --socket ${tmpdir}/vigild.sock services list > ${tmpdir}/svc2.txt 2>&1
-	grep -q 'web.*active' ${tmpdir}/svc2.txt
-	! grep -q worker ${tmpdir}/svc2.txt
-}
+# 3. The broken layer gone: the next reload succeeds and resolves the alert.
+shell {ln -sfn ${vtestdir}/fixtures/v0024/app ${tmpdir}/layers}
+server s1 -wait
 
-# 3. The broken layer removed: the next reload succeeds and resolves the alert.
-shell {
-	rm ${tmpdir}/layers/broken.yaml
-	for i in $(seq 1 50); do
-		test "$(wc -l < ${tmpdir}/received.json)" -ge 2 && break
-		sleep 0.2
-	done
-	expected='{"event":"recovered","name":"layers","source":"vigild"}'
-	actual=$(sed -n 2p ${tmpdir}/received.json)
-	if [ "$actual" != "$expected" ]; then
-		echo "unexpected alert: $actual"
-		exit 1
-	fi
-}
-
-# The metrics count both reloads by result.
-shell {
-	curl -sf --unix-socket ${tmpdir}/vigild.sock \
-		http://localhost/v1/metrics > ${tmpdir}/metrics.txt
-	grep -q 'vigil_layers_reloads_total{result="ok"} 2' ${tmpdir}/metrics.txt
-	grep -q 'vigil_layers_reloads_total{result="invalid"} 1' ${tmpdir}/metrics.txt
-}
-
-# Tear down
-shell { kill $(cat ${tmpdir}/webhook_server.pid) 2>/dev/null || true }
+# The metrics count the reloads by result. In the patterns "." stands for
+# the braces and quotes of the label.
+client c2 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /v1/metrics -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "vigil_layers_reloads_total.result=.ok.. 2\n"
+	expect resp.body ~ "vigil_layers_reloads_total.result=.invalid.. 1\n"
+} -run
 
 process p1 -kill TERM
 process p1 -wait

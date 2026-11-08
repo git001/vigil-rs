@@ -1,0 +1,17 @@
+# A layer as it would come from a ConfigMap: one service and an alert for
+# invalid layers. vigild runs with --watch-layers and picks it up without
+# "vigil replan". vigild gets WEBHOOK_URL from the test.
+services:
+  web:
+    override: replace
+    command: sleep 300
+    startup: enabled
+
+alerts:
+  ops:
+    url: "env:WEBHOOK_URL"
+    pass-env-glob: [WEBHOOK_URL]
+    format: webhook
+    on-vigild: [layers]
+    retry-attempts: 1
+    body-template: '{"source": "{{ source }}", "name": "{{ name }}", "event": "{{ event }}"}'

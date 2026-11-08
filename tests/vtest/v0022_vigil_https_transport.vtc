@@ -1,151 +1,80 @@
 vtest "vigil CLI: Http transport branches via HTTPS (post, post_void, delete, follow_logs)"
 
-shell { mkdir -p ${tmpdir}/layers }
+# The layers directory is a symlink to a static fixture directory; the test
+# changes the plan by pointing it to another one. VTest2 cannot make
+# symlinks. VTest2 has no TLS either: the HTTPS calls use vigil (--insecure
+# for the self-signed certificate).
+shell {ln -s ${vtestdir}/fixtures/v0022/before ${tmpdir}/layers}
 
-shell {
-	${vigild} \
-		--layers-dir ${tmpdir}/layers \
-		--socket     ${tmpdir}/vigild.sock \
-		--tls-addr   127.0.0.1:0 \
-		>> ${tmpdir}/vigild.log 2>&1 < /dev/null &
-	echo $! > ${tmpdir}/vigild.pid
-}
+# vigild with a TLS listener on a free port. It logs to stdout, the terminal
+# of p1; -expect-text waits there for a line. A wide terminal keeps long log
+# lines on one row.
+process p1 -winsz 200 400 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock --tls-addr 127.0.0.1:0" -start
+process p1 -expect-text 0 0 "API listening"
 
-shell {
-	for i in $(seq 1 50); do
-		test -S ${tmpdir}/vigild.sock && break
-		sleep 0.1
-	done
-	test -S ${tmpdir}/vigild.sock
-}
-
-# vigild binds a free TLS port (--tls-addr 127.0.0.1:0); vigil system-info
-# shows the one it got.
+# The TLS port vigild got is known only at run time; vigil system-info
+# shows it.
 shell {
 	${vigil} --socket ${tmpdir}/vigild.sock system-info \
-		| sed -n 's/^https-address: .*:\([0-9]*\)$/\1/p' > ${tmpdir}/tls_port.txt
-	test -s ${tmpdir}/tls_port.txt
+		| sed -n 's/^https-address: 127.0.0.1:\([0-9]*\)$/\1/p' > ${tmpdir}/tls_port
+	test -s ${tmpdir}/tls_port
 }
 
-# ---------------------------------------------------------------------------
-# Identities (since v4 the TLS API has no anonymous admin, S5): create them
-# over the Unix socket first; TLS calls below authenticate as admin-user.
-# The local identity keeps Unix-socket access working after bootstrap ends.
-# ---------------------------------------------------------------------------
+# Identities (the TLS API has no anonymous admin): a local admin keeps the
+# Unix socket working once bootstrap ends; the HTTPS calls authenticate as
+# admin-user / admpass (see fixtures/README.md).
+shell -expect "Identity 'local-admin' added." {
+	${vigil} --socket ${tmpdir}/vigild.sock identities add-local local-admin --access admin
+}
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/identities -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-bodyfrom ${vtestdir}/fixtures/identities/admin-user.json
+	rxresp
+	expect resp.status == 200
+} -run
 
-shell {
-	${vigil} --socket ${tmpdir}/vigild.sock \
-		identities add-local local-admin --access admin
+# post_void over HTTPS: replan loads https-svc, which prints a line every
+# 50ms.
+shell {ln -sfn ${vtestdir}/fixtures/v0022/after ${tmpdir}/layers}
+shell -expect "Replan completed." {
+	${vigil} --url https://127.0.0.1:$(cat ${tmpdir}/tls_port) --insecure \
+		--user admin-user:admpass replan
+}
+process p1 -expect-text 0 0 "[https-svc] https-svc-log"
+
+# follow_logs over HTTPS: runs as p2 until SIGINT, then exits with 0.
+process p2 -winsz 100 200 "${vigil} --url https://127.0.0.1:$(cat ${tmpdir}/tls_port) --insecure --user admin-user:admpass logs --follow" -start
+process p2 -expect-text 0 0 "[https-svc] [stdout] https-svc-log"
+process p2 -kill INT
+process p2 -wait
+
+# post over HTTPS: stop and start the service.
+shell -expect {[done]: Stop ["https-svc"]} {
+	${vigil} --url https://127.0.0.1:$(cat ${tmpdir}/tls_port) --insecure \
+		--user admin-user:admpass services stop https-svc
+}
+shell -expect {[done]: Start ["https-svc"]} {
+	${vigil} --url https://127.0.0.1:$(cat ${tmpdir}/tls_port) --insecure \
+		--user admin-user:admpass services start https-svc
 }
 
-# admin-user / admpass, see tests/vtest/fixtures/README.md
-shell {
-	curl -sf \
-		--unix-socket ${tmpdir}/vigild.sock \
-		-X POST http://localhost/v1/identities \
-		-H "Content-Type: application/json" \
-		-d @${vtestdir}/fixtures/identities/admin-user.json > /dev/null
+# post_void and delete over HTTPS: add an identity, then remove it.
+shell -expect "Identity 'extra-local' added." {
+	${vigil} --url https://127.0.0.1:$(cat ${tmpdir}/tls_port) --insecure \
+		--user admin-user:admpass identities add-local extra-local --access read
+}
+shell -match {extra-local +read} {
+	${vigil} --socket ${tmpdir}/vigild.sock identities list
+}
+shell -expect "Removed: extra-local" {
+	${vigil} --url https://127.0.0.1:$(cat ${tmpdir}/tls_port) --insecure \
+		--user admin-user:admpass identities remove extra-local
+}
+# What is left: admin-user and local-admin, no extra-local.
+shell -match {^Name[^\n]*\n-+\nadmin-user +admin +basic +api\nlocal-admin +admin +local[(]any[)] +api\n?$} {
+	${vigil} --socket ${tmpdir}/vigild.sock identities list
 }
 
-shell {
-	PORT=$(cat ${tmpdir}/tls_port.txt)
-	for i in $(seq 1 30); do
-		curl -sf --insecure https://127.0.0.1:$PORT/v1/system-info > /dev/null 2>&1 && break
-		sleep 0.2
-	done
-}
-
-# Add a service that produces continuous log output (startup: enabled → auto-starts on replan)
-shell {
-	cp ${vtestdir}/fixtures/v0022/svc.yaml ${tmpdir}/layers/
-}
-
-# ---------------------------------------------------------------------------
-# All HTTPS calls below authenticate as admin-user (basic auth).
-# ---------------------------------------------------------------------------
-
-# post_void Http branch: replan (loads the service config and starts https-svc)
-shell {
-	PORT=$(cat ${tmpdir}/tls_port.txt)
-	${vigil} --url https://127.0.0.1:$PORT --insecure --user admin-user:admpass replan
-}
-
-# Wait for log entries from https-svc
-shell {
-	for i in $(seq 1 80); do
-		${vigil} --socket ${tmpdir}/vigild.sock logs 2>/dev/null \
-			| grep -q https-svc-log && break
-		sleep 0.1
-	done
-	${vigil} --socket ${tmpdir}/vigild.sock logs | grep -q https-svc-log
-}
-
-# follow_logs Http branch: stream SSE while https-svc is running
-shell {
-	PORT=$(cat ${tmpdir}/tls_port.txt)
-	${vigil} --url https://127.0.0.1:$PORT --insecure --user admin-user:admpass logs --follow \
-		>> ${tmpdir}/follow_https.txt 2>/dev/null &
-	echo $! > ${tmpdir}/follow_pid.txt
-}
-
-shell {
-	for i in $(seq 1 50); do
-		test -s ${tmpdir}/follow_https.txt && break
-		sleep 0.1
-	done
-	grep -q https-svc-log ${tmpdir}/follow_https.txt
-}
-
-# SIGINT → clean exit so profraw is flushed for coverage
-shell { kill -INT $(cat ${tmpdir}/follow_pid.txt) 2>/dev/null || true }
-
-shell {
-	for i in $(seq 1 20); do
-		kill -0 $(cat ${tmpdir}/follow_pid.txt) 2>/dev/null || break
-		sleep 0.1
-	done
-}
-
-# post Http branch: services_action (stop then start)
-shell {
-	PORT=$(cat ${tmpdir}/tls_port.txt)
-	${vigil} --url https://127.0.0.1:$PORT --insecure --user admin-user:admpass services stop https-svc
-}
-
-shell {
-	PORT=$(cat ${tmpdir}/tls_port.txt)
-	${vigil} --url https://127.0.0.1:$PORT --insecure --user admin-user:admpass services start https-svc
-}
-
-# post Http branch over HTTPS: add a second identity, authenticated as admin-user
-# extra-user / extrapass, see tests/vtest/fixtures/README.md
-shell {
-	PORT=$(cat ${tmpdir}/tls_port.txt)
-	curl -sf --insecure --user admin-user:admpass \
-		-X POST https://127.0.0.1:$PORT/v1/identities \
-		-H "Content-Type: application/json" \
-		-d @${vtestdir}/fixtures/identities/extra-user.json > /dev/null
-}
-
-# delete Http branch: remove_identities (needs Admin)
-shell {
-	PORT=$(cat ${tmpdir}/tls_port.txt)
-	${vigil} --url https://127.0.0.1:$PORT --insecure \
-		--user admin-user:admpass \
-		identities remove extra-user
-	${vigil} --socket ${tmpdir}/vigild.sock identities list > ${tmpdir}/ids.txt
-	! grep -q extra-user ${tmpdir}/ids.txt
-	grep -q admin-user ${tmpdir}/ids.txt
-}
-
-# ---------------------------------------------------------------------------
-# Tear down
-# ---------------------------------------------------------------------------
-
-shell {
-	kill $(cat ${tmpdir}/vigild.pid) 2>/dev/null || true
-	for i in $(seq 1 30); do
-		kill -0 $(cat ${tmpdir}/vigild.pid) 2>/dev/null || break
-		sleep 0.1
-	done
-}
+process p1 -kill TERM
+process p1 -wait

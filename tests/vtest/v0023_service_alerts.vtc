@@ -1,74 +1,45 @@
 vtest "service alerts: backoff, recovered after healthy-time, checks of an unhealthy service stay quiet"
 
-shell { mkdir -p ${tmpdir}/layers }
+# The webhook endpoint gets exactly the service's two events, one connection
+# each: backoff, then recovered. vigild parses and re-serialises the
+# rendered JSON, so the keys come sorted.
+server s1 {
+	rxreq
+	expect req.url == /webhook
+	expect req.body == "{\"event\":\"backoff\",\"message\":\"exited with code 3, restarting in 1s\",\"name\":\"flaky\",\"source\":\"service\"}"
+	txresp -hdr "Connection: close"
+	accept
+	rxreq
+	expect req.body == "{\"event\":\"recovered\",\"message\":\"service flaky is healthy again\",\"name\":\"flaky\",\"source\":\"service\"}"
+	txresp -hdr "Connection: close"
+} -start
 
-# Start a minimal HTTP server (tests/vtest/helpers/http_capture.py) that appends every
-# POST body to received.json; it picks a free port and writes it to
-# webhook_port.txt once it listens.
-shell {
-	${vtestdir}/helpers/http_capture.py ${tmpdir}/webhook_port.txt ${tmpdir}/received.json \
-		> /dev/null 2>&1 &
-	echo $! > ${tmpdir}/webhook_server.pid
-	for i in $(seq 1 50); do
-		test -s ${tmpdir}/webhook_port.txt && break
-		sleep 0.1
-	done
-	test -s ${tmpdir}/webhook_port.txt
-}
+# fixtures/v0023: flaky fails once and keeps running on its second start;
+# flaky-check fails until then, but belongs to flaky and stays quiet. vigild
+# gets the webhook URL and the marker path from its environment (alert url
+# "env:WEBHOOK_URL", pass-env-glob FLAKY_MARKER). It logs to stdout, the
+# terminal of p1; -expect-text waits there for a line. A wide terminal keeps
+# long log lines on one row.
+process p1 -winsz 200 400 "env FLAKY_MARKER=${tmpdir}/flaky_marker WEBHOOK_URL=http://${s1_sock}/webhook ${vigild} --layers-dir ${vtestdir}/fixtures/v0023 --socket ${tmpdir}/vigild.sock" -start
+process p1 -expect-text 0 0 "API listening"
 
-# vigild learns the webhook URL and the marker path from its environment
-# (alert url "env:WEBHOOK_URL", pass-env-glob FLAKY_MARKER).
-process p1 "env FLAKY_MARKER=${tmpdir}/flaky_marker WEBHOOK_URL=http://127.0.0.1:$(cat ${tmpdir}/webhook_port.txt)/webhook ${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock" -start
+# Both alerts arrive (about 1s backoff + 2s healthy-time).
+server s1 -wait
 
-shell {
-	for i in $(seq 1 50); do
-		test -S ${tmpdir}/vigild.sock && break
-		sleep 0.1
-	done
-	test -S ${tmpdir}/vigild.sock
-}
-
-# Layer fixtures/v0023/flaky-svc.yaml: a service that fails once, a check
-# that fails until the service runs, and an alert for both.
-shell {
-	cp ${vtestdir}/fixtures/v0023/flaky-svc.yaml ${tmpdir}/layers/
-	${vigil} --socket ${tmpdir}/vigild.sock replan
-}
-
-# Wait for the second alert (recovered, about 1s backoff + 2s healthy-time),
-# then a little longer: a late check alert would show up as a third line.
-shell {
-	for i in $(seq 1 50); do
-		test "$(wc -l < ${tmpdir}/received.json 2>/dev/null)" -ge 2 && break
-		sleep 0.2
-	done
-	sleep 2
-}
-
-# Exactly the service's two events, and nothing from flaky-check: it failed
-# while the service was not healthy and recovered before it was.
-# vigild parses and re-serialises the rendered JSON, so keys come sorted.
-shell {
-	expected1='{"event":"backoff","message":"exited with code 3, restarting in 1s","name":"flaky","source":"service"}'
-	expected2='{"event":"recovered","message":"service flaky is healthy again","name":"flaky","source":"service"}'
-	lines=$(wc -l < ${tmpdir}/received.json)
-	line1=$(sed -n 1p ${tmpdir}/received.json)
-	line2=$(sed -n 2p ${tmpdir}/received.json)
-	if [ "$lines" -ne 2 ] || [ "$line1" != "$expected1" ] || [ "$line2" != "$expected2" ]; then
-		echo "unexpected alerts:"
-		cat ${tmpdir}/received.json
-		exit 1
-	fi
-}
+# A little longer: a late alert of flaky-check would be a third one. In the
+# pattern "." stands for the braces and quotes of the label.
+delay 2
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /v1/metrics -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "vigil_alert_fire_count_total.alert=.ops.. 2\n"
+} -run
 
 # vigil alerts list shows what the alert is subscribed to.
-shell {
-	${vigil} --socket ${tmpdir}/vigild.sock alerts list > ${tmpdir}/alerts.txt 2>&1
-	grep -q 'flaky-check, service:\*' ${tmpdir}/alerts.txt
+shell -match {ops +webhook +.* +flaky-check, service:[*]} {
+	${vigil} --socket ${tmpdir}/vigild.sock alerts list
 }
-
-# Tear down
-shell { kill $(cat ${tmpdir}/webhook_server.pid) 2>/dev/null || true }
 
 process p1 -kill TERM
 process p1 -wait
