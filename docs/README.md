@@ -29,7 +29,8 @@ vigil-rs is a service supervisor and container init daemon written in Rust.
 
 ### Specs
 
-- [openapi.yaml](specs/openapi.yaml) — machine-readable OpenAPI 3.0 spec
+- [openapi.yaml](specs/openapi.yaml) — machine-readable OpenAPI 3.1 spec,
+  generated from vigild (the same as `/openapi.json` on a running daemon)
 - Swagger UI available at `/docs` on a running daemon
 
 ---

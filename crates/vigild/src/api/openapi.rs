@@ -83,6 +83,9 @@ use super::handlers;
 )]
 pub struct ApiDoc;
 
+#[cfg(test)]
+mod tests;
+
 pub(super) async fn openapi_json() -> impl IntoResponse {
     Json(ApiDoc::openapi())
 }
