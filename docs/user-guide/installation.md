@@ -99,6 +99,7 @@ environment variable shown; boolean variables take `true` or `false`.
 | `--log-buffer <N>` | `VIGIL_LOG_BUFFER` | `1000` | Per-service log ring-buffer size (lines) |
 | `--log-max-line-bytes <BYTES>` | `VIGIL_LOG_MAX_LINE_BYTES` | `131072` | Longest log entry of a service (1024 to 1048576 bytes); a longer line or joined stack trace is split. See [Logging](logging.md#long-lines) |
 | `--watch-layers <INTERVAL>` | `VIGIL_WATCH_LAYERS` | *(off)* | Reload the layers when the files in the layers dir change, checking every `INTERVAL` (`1s` to `24h`); see [Orchestrators](../operator-guide/orchestrators.md#replan-on-configmap-change) |
+| `--shutdown-delay <DURATION>` | `VIGIL_SHUTDOWN_DELAY` | `0s` | After SIGTERM, keep the services running for this long (up to `10m`) and answer `503` on `/v1/health` (not for `level=alive`), so a load balancer stops sending requests first; a second signal stops at once. See [Orchestrators](../operator-guide/orchestrators.md#scaling-several-replicas) |
 | `--worker-threads <N>` | `VIGIL_WORKER_THREADS` | `2` (1 with a single CPU) | Worker threads of the async runtime; each costs about 2 MiB. Without a limit tokio would start one per CPU of the node |
 | `-h`, `--help` | | | Print help |
 | `-V`, `--version` | | | Print version |

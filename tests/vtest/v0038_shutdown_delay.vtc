@@ -1,0 +1,42 @@
+vtest "--shutdown-delay: after SIGTERM vigild reports not ready but keeps the services running; a second SIGTERM stops at once"
+
+# fixtures/v0038: the service web and an alive check. With
+# --shutdown-delay 30s, a SIGTERM must not stop anything yet: /v1/health
+# answers 503 (the readiness probe takes the pod out of the load balancer),
+# level=alive still reports the checks (no restart by the liveness probe),
+# and web keeps running. A second SIGTERM ends the wait.
+process p1 -winsz 200 400 "${vigild} --layers-dir ${vtestdir}/fixtures/v0038 --socket ${tmpdir}/vigild.sock --path-prefix ${tmpdir}/run --shutdown-delay 30s" -start
+process p1 -expect-text 0 0 "process started service=web"
+
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /v1/health -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+} -run
+
+process p1 -kill TERM
+process p1 -expect-text 0 0 "shutdown delay: reporting not ready"
+
+client c2 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /v1/health -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 503
+	expect resp.body ~ "healthy.:false"
+	expect resp.body ~ "vigild is shutting down"
+	txreq -method GET -url "/v1/health?level=ready" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 503
+	txreq -method GET -url "/v1/health?level=alive" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	txreq -method GET -url "/v1/services?names=web" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "current.:.active."
+} -run
+
+# The second SIGTERM: vigild stops now, not after 30s (VTest2 would time
+# out first).
+process p1 -kill TERM
+process p1 -expect-text 0 0 "stopping now"
+process p1 -wait

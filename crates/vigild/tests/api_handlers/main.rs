@@ -106,6 +106,7 @@ impl TestApp {
             metrics,
             shutdown_tx,
             tls_anonymous_access,
+            stopping: Default::default(),
         };
 
         TestApp {

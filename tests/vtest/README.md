@@ -84,6 +84,7 @@ tests/vtest/run.sh
 | `v0035_odd_service_output.vtc` | Service output that is not clean text: invalid UTF-8 becomes `�`, a 40000-byte line comes in 3 entries, the service keeps running (no SIGPIPE, one start) |
 | `v0036_logs_multiline.vtc` | `logs-multiline`: a Java and a Python stack trace (with "Caused by", chained tracebacks) are one entry each with their log line; on stdout only the first line has the `[service]` prefix |
 | `v0037_relay_multiline.vtc` | `vigil-log-relay --multiline java` on vigild's ndjson stream: a service without `logs-multiline` prints a trace, the relay writes it as one record with the joined message |
+| `v0038_shutdown_delay.vtc` | `--shutdown-delay`: after SIGTERM `/v1/health` answers 503 (not `level=alive`) while the services keep running; a second SIGTERM stops at once |
 
 ## How it works
 

@@ -240,6 +240,61 @@ database is away and fixes nothing; vigild warns about such checks at load
 time. See [`level`](../user-guide/configuration.md#level) and the flow chart
 [check-levels.svg](../../images/check-levels.svg).
 
+### Scaling: several replicas
+
+A Deployment with `replicas: N` (or a HorizontalPodAutoscaler) runs one
+vigild per pod, each as PID 1 with its own plan; the replicas know nothing
+of each other. The pod is the unit that scales: all services vigild runs
+in it scale together. That suits services that belong together (php-fpm
+and Caddy, Tomcat and its log shipper). One service inside the pod cannot
+be scaled on its own; give it more workers or threads, or its own
+Deployment.
+
+**Scaling up.** A new pod gets requests only once its readiness probe
+(`/v1/health?level=ready`) passes, that is once vigild's `ready` checks of
+the app pass. The HorizontalPodAutoscaler sees the CPU and memory of the
+whole container, all its processes together; vigild's own share is small
+(see [Sizing](container-setup.md#sizing-memory-and-cpu)).
+
+**Scaling down and rollouts.** Kubernetes sends SIGTERM and removes the
+pod from the Service's endpoints at the same time; kube-proxy and ingress
+controllers notice that a few seconds later. Without a delay vigild stops
+the services at once, and the requests of those seconds fail. With
+`--shutdown-delay` vigild answers `503` on `/v1/health` at once, so the
+readiness probe takes the pod out, and stops the services only after the
+delay:
+
+```yaml
+spec:
+  terminationGracePeriodSeconds: 30   # delay + time the services need to stop
+  containers:
+    - name: app
+      env:
+        - name: VIGIL_SHUTDOWN_DELAY
+          value: 5s
+      readinessProbe:
+        httpGet:
+          path: /v1/health?level=ready
+          port: 8443
+          scheme: HTTPS
+        periodSeconds: 2
+        failureThreshold: 1
+```
+
+The liveness probe (`level=alive`) is not affected, so the kubelet does
+not restart a container that is stopping. A second SIGTERM stops at once.
+
+**Per pod, not per Deployment:**
+
+| Topic | With N replicas | What to do |
+|---|---|---|
+| Oneshots with `schedule` | run in every replica, N times | a separate Deployment with `replicas: 1`, or a Kubernetes CronJob |
+| Alerts | every replica sends its own; a shared dependency that fails alerts N times | group them in Alertmanager by labels |
+| ConfigMap with `--watch-layers` | every pod applies the change when its kubelet syncs it, about at the same time, without `maxUnavailable` | for risky changes put a hash of the ConfigMap into a pod annotation, so Kubernetes rolls the pods one by one |
+| Identities added over the API | exist only in the pod where they were added, and are gone after a restart | define identities in the layers (ConfigMap, Secret) |
+| `vigil-log-relay --kubernetes` | every replica streams the same pod logs | `replicas: 1` (see below) |
+| Generated TLS certificate | every replica has its own | `--cert` and `--key` from a Secret when clients verify it |
+
 ### Kubernetes pod log collector
 
 [`examples/kubernetes-pod-logs/`](../../examples/kubernetes-pod-logs/) is a

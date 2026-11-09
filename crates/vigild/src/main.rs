@@ -10,6 +10,8 @@ use vigild::{api, overlord, path_prefix, reaper, server, tls};
 
 use clap::Parser;
 use std::os::unix::process::CommandExt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 use tracing::info;
@@ -142,6 +144,7 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
         );
     }
 
+    let stopping = Arc::new(AtomicBool::new(false));
     let app_state = api::AppState {
         overlord: overlord.clone(),
         log_store,
@@ -149,6 +152,7 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
         metrics,
         shutdown_tx,
         tls_anonymous_access: args.anonymous_access(),
+        stopping: Arc::clone(&stopping),
     };
     let router = api::router(app_state);
 
@@ -170,12 +174,12 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
     });
 
     let mut signals = Signals::new()?;
-    let restart = loop {
+    let (restart, by_signal) = loop {
         tokio::select! {
             received = signals.recv() => match received {
                 Received::Stop(signal) => {
                     info!("received {}", signal.as_str());
-                    break false;
+                    break (false, true);
                 }
                 Received::Forward(signal) => {
                     info!("received {}, forwarding to services", signal.as_str());
@@ -189,10 +193,14 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
                     Some(DaemonAction::Restart) => info!("daemon restart requested via API"),
                     None => {}
                 }
-                break action == Some(DaemonAction::Restart);
+                break (action == Some(DaemonAction::Restart), false);
             }
         }
     };
+
+    if by_signal && !args.shutdown_delay.is_zero() {
+        shutdown_delay(args.shutdown_delay, &stopping, &mut signals, &overlord).await;
+    }
 
     info!("shutting down…");
     // Give any in-flight HTTP responses (e.g. the stop/restart API call itself) a moment to flush.
@@ -221,6 +229,36 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
 /// Bind `--tls-addr` and load (or generate) the certificate, before any
 /// service starts: a busy address or a broken `--cert`/`--key` must stop
 /// vigild first. `None` without `--tls-addr`.
+/// `--shutdown-delay`: report not ready on /v1/health and keep the
+/// services running for `delay`, so a load balancer stops sending requests
+/// first. Signals to forward still go to the services; a second stop signal
+/// ends the wait.
+async fn shutdown_delay(
+    delay: std::time::Duration,
+    stopping: &AtomicBool,
+    signals: &mut Signals,
+    overlord: &overlord::Handle,
+) {
+    stopping.store(true, Ordering::Relaxed);
+    info!(delay = ?delay, "shutdown delay: reporting not ready, services keep running");
+    let deadline = tokio::time::Instant::now() + delay;
+    loop {
+        tokio::select! {
+            () = tokio::time::sleep_until(deadline) => return,
+            received = signals.recv() => match received {
+                Received::Stop(signal) => {
+                    info!("received {} again, stopping now", signal.as_str());
+                    return;
+                }
+                Received::Forward(signal) => {
+                    info!("received {}, forwarding to services", signal.as_str());
+                    overlord.tx.send(overlord::Cmd::ForwardSignal { signal }).await.ok();
+                }
+            },
+        }
+    }
+}
+
 async fn bind_tls(args: &Args) -> anyhow::Result<Option<(TcpListener, TlsAcceptor)>> {
     let Some(addr) = args.tls_addr.as_deref() else {
         return Ok(None);

@@ -1,0 +1,12 @@
+# vtest v0038: one service and one alive check, for --shutdown-delay.
+services:
+  web:
+    command: sleep 300
+    startup: enabled
+checks:
+  web-alive:
+    level: alive
+    startup: enabled
+    period: 1s
+    exec:
+      command: "true"

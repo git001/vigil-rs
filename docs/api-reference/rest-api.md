@@ -449,7 +449,14 @@ A name that is not a check is `404 Not Found` (a typo in a probe would
 otherwise pass for ever), and an unknown parameter or level is
 `400 Bad Request`.
 
-**Response** `200 OK` or `502 Bad Gateway`
+**While shutting down:** with `--shutdown-delay`, vigild keeps its
+services running for a while after SIGTERM and answers `503 Service
+Unavailable` (`"healthy": false`, message `vigild is shutting down`) for
+`level=ready` and without `level`, so the readiness probe takes the pod
+out of the load balancer first. `level=alive` keeps reporting the checks:
+the liveness probe must not restart a container that is stopping anyway.
+
+**Response** `200 OK`, `502 Bad Gateway` or `503 Service Unavailable`
 
 ```json
 {

@@ -161,6 +161,8 @@ paths:
 
         Only running checks count; a check with `startup: disabled` is ignored. `level=ready` includes `alive` checks. A name that is not a check is `404`, an unknown query parameter `400`.
 
+        While vigild waits out `--shutdown-delay` after SIGTERM, the answer is `503` with `{"healthy": false}` for `level=ready` and without `level`, so the pod leaves the load balancer while its services still run; `level=alive` keeps reporting the checks.
+
         **Required access:** `open` (no credentials; usable by Kubernetes httpGet probes).
       operationId: health
       parameters:
@@ -191,6 +193,12 @@ paths:
           description: A name is not a check.
         '502':
           description: At least one selected check is down.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthInfo'
+        '503':
+          description: vigild is shutting down (`--shutdown-delay`); not for `level=alive`.
           content:
             application/json:
               schema:

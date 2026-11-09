@@ -38,6 +38,9 @@ pub struct AppState {
     /// Access level of TLS callers without a matching identity
     /// (`--tls-anonymous-access`, `Open` or `Metrics`).
     pub tls_anonymous_access: IdentityAccess,
+    /// vigild is shutting down (`--shutdown-delay`): `/v1/health` reports
+    /// not ready while the services still run.
+    pub stopping: Arc<std::sync::atomic::AtomicBool>,
 }
 
 // ---------------------------------------------------------------------------

@@ -100,6 +100,7 @@ LABEL org.opencontainers.image.description="My application supervised by vigil-r
 | `--log-buffer <N>` | `VIGIL_LOG_BUFFER` | `1000` | Per-service log ring-buffer size (lines); see [Logging](../user-guide/logging.md) |
 | `--log-max-line-bytes <BYTES>` | `VIGIL_LOG_MAX_LINE_BYTES` | `131072` | Longest log entry of a service (1024 to 1048576 bytes); a longer line or joined stack trace is split. See [Logging](../user-guide/logging.md#long-lines) |
 | `--watch-layers <INTERVAL>` | `VIGIL_WATCH_LAYERS` | — | Reload the layers when their files change, checking every `INTERVAL` (`1s` to `24h`); see [Orchestrators](orchestrators.md#replan-on-configmap-change) |
+| `--shutdown-delay <DURATION>` | `VIGIL_SHUTDOWN_DELAY` | `0s` | After SIGTERM, keep the services running for this long (up to `10m`) and answer `503` on `/v1/health` (not for `level=alive`), so a load balancer stops sending requests first; a second signal stops at once. See [Orchestrators](orchestrators.md#scaling-several-replicas) |
 | `--worker-threads <N>` | `VIGIL_WORKER_THREADS` | `2` (1 with a single CPU) | Worker threads of the async runtime; each costs about 2 MiB. Without a limit tokio would start one per CPU of the node |
 
 Boolean variables such as `VIGIL_REAPER` take `true` or `false`.
@@ -166,9 +167,9 @@ process groups:
 | `SIGHUP` | Forwarded to all running services |
 | `SIGUSR1` | Forwarded to all running services |
 | `SIGUSR2` | Forwarded to all running services |
-| `SIGTERM` | Graceful shutdown: stop all services, then exit |
-| `SIGINT` | Graceful shutdown |
-| `SIGQUIT` | Graceful shutdown |
+| `SIGTERM` | Graceful shutdown: stop all services, then exit (with `--shutdown-delay`, after reporting not ready for that long) |
+| `SIGINT` | Graceful shutdown, as `SIGTERM` |
+| `SIGQUIT` | Graceful shutdown, as `SIGTERM` |
 
 Example — trigger a config reload in all nginx instances:
 

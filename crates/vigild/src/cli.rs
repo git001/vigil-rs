@@ -113,6 +113,21 @@ pub(crate) struct Args {
     #[arg(long, env = "VIGIL_WATCH_LAYERS", value_name = "INTERVAL", value_parser = vigild::duration::parse_interval)]
     pub(crate) watch_layers: Option<std::time::Duration>,
 
+    /// After SIGTERM (or SIGINT, SIGQUIT), keep the services running for
+    /// this long (0s to 10m) and report not ready on /v1/health, so that a
+    /// load balancer stops sending requests before the services stop. A
+    /// second signal stops at once. Set it below the pod's
+    /// terminationGracePeriodSeconds minus the time the services need to
+    /// stop.
+    #[arg(
+        long,
+        env = "VIGIL_SHUTDOWN_DELAY",
+        value_name = "DURATION",
+        default_value = "0s",
+        value_parser = parse_shutdown_delay
+    )]
+    pub(crate) shutdown_delay: std::time::Duration,
+
     /// Per-service log ring-buffer size (number of lines kept in memory).
     /// Also controls the SSE broadcast channel depth (half this value,
     /// clamped to [64, 4096]), which determines how many entries can queue
@@ -169,6 +184,16 @@ fn parse_octal_mode(s: &str) -> Result<u32, String> {
     Ok(mode)
 }
 
+/// `--shutdown-delay`: a duration of at most 10 minutes.
+fn parse_shutdown_delay(s: &str) -> Result<std::time::Duration, String> {
+    let d =
+        vigild::duration::parse_duration(s).map_err(|e| format!("{s:?} is not a duration: {e}"))?;
+    if d > std::time::Duration::from_secs(600) {
+        return Err(format!("{s:?} must be at most 10m"));
+    }
+    Ok(d)
+}
+
 /// `--log-max-line-bytes`: bytes, within [`logs::MIN_MAX_LINE`] and
 /// [`logs::MAX_MAX_LINE`].
 fn parse_max_line(s: &str) -> Result<usize, String> {
@@ -188,6 +213,23 @@ fn parse_max_line(s: &str) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shutdown_delay_is_bounded() {
+        use std::time::Duration;
+        assert_eq!(parse_shutdown_delay("0s"), Ok(Duration::ZERO));
+        assert_eq!(parse_shutdown_delay("5s"), Ok(Duration::from_secs(5)));
+        assert_eq!(parse_shutdown_delay("10m"), Ok(Duration::from_secs(600)));
+        assert_eq!(
+            parse_shutdown_delay("11m").unwrap_err(),
+            "\"11m\" must be at most 10m"
+        );
+        assert!(
+            parse_shutdown_delay("soon")
+                .unwrap_err()
+                .starts_with("\"soon\" is not a duration")
+        );
+    }
 
     #[test]
     fn max_line_is_bounded() {
