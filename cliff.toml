@@ -8,9 +8,11 @@
 #   git cliff --tag vX.Y.Z -o CHANGELOG.md
 #
 # Section order follows Keep a Changelog, preceded by an extra
-# "⚠ Breaking Changes" section that also shows the migration note from the
-# commit's "BREAKING CHANGE:" footer. git-cliff sorts groups by name, so each
-# group carries an HTML-comment prefix that is stripped in the output.
+# "⚠ Breaking Changes" section that lists every breaking commit ("type!:"
+# or a "BREAKING CHANGE:" footer) by its title. Each of them appears again
+# in its own section (a feat! under "Added"), marked "⚠ breaking" and with
+# the migration note from its footer. git-cliff sorts groups by name, so
+# each group carries an HTML-comment prefix that is stripped in the output.
 
 [changelog]
 header = """
@@ -37,15 +39,29 @@ body = """
 {% if visible == 0 %}
 No user-facing changes.
 {% endif -%}
+{% set breaking = commits | filter(attribute="breaking", value=true) -%}
+{% if breaking | length > 0 %}
+### ⚠ Breaking Changes
+
+These need attention when upgrading; each is listed again below in its
+section, with its migration note.
+
+{% for commit in breaking -%}
+- {% if commit.scope %}**{{ commit.scope }}**: {% endif -%}
+{{ commit.message | split(pat="\n") | first | trim | upper_first }} \
+([`{{ commit.id | truncate(length=7, end="") }}`](https://github.com/git001/vigil-rs/commit/{{ commit.id }}))
+{% endfor -%}
+{% endif -%}
 {% for group, commits in commits | group_by(attribute="group") -%}
 {% if group is not containing("Hidden") %}
 ### {{ group | striptags | trim }}
 
 {% for commit in commits -%}
-- {% if commit.scope %}**{{ commit.scope }}**: {% endif -%}
+- {% if commit.breaking %}**⚠ breaking** {% endif -%}
+{% if commit.scope %}**{{ commit.scope }}**: {% endif -%}
 {{ commit.message | split(pat="\n") | first | trim | upper_first }} \
 ([`{{ commit.id | truncate(length=7, end="") }}`](https://github.com/git001/vigil-rs/commit/{{ commit.id }}))
-{% if group is containing("Breaking") and commit.breaking_description \
+{% if commit.breaking and commit.breaking_description \
    and commit.breaking_description != commit.message -%}
 {{ "  - " }}*Migration:* {{ commit.breaking_description | split(pat="\n") | join(sep=" ") | trim }}
 {% endif -%}
@@ -85,6 +101,8 @@ commit_preprocessors = [
     # as a footer of its own and cut the migration note.
     { pattern = 'e\.g\.\n`pass-env-glob', replace = "e.g. `pass-env-glob" },
     { pattern = 'An\nenv:VAR that is unset', replace = "An env:VAR that is unset" },
+    # 7dea061: name the options in the title, so the feature can be found.
+    { pattern = '^feat!: log lines: read any output, configurable limits, stack traces as one entry', replace = "feat!: stack traces as one log entry (logs-multiline, vigil-log-relay --multiline); any output read; line length limits" },
 ]
 
 # First match wins.
@@ -94,11 +112,8 @@ commit_parsers = [
     { message = "^Merge ", group = "<!-- 9 -->Hidden" },
     { message = "(?i)^(update to |updte |)version ", group = "<!-- 9 -->Hidden" },
 
-    # Breaking changes get their own section at the top of each release,
-    # whatever their type ("type!:" or a "BREAKING CHANGE:" footer).
-    { message = "^\\w+(\\(.*\\))?!:", group = "<!-- 0 -->⚠ Breaking Changes" },
-    { footer = "^BREAKING[ -]CHANGE", group = "<!-- 0 -->⚠ Breaking Changes" },
-
+    # Changelog housekeeping whose body names the Security group.
+    { sha = "e0e833185300baa0ff2f5820135581b61ec19a4c", group = "<!-- 9 -->Hidden" },
     # Mentions security in its body, but only fixes the examples.
     { sha = "6d08627f2f5e68ce82428500ed69cb282156f80e", group = "<!-- 5 -->Fixed" },  # 4.0: make every example run with v4
 
