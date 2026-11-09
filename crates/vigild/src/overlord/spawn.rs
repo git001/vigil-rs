@@ -121,6 +121,7 @@ pub async fn spawn(
         healthy: Default::default(),
         identity_store: Arc::clone(&identity_store),
         watched_files: watched_files.clone(),
+        waiting: Vec::new(),
     };
 
     let task = tokio::spawn(run(ov));

@@ -111,17 +111,17 @@ pub async fn run(client: &VigilClient, sub: ServicesCmd) -> anyhow::Result<()> {
         }
 
         ServicesCmd::Start { names } => {
-            crate::cmd::print_change(&client.services_action(ServiceAction::Start, names).await?);
+            crate::cmd::print_change(&client.services_action(ServiceAction::Start, names).await?)?;
         }
         ServicesCmd::Stop { names } => {
-            crate::cmd::print_change(&client.services_action(ServiceAction::Stop, names).await?);
+            crate::cmd::print_change(&client.services_action(ServiceAction::Stop, names).await?)?;
         }
         ServicesCmd::Restart { names } => {
             crate::cmd::print_change(
                 &client
                     .services_action(ServiceAction::Restart, names)
                     .await?,
-            );
+            )?;
         }
         ServicesCmd::Signal { signal, names } => {
             let sent = client.send_signals(&signal, names).await?;

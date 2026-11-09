@@ -1,0 +1,29 @@
+# Services for POST /v1/services that waits until an action is done.
+#
+# slow     becomes ready about 1s after its start: it creates $READY_FILE,
+#          which its ready check slow-ready looks for.
+# broken   a oneshot that exits with code 3: a start waits for the end of
+#          the run (a simple service with the default `ready: process` is
+#          ready as soon as it runs, even if it exits right after).
+# stubborn needs 1s to stop after SIGTERM.
+services:
+  slow:
+    command: sh -c 'sleep 1; touch "$READY_FILE"; while :; do sleep 0.1; done'
+    pass-env-glob: [READY_FILE]
+    ready: check
+    ready-check: slow-ready
+  broken:
+    type: oneshot
+    command: sh -c 'exit 3'
+  stubborn:
+    command: sh -c 'trap "sleep 1; exit 0" TERM; while :; do sleep 0.1; done'
+
+checks:
+  slow-ready:
+    level: alive
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: 'test -e "$READY_FILE"'
+      pass-env-glob: [READY_FILE]

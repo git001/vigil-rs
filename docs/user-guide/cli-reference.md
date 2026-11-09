@@ -152,12 +152,15 @@ before autostart starts it (`waiting for db`).
 | `error` | Gave up: the backoff limit was reached, or the process could not be started (for example an unknown user) |
 | `done` | A `type: oneshot` service finished successfully |
 
-A service that is being stopped still shows `active` until its process is
+A service that is being stopped shows `inactive` already, while its process
+may still run until `kill-delay`; `vigil services stop` returns once it is
 gone.
 
 #### `services start [NAME...]`
 
-Start one or more services (empty = all).
+Start one or more services (empty = all). The command returns once they
+are ready (`active`), a oneshot once its run has ended; a service that does
+not get there is reported with the reason and exit code 1.
 
 ```bash
 vigil services start myapp
@@ -174,10 +177,12 @@ vigil services stop myapp sidecar
 ```
 
 The stop sequence: send `stop-signal` → wait `kill-delay` → SIGKILL if needed.
+The command returns once the processes are gone.
 
 #### `services restart [NAME...]`
 
-Restart one or more services. Equivalent to stop followed by start.
+Restart one or more services. Equivalent to stop followed by start; returns
+once they are ready again.
 
 ```bash
 vigil services restart myapp

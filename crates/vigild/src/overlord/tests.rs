@@ -99,6 +99,7 @@ pub(super) fn make_overlord(
         healthy: Default::default(),
         identity_store: crate::identity::IdentityStore::new(),
         watched_files: Default::default(),
+        waiting: Vec::new(),
     }
 }
 
@@ -1196,19 +1197,28 @@ fn stub_actor(ov: &mut Overlord, name: &str) -> mpsc::UnboundedReceiver<String> 
     seen_rx
 }
 
+/// Run a service action; the stub actors send no events, so `ready` get
+/// `starting` and `active` here, as a real actor would report them.
 async fn services_action(
     ov: &mut Overlord,
     action: vigil_types::api::ServiceAction,
     names: Vec<String>,
+    ready: &[&str],
 ) -> vigil_types::api::ChangeInfo {
-    let (reply, rx) = tokio::sync::oneshot::channel();
+    let (reply, mut rx) = tokio::sync::oneshot::channel();
     ov.handle_cmd(super::Cmd::Services {
         action,
         names,
         reply,
     })
     .await;
-    rx.await.unwrap().unwrap()
+    for name in ready {
+        ov.handle_svc_event(state_event(name, ServiceState::Starting))
+            .await;
+        ov.handle_svc_event(state_event(name, ServiceState::Active))
+            .await;
+    }
+    rx.try_recv().expect("the action did not finish").unwrap()
 }
 
 async fn next_seen(rx: &mut mpsc::UnboundedReceiver<String>) -> String {
@@ -1282,9 +1292,21 @@ async fn autostart_action_without_names_starts_what_startup_starts() {
     let mut cron = stub_actor(&mut ov, "cron");
     let mut late = stub_actor(&mut ov, "late");
     let mut ordered = stub_actor(&mut ov, "ordered");
-    let change = services_action(&mut ov, vigil_types::api::ServiceAction::Autostart, vec![]).await;
+    let change = services_action(
+        &mut ov,
+        vigil_types::api::ServiceAction::Autostart,
+        vec![],
+        &["on", "ordered"],
+    )
+    .await;
     assert_eq!(change.kind, "autostart");
-    assert_eq!(change.status, vigil_types::api::ChangeStatus::Done);
+    // late requires blocker, which autostart does not start: the action
+    // does not wait for it in vain.
+    assert_eq!(change.status, vigil_types::api::ChangeStatus::Error);
+    assert_eq!(
+        change.err.as_deref(),
+        Some("late: waits for blocker, which autostart does not start")
+    );
     assert_eq!(next_seen(&mut on).await, "start");
     assert!(!got_command(&mut off).await, "disabled service started");
     assert!(!got_command(&mut cron).await, "scheduled job started");
@@ -1323,7 +1345,13 @@ async fn autostart_action_with_names_starts_only_those_it_covers() {
     let mut on = stub_actor(&mut ov, "on");
     let mut off = stub_actor(&mut ov, "off");
     let names = ["on", "off", "cron", "nope"].map(String::from).to_vec();
-    let change = services_action(&mut ov, vigil_types::api::ServiceAction::Autostart, names).await;
+    let change = services_action(
+        &mut ov,
+        vigil_types::api::ServiceAction::Autostart,
+        names,
+        &["on"],
+    )
+    .await;
     assert_eq!(next_seen(&mut on).await, "start");
     assert!(!got_command(&mut off).await, "disabled service started");
     assert_eq!(change.status, vigil_types::api::ChangeStatus::Error);
@@ -1353,6 +1381,7 @@ async fn replan_action_reloads_the_layers() {
         &mut ov,
         vigil_types::api::ServiceAction::Replan,
         vec!["app".into()],
+        &[],
     )
     .await;
     assert_eq!(change.status, vigil_types::api::ChangeStatus::Done);
@@ -1368,7 +1397,13 @@ async fn replan_action_loads_the_layers_once() {
     std::fs::write(dir.path().join("001.yaml"), "services: [\n").unwrap();
     let mut ov = make_overlord(&[("a", &[], &[], &[]), ("b", &[], &[], &[])], &[]);
     ov.layers_dir = dir.path().to_path_buf();
-    let change = services_action(&mut ov, vigil_types::api::ServiceAction::Replan, vec![]).await;
+    let change = services_action(
+        &mut ov,
+        vigil_types::api::ServiceAction::Replan,
+        vec![],
+        &[],
+    )
+    .await;
     assert_eq!(change.status, vigil_types::api::ChangeStatus::Error);
     let err = change.err.unwrap();
     assert!(!err.contains("; "), "loaded more than once: {err}");

@@ -51,14 +51,15 @@ impl Actor {
     /// to `error`.
     pub(super) async fn start_failed(&mut self, what: &str, e: &anyhow::Error) {
         error!(service = %self.name, error = %e, "{what}");
-        self.transition(ServiceState::Error).await;
+        // The reason before the state, see exit.rs.
         self.report_unhealthy("error", format!("{what}: {e:#}"))
             .await;
+        self.transition(ServiceState::Error).await;
     }
 }
 
 /// Why a process ended, for alert messages.
-pub(super) fn describe_exit(exit: Option<ExitInfo>) -> String {
+pub(crate) fn describe_exit(exit: Option<ExitInfo>) -> String {
     match exit {
         Some(ExitInfo {
             code: Some(code), ..

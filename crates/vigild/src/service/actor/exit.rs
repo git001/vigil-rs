@@ -104,11 +104,13 @@ impl Actor {
                 self.transition(ServiceState::Done).await;
                 self.report_healthy().await;
             }
+            // The reason goes out before the state it leads to, so a waiting
+            // `start` (overlord/waiting.rs) knows it when the state comes.
             Some(OnExit::Ignore) => {
-                self.transition(ServiceState::Inactive).await;
                 if !success {
                     self.report_unhealthy("failed", reason).await;
                 }
+                self.transition(ServiceState::Inactive).await;
             }
             Some(
                 policy @ (OnExit::Shutdown | OnExit::FailureShutdown | OnExit::SuccessShutdown),
@@ -116,29 +118,27 @@ impl Actor {
                 let exit_code = shutdown_code(self.exit_code_mode, policy, success, code)
                     .expect("shutdown policies always yield a code");
                 info!(service = %self.name, ?policy, exit_code, "daemon shutdown requested");
-                self.transition(ServiceState::Inactive).await;
                 if !success {
                     // Best effort: vigild exits right after this.
                     self.report_unhealthy("failed", format!("{reason}, shutting down vigild"))
                         .await;
                 }
+                self.transition(ServiceState::Inactive).await;
                 self.send_event(EventKind::DaemonShutdown { exit_code })
                     .await;
             }
             Some(OnExit::Restart) => {
                 if self.backoff_limit_exceeded() {
                     error!(service = %self.name, "backoff limit exceeded, giving up");
-                    self.transition(ServiceState::Error).await;
                     self.report_unhealthy(
                         "error",
                         format!("{reason}, giving up (backoff limit reached)"),
                     )
                     .await;
+                    self.transition(ServiceState::Error).await;
                 } else {
                     let delay = self.next_backoff();
                     info!(service = %self.name, ?delay, "scheduling restart (backoff)");
-                    self.transition(ServiceState::Backoff).await;
-                    self.backoff_deadline = Some(Instant::now() + delay);
                     if !success {
                         self.report_unhealthy(
                             "backoff",
@@ -146,6 +146,8 @@ impl Actor {
                         )
                         .await;
                     }
+                    self.transition(ServiceState::Backoff).await;
+                    self.backoff_deadline = Some(Instant::now() + delay);
                 }
             }
         }

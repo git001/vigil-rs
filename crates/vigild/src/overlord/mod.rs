@@ -36,6 +36,8 @@ mod stop_order;
 mod sync;
 #[cfg(test)]
 mod tests;
+mod wait_actions;
+mod waiting;
 pub mod watch_layers;
 
 pub use cmd::{Cmd, Handle, SignalError};
@@ -98,4 +100,6 @@ pub(super) struct Overlord {
     /// The files the layers refer to (see [`plan::Loaded::files`]), watched
     /// by `--watch-layers` too.
     pub(super) watched_files: watch_layers::WatchedFiles,
+    /// Service actions that answer once their services are done.
+    waiting: Vec<(waiting::Waiting, wait_actions::Reply)>,
 }

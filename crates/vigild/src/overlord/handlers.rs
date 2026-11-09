@@ -15,7 +15,7 @@ impl Overlord {
                 names,
                 reply,
             } => {
-                let _ = reply.send(self.handle_services_action(action, names).await);
+                self.services_action(action, names, reply).await;
             }
             Cmd::GetServices { names, reply } => {
                 let _ = reply.send(self.get_service_infos(&names));

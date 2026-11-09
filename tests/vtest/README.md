@@ -94,6 +94,7 @@ tests/vtest/run.sh
 | `v0045_relay_tcp_sink_reconnect.vtc` | The TCP sink stops and comes back on the same port: the relay reconnects and not one numbered line is missing |
 | `v0046_relay_send_buffer.vtc` | `--send-buffer-lines 64` with the sink down: 430 of 494 lines are dropped and reported in one summed-up warning, not one per line |
 | `v0047_shutdown_order.vtc` | Shutdown in the start order reversed: proxy (after app), then app, then db (required by app), each once the one before has exited (1s each, longer than the old 0.5s to SIGKILL); vigild exits after the last |
+| `v0048_service_actions_wait.vtc` | `POST /v1/services` answers when the action is done: a start once the service is ready (meanwhile `GET /v1/changes/1` shows `doing`), a oneshot start at the end of its run (failed: `error` with the reason, `vigil` exits 1), a stop once the process is gone |
 
 ## How it works
 

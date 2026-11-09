@@ -1,0 +1,73 @@
+vtest "POST /v1/services answers once the action is done: start when ready, stop when the process is gone; the change is doing meanwhile"
+
+# fixtures/v0048: slow is ready about 1s after its start, broken exits with
+# code 3, stubborn needs 1s to stop. vigild gets READY_FILE for slow.
+process p1 -winsz 100 200 "env READY_FILE=${tmpdir}/ready ${vigild} --layers-dir ${vtestdir}/fixtures/v0048 --socket ${tmpdir}/vigild.sock --path-prefix ${tmpdir}/run" -start
+process p1 -expect-text 0 0 "API listening"
+
+# start slow: the answer comes once it is ready (change 1).
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/services -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"action\":\"start\",\"services\":[\"slow\"]}"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "\"status\":\"done\""
+	expect resp.body ~ "\"ready-time\":"
+} -start
+
+# Meanwhile the change is still running.
+delay 0.4
+client c2 -connect ${tmpdir}/vigild.sock {
+	txreq -url /v1/changes/1 -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "\"status\":\"doing\""
+} -run
+
+client c1 -wait
+
+client c3 -connect ${tmpdir}/vigild.sock {
+	txreq -url /v1/services?names=slow -hdr "Host: localhost"
+	rxresp
+	expect resp.body ~ "\"current\":\"active\""
+} -run
+
+# start broken (a oneshot): the answer comes at the end of the run, which
+# failed: the change is an error with the reason.
+client c4 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/services -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"action\":\"start\",\"services\":[\"broken\"]}"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "\"status\":\"error\""
+	expect resp.body ~ "broken: exited with code 3, restarting in"
+} -run
+
+# The same through vigil: the reason, and exit code 1.
+shell -exit 1 -expect "broken: exited with code 3, restarting in" {
+	${vigil} --socket ${tmpdir}/vigild.sock services start broken
+}
+
+# stop stubborn: the answer comes once its process is gone, so the exit is
+# already known.
+client c5 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/services -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"action\":\"start\",\"services\":[\"stubborn\"]}"
+	rxresp
+	expect resp.body ~ "\"status\":\"done\""
+	txreq -method POST -url /v1/services -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"action\":\"stop\",\"services\":[\"stubborn\"]}"
+	rxresp
+	expect resp.body ~ "\"status\":\"done\""
+	txreq -url /v1/services?names=stubborn -hdr "Host: localhost"
+	rxresp
+	expect resp.body ~ "\"current\":\"inactive\""
+	expect resp.body ~ "\"last-exit\":"
+} -run
+
+process p1 -kill TERM
+process p1 -wait

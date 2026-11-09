@@ -1576,13 +1576,14 @@ async fn backoff_limit_reached_gives_up_with_error() {
     start(&tx).await;
     let (ev, _) = next_health(&mut rx).await;
     assert_unhealthy(&ev, "backoff", "exited with code 1, restarting in 100ms");
-    let (ev, seen) = next_health(&mut rx).await;
+    let (ev, _) = next_health(&mut rx).await;
     assert_unhealthy(
         &ev,
         "error",
         "exited with code 1, giving up (backoff limit reached)",
     );
-    assert!(seen.iter().any(is_state(ServiceState::Error)), "{seen:?}");
+    // The reason comes before the state it leads to.
+    wait_event(&mut rx, is_state(ServiceState::Error)).await;
     shutdown(tx).await;
 }
 

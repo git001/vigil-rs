@@ -18,6 +18,7 @@ mod policy;
 pub mod schedule;
 pub mod watch;
 
+pub(crate) use actor::describe_exit;
 pub use policy::{ExitCodeMode, effective_on_failure, effective_on_success, shutdown_code};
 
 // ---------------------------------------------------------------------------

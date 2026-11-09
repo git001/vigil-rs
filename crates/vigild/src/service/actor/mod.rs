@@ -30,6 +30,8 @@ mod signals;
 mod spawn;
 mod watch;
 
+pub(crate) use health::describe_exit;
+
 #[cfg(test)]
 mod tests;
 

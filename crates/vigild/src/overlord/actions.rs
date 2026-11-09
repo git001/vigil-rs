@@ -14,6 +14,8 @@ use crate::service::Cmd as SvcCmd;
 use super::Overlord;
 
 impl Overlord {
+    /// Run a service action and record it as finished (`replan`; the other
+    /// actions wait for their services, see `wait_actions.rs`).
     pub(super) async fn handle_services_action(
         &mut self,
         action: vigil_types::api::ServiceAction,
@@ -21,22 +23,30 @@ impl Overlord {
     ) -> anyhow::Result<ChangeInfo> {
         use vigil_types::api::ServiceAction;
 
-        match action {
-            ServiceAction::Autostart => {
-                let (targets, errors) = self.autostart_action(names).await;
-                return Ok(self.record_change(action, &targets, errors));
-            }
+        if action == ServiceAction::Replan {
             // The layers are loaded once, whatever `names` says.
-            ServiceAction::Replan => {
-                let errors = match self.reload_layers().await {
-                    Ok(()) => Vec::new(),
-                    Err(e) => vec![format!("{e:#}")],
-                };
-                return Ok(self.record_change(action, &names, errors));
-            }
-            ServiceAction::Start | ServiceAction::Stop | ServiceAction::Restart => {}
+            let errors = match self.reload_layers().await {
+                Ok(()) => Vec::new(),
+                Err(e) => vec![format!("{e:#}")],
+            };
+            return Ok(self.record_change(action, &names, errors));
         }
+        let (targets, errors) = self.dispatch_services_action(action, names).await;
+        Ok(self.record_change(action, &targets, errors))
+    }
 
+    /// Send the commands of a start, stop, restart or autostart; returns
+    /// the services it applies to and the errors (`name: error`).
+    pub(super) async fn dispatch_services_action(
+        &mut self,
+        action: vigil_types::api::ServiceAction,
+        names: Vec<String>,
+    ) -> (Vec<String>, Vec<String>) {
+        use vigil_types::api::ServiceAction;
+
+        if action == ServiceAction::Autostart {
+            return self.autostart_action(names).await;
+        }
         let targets: Vec<String> = if names.is_empty() {
             self.plan.services.keys().cloned().collect()
         } else {
@@ -53,14 +63,15 @@ impl Overlord {
                     self.svc_cmd(name, SvcCmd::Stop).await
                 }
                 ServiceAction::Restart => self.svc_cmd(name, SvcCmd::Restart).await,
-                ServiceAction::Autostart | ServiceAction::Replan => unreachable!("handled above"),
+                ServiceAction::Autostart | ServiceAction::Replan => {
+                    unreachable!("handled before")
+                }
             };
             if let Err(e) = res {
                 errors.push(format!("{name}: {e:#}"));
             }
         }
-
-        Ok(self.record_change(action, &targets, errors))
+        (targets, errors)
     }
 
     /// `autostart`: the services the startup autostart covers (`startup:
@@ -87,7 +98,7 @@ impl Overlord {
     }
 
     /// Record a finished change (all service actions are synchronous).
-    fn record_change(
+    pub(super) fn record_change(
         &mut self,
         action: vigil_types::api::ServiceAction,
         targets: &[String],

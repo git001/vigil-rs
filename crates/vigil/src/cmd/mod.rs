@@ -9,14 +9,23 @@ pub mod services;
 pub mod vigild;
 
 /// Print a change result line to stdout (used by services start/stop/restart).
-pub fn print_change(change: &vigil_types::api::ChangeInfo) {
+/// A change that ended in `error` is an error of the command (exit code 1),
+/// with the reasons as the message.
+pub fn print_change(change: &vigil_types::api::ChangeInfo) -> anyhow::Result<()> {
     println!(
         "Change {} [{}]: {}",
         change.id,
         format!("{:?}", change.status).to_lowercase(),
         change.summary,
     );
-    if let Some(err) = &change.err {
-        eprintln!("error: {}", err);
+    match (&change.status, &change.err) {
+        (vigil_types::api::ChangeStatus::Error, err) => {
+            anyhow::bail!("{}", err.as_deref().unwrap_or("the action failed"))
+        }
+        (_, Some(err)) => {
+            eprintln!("error: {err}");
+            Ok(())
+        }
+        _ => Ok(()),
     }
 }

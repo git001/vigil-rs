@@ -43,6 +43,7 @@ impl Overlord {
                 message,
             } => {
                 self.healthy.remove(&event.service);
+                self.waiting_unhealthy(&event.service, message);
                 warn!(service = %event.service, event = name, %message, "service failed");
                 let ev = AlertEvent::firing(AlertSource::Service, &event.service, *name, message);
                 self.send_alert(ev);
@@ -84,6 +85,7 @@ impl Overlord {
             e.snapshot.state = new_state;
             e.snapshot.since = Utc::now();
         }
+        self.waiting_state_changed(service, new_state);
         // When a service becomes ready (or a oneshot is done), unblock
         // any services waiting on it.
         if new_state.is_ready() && !self.pending_autostart.is_empty() {

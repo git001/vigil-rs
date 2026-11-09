@@ -140,6 +140,7 @@ impl Overlord {
                 let _ = e.handle.tx.send(check::Cmd::Shutdown).await;
             }
         }
+        self.waiting_plan_changed();
     }
 }
 

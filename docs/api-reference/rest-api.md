@@ -222,18 +222,24 @@ Pass an empty `services` array to act on all services.
 
 | Action | Description |
 |---|---|
-| `start` | Start the specified services |
-| `stop` | Stop the specified services |
-| `restart` | Stop then start the specified services |
+| `start` | Start the specified services; done when they are ready (`active`), a oneshot when its run has ended |
+| `stop` | Stop the specified services; done when their processes are gone (after `stop-signal`, at the latest after the SIGKILL at `kill-delay`) |
+| `restart` | Stop then start the specified services; done when they are ready again |
 | `autostart` | Start the services vigild starts at startup: `startup: enabled`, not scheduled, no oneshot that has already run; each once its `after` dependencies are ready. With `services`, only those; a listed service that autostart does not cover (disabled, scheduled, unknown) is reported in `err`. The plan is not changed. |
 | `replan` | Reload the layers once, like `POST /v1/replan`; `services` is ignored. Unlike `POST /v1/replan`, an invalid layer is reported in the change (`status: error`, `err`), not as `500` |
 
 `services` is required (`[]` for all).
 
-**Response** `200 OK` — a change record. vigild performs the action before
-it answers, so `status` is `done`, or `error` with the reason in `err`. A
-problem with single services (an unknown name, a failed start) is such an
-`error`, still with HTTP `200`.
+**Response** `200 OK` — a change record, sent when the action is done:
+`start`, `restart` and `autostart` once every service is ready (or its
+oneshot run has ended), `stop` once every process is gone. `status` is then
+`done`, or `error` with the reason per service in `err`, e.g. `web: did not
+become ready within 30s` or `migrate: exited with code 3, restarting in
+500ms`. A problem with single services (an unknown name, a failed start, a
+service that requires one autostart does not start) is such an `error`,
+still with HTTP `200`. The request takes as long as the action: up to the
+services' `ready-timeout`, `kill-delay`, or the run of a oneshot. `replan`
+answers once the layers are applied.
 
 ```json
 {
@@ -357,9 +363,10 @@ Get a specific change record by ID.
 }
 ```
 
-**Change status values:** `done` | `error`. The schema also has `doing` and
-`hold`, but vigild never returns them: an action is finished when the
-response is sent. Changes are kept in memory only.
+**Change status values:** `doing` (the action still waits for its
+services; `GET /v1/changes/{id}` from another client shows it) | `done` |
+`error`. The schema also has `hold`, which vigild never returns. Changes
+are kept in memory only.
 
 **Example:**
 
