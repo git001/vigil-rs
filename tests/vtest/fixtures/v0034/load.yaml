@@ -1,0 +1,199 @@
+# vtest v0034: load. 20 services that write a line every 50 ms and ignore
+# SIGHUP (so the signal storm of the test does not kill them), 20 exec
+# checks every second, and churn: chk-flap fails in every other second, so
+# it goes down again and again and vigild restarts svc-churn each time
+# (on-check-failure).
+services:
+  svc01:
+    command: "/bin/sh -c 'trap \"\" HUP; i=0; while true; do echo svc01-line-$i; i=$((i+1)); sleep 0.05; done'"
+    startup: enabled
+  svc02:
+    command: "/bin/sh -c 'trap \"\" HUP; i=0; while true; do echo svc02-line-$i; i=$((i+1)); sleep 0.05; done'"
+    startup: enabled
+  svc03:
+    command: "/bin/sh -c 'trap \"\" HUP; i=0; while true; do echo svc03-line-$i; i=$((i+1)); sleep 0.05; done'"
+    startup: enabled
+  svc04:
+    command: "/bin/sh -c 'trap \"\" HUP; i=0; while true; do echo svc04-line-$i; i=$((i+1)); sleep 0.05; done'"
+    startup: enabled
+  svc05:
+    command: "/bin/sh -c 'trap \"\" HUP; i=0; while true; do echo svc05-line-$i; i=$((i+1)); sleep 0.05; done'"
+    startup: enabled
+  svc06:
+    command: "/bin/sh -c 'trap \"\" HUP; i=0; while true; do echo svc06-line-$i; i=$((i+1)); sleep 0.05; done'"
+    startup: enabled
+  svc07:
+    command: "/bin/sh -c 'trap \"\" HUP; i=0; while true; do echo svc07-line-$i; i=$((i+1)); sleep 0.05; done'"
+    startup: enabled
+  svc08:
+    command: "/bin/sh -c 'trap \"\" HUP; i=0; while true; do echo svc08-line-$i; i=$((i+1)); sleep 0.05; done'"
+    startup: enabled
+  svc09:
+    command: "/bin/sh -c 'trap \"\" HUP; i=0; while true; do echo svc09-line-$i; i=$((i+1)); sleep 0.05; done'"
+    startup: enabled
+  svc10:
+    command: "/bin/sh -c 'trap \"\" HUP; i=0; while true; do echo svc10-line-$i; i=$((i+1)); sleep 0.05; done'"
+    startup: enabled
+  svc11:
+    command: "/bin/sh -c 'trap \"\" HUP; i=0; while true; do echo svc11-line-$i; i=$((i+1)); sleep 0.05; done'"
+    startup: enabled
+  svc12:
+    command: "/bin/sh -c 'trap \"\" HUP; i=0; while true; do echo svc12-line-$i; i=$((i+1)); sleep 0.05; done'"
+    startup: enabled
+  svc13:
+    command: "/bin/sh -c 'trap \"\" HUP; i=0; while true; do echo svc13-line-$i; i=$((i+1)); sleep 0.05; done'"
+    startup: enabled
+  svc14:
+    command: "/bin/sh -c 'trap \"\" HUP; i=0; while true; do echo svc14-line-$i; i=$((i+1)); sleep 0.05; done'"
+    startup: enabled
+  svc15:
+    command: "/bin/sh -c 'trap \"\" HUP; i=0; while true; do echo svc15-line-$i; i=$((i+1)); sleep 0.05; done'"
+    startup: enabled
+  svc16:
+    command: "/bin/sh -c 'trap \"\" HUP; i=0; while true; do echo svc16-line-$i; i=$((i+1)); sleep 0.05; done'"
+    startup: enabled
+  svc17:
+    command: "/bin/sh -c 'trap \"\" HUP; i=0; while true; do echo svc17-line-$i; i=$((i+1)); sleep 0.05; done'"
+    startup: enabled
+  svc18:
+    command: "/bin/sh -c 'trap \"\" HUP; i=0; while true; do echo svc18-line-$i; i=$((i+1)); sleep 0.05; done'"
+    startup: enabled
+  svc19:
+    command: "/bin/sh -c 'trap \"\" HUP; i=0; while true; do echo svc19-line-$i; i=$((i+1)); sleep 0.05; done'"
+    startup: enabled
+  svc20:
+    command: "/bin/sh -c 'trap \"\" HUP; i=0; while true; do echo svc20-line-$i; i=$((i+1)); sleep 0.05; done'"
+    startup: enabled
+  svc-churn:
+    command: "/bin/sh -c 'trap \"\" HUP; while true; do sleep 1; done'"
+    startup: enabled
+    on-check-failure:
+      chk-flap: restart
+checks:
+  chk01:
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: "true"
+  chk02:
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: "true"
+  chk03:
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: "true"
+  chk04:
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: "true"
+  chk05:
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: "true"
+  chk06:
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: "true"
+  chk07:
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: "true"
+  chk08:
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: "true"
+  chk09:
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: "true"
+  chk10:
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: "true"
+  chk11:
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: "true"
+  chk12:
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: "true"
+  chk13:
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: "true"
+  chk14:
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: "true"
+  chk15:
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: "true"
+  chk16:
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: "true"
+  chk17:
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: "true"
+  chk18:
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: "true"
+  chk19:
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: "true"
+  chk20:
+    startup: enabled
+    delay: 0s
+    period: 1s
+    exec:
+      command: "true"
+  chk-flap:
+    startup: enabled
+    delay: 0s
+    period: 1s
+    threshold: 1
+    exec:
+      command: "/bin/sh -c 'test $(( $(date +%s) % 2 )) -eq 0'"

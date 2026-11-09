@@ -1,0 +1,116 @@
+vtest "Load: many concurrent API calls, log streams, signals, replans and restarts; vigild stays responsive and small"
+
+# fixtures/v0034: 20 services that write 20 lines per second each, 20 exec
+# checks every second, and svc-churn, which vigild restarts every other
+# second (chk-flap with on-check-failure: restart).
+#
+# Clients c1–c9 run at the same time, each repeating its request over new
+# connections. A deadlock or a stuck actor shows as a client that gets no
+# answer: VTest2 then fails the test on its timeout. Any 5xx fails it too.
+# Afterwards vigild must still answer, and its thread count and memory must
+# stay bounded.
+process p1 -winsz 200 400 "${vigild} --layers-dir ${vtestdir}/fixtures/v0034 --socket ${tmpdir}/vigild.sock" -start
+process p1 -expect-text 0 0 "API listening"
+process p1 -expect-text 0 0 "[svc20] svc20-line-"
+process p1 -expect-text 0 0 "check is down"
+
+# Reads.
+client c1 -connect ${tmpdir}/vigild.sock -repeat 300 {
+	txreq -method GET -url /v1/services -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+} -start
+
+client c2 -connect ${tmpdir}/vigild.sock -repeat 300 {
+	txreq -method GET -url /v1/checks -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+} -start
+
+client c3 -connect ${tmpdir}/vigild.sock -repeat 200 {
+	txreq -method GET -url "/v1/logs?n=200" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+} -start
+
+client c4 -connect ${tmpdir}/vigild.sock -repeat 200 {
+	txreq -method GET -url /v1/metrics -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+} -start
+
+# Writes. A signal to all services is 409 while svc-churn is being
+# restarted (all or nothing), so only a 5xx is an error.
+client c5 -connect ${tmpdir}/vigild.sock -repeat 100 {
+	txreq -method POST -url /v1/signals -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"signal\":\"SIGHUP\",\"services\":[\"svc01\",\"svc02\",\"svc03\",\"svc04\",\"svc05\",\"svc06\",\"svc07\",\"svc08\",\"svc09\",\"svc10\",\"svc11\",\"svc12\",\"svc13\",\"svc14\",\"svc15\",\"svc16\",\"svc17\",\"svc18\",\"svc19\",\"svc20\",\"svc-churn\"]}"
+	rxresp
+	expect resp.status < 500
+} -start
+
+client c6 -connect ${tmpdir}/vigild.sock -repeat 30 {
+	txreq -method POST -url /v1/replan -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+} -start
+
+client c7 -connect ${tmpdir}/vigild.sock -repeat 30 {
+	txreq -method POST -url /v1/services -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"action\":\"restart\",\"services\":[\"svc05\"]}"
+	rxresp
+	expect resp.status == 200
+} -start
+
+client c8 -connect ${tmpdir}/vigild.sock -repeat 100 {
+	txreq -method POST -url /v1/checks/refresh -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"name\":\"chk01\"}"
+	rxresp
+	expect resp.status == 200
+} -start
+
+# A log follower that reads 500 lines of the live stream (one chunk each).
+client c9 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/logs?follow=true&n=0" -hdr "Host: localhost"
+	rxresphdrs
+	expect resp.status == 200
+	loop 500 {
+		rxchunk
+	}
+} -start
+
+client c1 -wait
+client c2 -wait
+client c3 -wait
+client c4 -wait
+client c5 -wait
+client c6 -wait
+client c7 -wait
+client c8 -wait
+client c9 -wait
+
+# vigild still answers, and the churn did happen.
+client c10 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/services?names=svc-churn" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+} -run
+process p1 -expect-text 0 0 "on-check-failure: restarting service"
+
+# Threads and memory stay bounded. At most 19 threads: the main thread, 2
+# runtime workers and the blocking pool's limit of 16; exec checks that
+# read no files do not use the blocking pool at all, so after the load
+# there are about 4. Memory was about 55 MB (debug build); 96 MB leaves
+# room. VTest2 cannot read /proc itself.
+shell {
+	threads=$(awk '/^Threads:/ {print $2}' /proc/${p1_pid}/status)
+	rss_kb=$(awk '/^VmRSS:/ {print $2}' /proc/${p1_pid}/status)
+	echo "threads=$threads rss_kb=$rss_kb"
+	test "$threads" -le 19
+	test "$rss_kb" -le 98304
+}
+
+process p1 -kill TERM
+process p1 -wait
