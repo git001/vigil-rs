@@ -150,6 +150,7 @@ impl Cli {
                 return Err(format!("{flag} cannot be used with --kubernetes"));
             }
         }
+        renamed_env(|name| std::env::var_os(name).is_some())?;
         self.lines.multiline_rule()?;
         if self.conn.source_insecure && (self.kubernetes || self.source_socket.is_some()) {
             return Err(
@@ -159,6 +160,19 @@ impl Cli {
             );
         }
         Ok(())
+    }
+}
+
+/// Environment variables of options that were renamed, with their new
+/// names. clap rejects an old flag; an old variable would be ignored
+/// without a word, so it is an error too.
+const RENAMED_ENV: &[(&str, &str)] = &[("DEST_READ_TIMEOUT", "DEST_WRITE_TIMEOUT")];
+
+/// Error for the first renamed variable that `is_set`.
+fn renamed_env(is_set: impl Fn(&str) -> bool) -> Result<(), String> {
+    match RENAMED_ENV.iter().find(|(old, _)| is_set(old)) {
+        Some((old, new)) => Err(format!("{old} was renamed to {new}")),
+        None => Ok(()),
     }
 }
 

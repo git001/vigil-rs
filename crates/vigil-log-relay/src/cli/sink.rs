@@ -65,12 +65,12 @@ pub struct Sink {
     /// Per-write timeout in ms; reconnects if a write stalls (0 = disabled).
     #[arg(
         long,
-        env = "DEST_READ_TIMEOUT",
+        env = "DEST_WRITE_TIMEOUT",
         default_value = "0",
         value_name = "MS",
         help_heading = "TCP Sink Connection"
     )]
-    pub dest_read_timeout: u64,
+    pub dest_write_timeout: u64,
 
     /// Idle timeout in ms; reconnects if no data is written for this long (0 = disabled).
     #[arg(
@@ -133,7 +133,7 @@ impl Sink {
     pub fn tcp_sink_config(&self) -> SinkConfig {
         SinkConfig {
             connect_timeout_ms: self.dest_connect_timeout,
-            write_timeout_ms: self.dest_read_timeout,
+            write_timeout_ms: self.dest_write_timeout,
             idle_timeout_ms: self.dest_idle_timeout,
             keepalive: Keepalive {
                 interval_secs: self.dest_keepalive_interval,

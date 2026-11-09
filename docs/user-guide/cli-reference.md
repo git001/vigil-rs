@@ -656,7 +656,7 @@ its first record), other lines as text.
 | `--tcp-sink-host HOST` | `TCP_SINK_HOST` | `127.0.0.1` | TCP sink host |
 | `--tcp-sink-port PORT` | `TCP_SINK_PORT` | `5170` | TCP sink port |
 | `--dest-connect-timeout MS` | `DEST_CONNECT_TIMEOUT` | `10000` | TCP connect timeout (`0` = none) |
-| `--dest-read-timeout MS` | `DEST_READ_TIMEOUT` | `0` | Reconnect when a write stalls this long (`0` = disabled) |
+| `--dest-write-timeout MS` | `DEST_WRITE_TIMEOUT` | `0` | Reconnect when a write stalls this long (`0` = disabled) |
 | `--dest-idle-timeout MS` | `DEST_IDLE_TIMEOUT` | `0` | Reconnect when nothing was written for this long (`0` = disabled) |
 | `--dest-keepalive-interval SECS` | `DEST_KEEPALIVE_INTERVAL` | `0` | TCP keepalive: seconds between probes (`0` = off) |
 | `--dest-keepalive-timeout SECS` | `DEST_KEEPALIVE_TIMEOUT` | `0` | Seconds of silence before the first probe (`0` = 3 × interval) |

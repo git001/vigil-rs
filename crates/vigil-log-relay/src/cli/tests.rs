@@ -75,3 +75,19 @@ fn cert_and_key_require_each_other() {
 fn proxy_options_still_allowed_with_kubernetes() {
     parse(&["--kubernetes", "--source-proxy", "http://p:3128"]).unwrap();
 }
+
+#[test]
+fn a_renamed_environment_variable_is_an_error() {
+    assert_eq!(
+        super::renamed_env(|name| name == "DEST_READ_TIMEOUT"),
+        Err("DEST_READ_TIMEOUT was renamed to DEST_WRITE_TIMEOUT".to_string())
+    );
+    assert_eq!(super::renamed_env(|_| false), Ok(()));
+}
+
+#[test]
+fn dest_write_timeout_replaces_dest_read_timeout() {
+    let cli = parse(&["--source-url", "http://x/", "--dest-write-timeout", "500"]).unwrap();
+    assert_eq!(cli.sink.dest_write_timeout, 500);
+    assert!(parse(&["--source-url", "http://x/", "--dest-read-timeout", "500"]).is_err());
+}

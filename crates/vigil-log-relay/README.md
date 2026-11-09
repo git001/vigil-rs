@@ -217,7 +217,7 @@ A clean stream EOF (server closed the connection intentionally) resets the failu
 | Flag | Env | Default | Description |
 |------|-----|---------|-------------|
 | `--dest-connect-timeout MS` | `DEST_CONNECT_TIMEOUT` | `10000` | TCP connect timeout |
-| `--dest-read-timeout MS` | `DEST_READ_TIMEOUT` | `0` | Per-write timeout |
+| `--dest-write-timeout MS` | `DEST_WRITE_TIMEOUT` | `0` | Per-write timeout |
 | `--dest-idle-timeout MS` | `DEST_IDLE_TIMEOUT` | `0` | Reconnect if no data written for this long |
 | `--dest-keepalive-interval SECS` | `DEST_KEEPALIVE_INTERVAL` | `0` | TCP keepalive interval |
 | `--dest-keepalive-timeout SECS` | `DEST_KEEPALIVE_TIMEOUT` | `0` | TCP keepalive probe timeout |
