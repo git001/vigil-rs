@@ -639,7 +639,9 @@ quickly readiness is detected.
 - Understood messages: `READY=1`, `STATUS=<text>` (shown as `status-message`
   in the API and in `vigil services list`), `STOPPING=1` (logged). Other
   fields are ignored; file descriptors (`FDSTORE=1`) are closed. Watchdog
-  messages are not supported yet.
+  messages (`WATCHDOG=1`) are not supported yet (planned after v4.0); to
+  restart a hanging service, give it an `alive` check (`http`, `tcp` or
+  `exec`) and [`on-check-failure: restart`](#on-check-failure).
 - Only messages from the service's main process or its process group are
   accepted (checked via `SCM_CREDENTIALS`). A sender that has already exited
   when vigild reads the message (e.g. a short-lived `systemd-notify` helper)

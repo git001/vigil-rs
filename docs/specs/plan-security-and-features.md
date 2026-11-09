@@ -290,7 +290,9 @@ statuses older than the spawn are ignored). As implemented:
   - Received via `recvmsg` with `SCM_CREDENTIALS`. Only messages from PIDs in
     the service's process group are accepted.
   - Handled: `READY=1`, `STATUS=` (shown in the API) and `STOPPING=1`.
-    Watchdog comes later.
+    Watchdog (`WATCHDOG=1`, `WATCHDOG_USEC`) after v4.0 (decided
+    2026-11-09: an `alive` check with `on-check-failure: restart` covers a
+    hanging service already).
 - **API (breaking, hence v4):** `ServiceStatus` gets `Starting`. Bump the
   OpenAPI version to v4. `vigil` v4 and `vigil-log-relay` must know the new
   value.
