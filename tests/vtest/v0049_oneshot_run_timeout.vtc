@@ -1,0 +1,46 @@
+vtest "run-timeout stops a oneshot run that takes too long; the run counts as failed"
+
+# fixtures/v0049: hang ignores SIGTERM and runs past its run-timeout of
+# 500ms; quick finishes within its run-timeout.
+process p1 -winsz 100 200 "${vigild} --layers-dir ${vtestdir}/fixtures/v0049 --socket ${tmpdir}/vigild.sock --path-prefix ${tmpdir}/run" -start
+process p1 -expect-text 0 0 "API listening"
+
+# The start answers at the end of the run: stopped after 500ms, killed
+# after kill-delay, with the reason.
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/services -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"action\":\"start\",\"services\":[\"hang\"]}"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "\"status\":\"error\""
+	expect resp.body ~ "hang: did not finish within 500ms"
+
+	txreq -url /v1/services?names=hang -hdr "Host: localhost"
+	rxresp
+	expect resp.body ~ "\"current\":\"inactive\""
+	expect resp.body ~ "\"signal\":9"
+
+	txreq -url /v1/metrics -hdr "Host: localhost"
+	rxresp
+	expect resp.body ~ "vigil_service_runs_total\\{service=\"hang\",result=\"failure\"\\} 1"
+} -run
+
+process p1 -expect-text 0 0 "kill-delay expired"
+
+# A run within its run-timeout ends done.
+client c2 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/services -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"action\":\"start\",\"services\":[\"quick\"]}"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "\"status\":\"done\""
+
+	txreq -url /v1/services?names=quick -hdr "Host: localhost"
+	rxresp
+	expect resp.body ~ "\"current\":\"done\""
+} -run
+
+process p1 -kill TERM
+process p1 -wait

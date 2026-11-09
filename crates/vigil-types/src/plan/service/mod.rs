@@ -108,6 +108,10 @@ pub struct ServiceConfig {
     /// alert again. Default `10s`, allowed `1s` to `1h`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub healthy_time: Option<String>,
+    /// How long a run of a `oneshot` may take before it is stopped and
+    /// counts as failed. Default: no limit; `0s` is no limit too.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_timeout: Option<String>,
     /// Exit codes that count as success (after `exit-code-map`).
     /// Default (empty): `[0]`. A signal counts as code `128 + signal`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -179,6 +183,7 @@ pub(super) fn merge_service(base: &mut ServiceConfig, overlay: &ServiceConfig) {
             ready_check,
             ready_timeout,
             healthy_time,
+            run_timeout,
             on_success,
             on_failure,
             backoff_delay,

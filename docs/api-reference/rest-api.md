@@ -238,7 +238,8 @@ become ready within 30s` or `migrate: exited with code 3, restarting in
 500ms`. A problem with single services (an unknown name, a failed start, a
 service that requires one autostart does not start) is such an `error`,
 still with HTTP `200`. The request takes as long as the action: up to the
-services' `ready-timeout`, `kill-delay`, or the run of a oneshot. `replan`
+services' `ready-timeout`, `kill-delay`, or the run of a oneshot (limited by
+its `run-timeout`). `replan`
 answers once the layers are applied.
 
 ```json

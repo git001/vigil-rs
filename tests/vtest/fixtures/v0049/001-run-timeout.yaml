@@ -1,0 +1,17 @@
+# Oneshots with run-timeout.
+#
+# hang   would run for a minute and ignores SIGTERM: after 500ms vigild
+#        stops it, and after kill-delay (300ms) it sends SIGKILL. The run
+#        counts as failed; on-failure: ignore leaves it inactive.
+# quick  finishes well within its run-timeout and ends done.
+services:
+  hang:
+    type: oneshot
+    command: sh -c 'trap "" TERM; sleep 60'
+    run-timeout: 500ms
+    kill-delay: 300ms
+    on-failure: ignore
+  quick:
+    type: oneshot
+    command: sh -c 'sleep 0.2'
+    run-timeout: 5s

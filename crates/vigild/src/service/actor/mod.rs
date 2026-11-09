@@ -69,9 +69,10 @@ pub(super) struct Actor {
     notify_rx: Option<mpsc::Receiver<NotifyMsg>>,
     /// UID the current process runs as (for notify sender checks).
     service_uid: u32,
-    /// Deadline for reaching readiness while `Starting`.
+    /// Deadline while `Starting`: for readiness, or for the end of a
+    /// oneshot run (`run-timeout`).
     ready_deadline: Option<tokio::time::Instant>,
-    /// Readiness timed out; the process is being stopped and its exit
+    /// The deadline passed; the process is being stopped and its exit
     /// counts as a failure.
     ready_failed: bool,
     /// Last `STATUS=` text from sd_notify.

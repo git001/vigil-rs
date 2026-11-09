@@ -15,7 +15,7 @@ e.g. on OpenShift with a random UID.
 | **PID 1 / zombie reaper** | Safe to run as container entrypoint; reaps orphaned child processes automatically |
 | **YAML layer config** | Declarative service & check definitions; multiple layers are merged in order |
 | **Service supervision** | Start, stop, restart with exponential backoff; `healthy-time` resets the backoff |
-| **Oneshot jobs and cron schedules** | `type: oneshot` for migrations and jobs, `schedule` (cron, with time zone) instead of a cron daemon |
+| **Oneshot jobs and cron schedules** | `type: oneshot` for migrations and jobs, `schedule` (cron, with time zone) instead of a cron daemon, `run-timeout` for jobs that hang |
 | **Readiness** | `ready: process \| notify \| check`: dependents start when a service is ready (sd_notify `READY=1` or a passing check) |
 | **Custom stop signal** | Per-service `stop-signal` (SIGTERM, SIGUSR1, SIGHUP, …) + `kill-delay` |
 | **Startup ordering** | `after:` / `before:` / `requires:` dependency graph |

@@ -82,8 +82,8 @@ Layer files can also define identities (`identities:`); see
 ### Full reference
 
 The block lists every field. Some of them exclude each other, so it is not a
-valid service as it stands: `schedule` needs `type: oneshot`, which in turn
-rules out `ready`, `ready-check`, `ready-timeout`, `watch-files` and
+valid service as it stands: `schedule` and `run-timeout` need
+`type: oneshot`, which in turn rules out `ready`, `ready-check`, `ready-timeout`, `watch-files` and
 `on-success: restart`; `ready-check` needs `ready: check`. The field
 reference below has the rules.
 
@@ -100,6 +100,7 @@ services:
     type: simple                       # simple | oneshot (default: simple)
     schedule: '0 3 * * *'              # cron pattern, type: oneshot only
     schedule-tz: Europe/Vienna         # time zone for schedule (default: UTC); only with schedule
+    run-timeout: 30m                   # stop + on-failure if a oneshot run takes longer (default: no limit); type: oneshot only
     working-dir: /var/lib/myapp        # working directory (default: vigild's working directory)
     user: myapp                        # run as this username
     user-id: 1000                      # or by UID
@@ -303,6 +304,26 @@ services:
     after: [migrate]              # starts once migrate is done
 ```
 
+**`run-timeout`** (default: no limit, `0s` = no limit too) limits how long a
+run of a `oneshot` may take. When it is reached, vigild stops the run as it
+stops any service (`stop-signal`, then SIGKILL after `kill-delay`). The run
+counts as failed with the reason `did not finish within 30m`, regardless of
+`success-exit-codes` and `exit-code-map`, so `on-failure`, service alerts and
+the metrics treat it like any failed run. With `--exit-code propagate`, a
+resulting shutdown exits with `10`, because the stop signal's code says
+nothing about the job. The time counts from the start of each run, also of a
+scheduled one or a restart after backoff.
+
+```yaml
+services:
+  backup:
+    type: oneshot
+    command: /usr/local/bin/backup
+    schedule: '0 3 * * *'
+    startup: enabled
+    run-timeout: 2h               # a backup that hangs is stopped after 2h
+```
+
 **`schedule`** runs a `oneshot` periodically (cron replacement):
 
 ```yaml
@@ -348,11 +369,12 @@ services:
   `vigil_service_running` is `1` while a job runs. Example alerts:
   `increase(vigil_service_runs_total{result="failure"}[1h]) > 0` (a run
   failed) and `vigil_service_running == 1 and time() - vigil_service_last_run_timestamp_seconds > 3600`
-  (a job hangs).
+  (a job hangs; with `run-timeout` vigild stops such a job itself).
 
 Not allowed with `type: oneshot`: `ready`, `ready-check`, `ready-timeout` (a
-oneshot is ready when it is done) and `on-success: restart` (use `schedule`).
-`schedule` requires `type: oneshot`.
+oneshot is ready when it is done; `run-timeout` limits its run) and
+`on-success: restart` (use `schedule`). `schedule` and `run-timeout` require
+`type: oneshot`.
 
 #### `user` / `user-id` / `group` / `group-id`
 
@@ -1763,7 +1785,7 @@ alerts:
 ## Duration format
 
 All duration fields accept strings like these: `kill-delay`, `ready-timeout`,
-`healthy-time`, `backoff-delay`, `backoff-limit`, `watch-files.interval`,
+`run-timeout`, `healthy-time`, `backoff-delay`, `backoff-limit`, `watch-files.interval`,
 `delay`, `period`, `timeout`, `retry-backoff` entries and
 `alerts.max-queue-time`.
 
@@ -1774,7 +1796,7 @@ All duration fields accept strings like these: `kill-delay`, `ready-timeout`,
 | `1m` | 1 minute |
 | `1m30s` | 1 minute 30 seconds |
 | `1h` | 1 hour |
-| `0s` | zero, where a field allows it (e.g. `delay`, `ready-timeout`) |
+| `0s` | zero, where a field allows it (e.g. `delay`, `ready-timeout`, `run-timeout`) |
 
 Each part is a whole number followed by a unit: `ms`, `s`, `m` or `h`.
 Fractions (`1.5s`), other units (`d`, `us`) and a number without a unit

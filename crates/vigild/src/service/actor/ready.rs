@@ -21,10 +21,30 @@ impl Actor {
         self.config.ready.unwrap_or_default()
     }
 
-    /// `None` = wait forever (`ready-timeout: 0s`).
+    /// How long the service may stay `starting`: `ready-timeout`, or for a
+    /// oneshot `run-timeout`. `None` = wait forever (`0s`, and a oneshot
+    /// without `run-timeout`).
     pub(super) fn ready_timeout(&self) -> Option<Duration> {
-        let d = dur(&self.config.ready_timeout, DEFAULT_READY_TIMEOUT);
+        let d = if self.is_oneshot() {
+            dur(&self.config.run_timeout, Duration::ZERO)
+        } else {
+            dur(&self.config.ready_timeout, DEFAULT_READY_TIMEOUT)
+        };
         (!d.is_zero()).then_some(d)
+    }
+
+    /// Why the service failed when the deadline of [`Self::ready_timeout`]
+    /// passed.
+    pub(super) fn timeout_reason(&self) -> String {
+        let what = if self.is_oneshot() {
+            "did not finish"
+        } else {
+            "did not become ready"
+        };
+        match self.ready_timeout() {
+            Some(t) => format!("{what} within {t:?}"),
+            None => what.to_owned(),
+        }
     }
 
     /// Called right after a successful spawn (state is `Starting`).
@@ -33,16 +53,18 @@ impl Actor {
         if self.status_message.take().is_some() {
             self.send_status_message().await;
         }
+        let deadline = self
+            .ready_timeout()
+            .map(|d| tokio::time::Instant::now() + d);
         if self.is_oneshot() {
             // Ready = finished successfully; stays `Starting` while it runs.
+            self.ready_deadline = deadline;
             return;
         }
         match self.ready_mode() {
             ReadyMode::Process => self.transition(ServiceState::Active).await,
             mode => {
-                self.ready_deadline = self
-                    .ready_timeout()
-                    .map(|d| tokio::time::Instant::now() + d);
+                self.ready_deadline = deadline;
                 info!(service = %self.name, ?mode, timeout = ?self.ready_timeout(), "waiting for readiness");
             }
         }
@@ -113,8 +135,9 @@ impl Actor {
         .await;
     }
 
-    /// Readiness was not reached in time: stop the process; its exit counts
-    /// as a failure (`on-failure` applies).
+    /// Readiness was not reached in time, or a oneshot run took too long:
+    /// stop the process; its exit counts as a failure (`on-failure`
+    /// applies).
     pub(super) async fn handle_ready_timeout(&mut self) {
         self.ready_deadline = None;
         if self.state != ServiceState::Starting || self.child.is_none() {
@@ -123,7 +146,8 @@ impl Actor {
         warn!(
             service = %self.name,
             timeout = ?self.ready_timeout(),
-            "service did not become ready in time, stopping it"
+            "service {} in time, stopping it",
+            if self.is_oneshot() { "did not finish" } else { "did not become ready" }
         );
         self.ready_failed = true;
         self.begin_stop();

@@ -678,6 +678,8 @@ fn oneshot_fields_are_validated() {
             "    type: oneshot\n    on-success: restart\n",
             "on-success: restart",
         ),
+        ("    run-timeout: 1m\n", "run-timeout needs type: oneshot"),
+        ("    type: oneshot\n    run-timeout: soon\n", "run-timeout"),
     ];
     for (fields, want) in cases {
         let dir = TempDir::new().unwrap();
@@ -931,7 +933,7 @@ fn valid_oneshot_config_loads() {
     write(
         &dir,
         "001.yaml",
-        "services:\n  job:\n    command: /bin/true\n    type: oneshot\n    schedule: '*/5 * * * *'\n    on-failure: restart\n",
+        "services:\n  job:\n    command: /bin/true\n    type: oneshot\n    schedule: '*/5 * * * *'\n    on-failure: restart\n    run-timeout: 10m\n",
     );
     let plan = load_plan(dir.path()).unwrap();
     assert_eq!(

@@ -93,6 +93,9 @@ fn validate_oneshot(svc: &ServiceConfig) -> anyhow::Result<()> {
     use vigil_types::plan::{OnExit, ServiceType};
 
     let oneshot = svc.service_type == Some(ServiceType::Oneshot);
+    if parse_field("run-timeout", svc.run_timeout.as_deref())?.is_some() {
+        anyhow::ensure!(oneshot, "run-timeout needs type: oneshot");
+    }
     if let Some(pattern) = &svc.schedule {
         anyhow::ensure!(oneshot, "schedule needs type: oneshot");
         crate::service::schedule::Schedule::parse(pattern, svc.schedule_tz.as_deref())?;

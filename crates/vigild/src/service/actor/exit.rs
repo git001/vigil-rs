@@ -31,18 +31,16 @@ impl Actor {
             Some(c) => self.config.success_exit_codes.contains(&c),
             None => false,
         };
-        // Stopped because it never became ready: always a failure, and the
-        // stop signal's code (e.g. 143) says nothing about the service.
+        // Stopped because it never became ready (or a oneshot run took too
+        // long): always a failure, and the stop signal's code (e.g. 143)
+        // says nothing about the service.
         let ready_failed = std::mem::take(&mut self.ready_failed);
         if ready_failed {
             success = false;
             code = None;
         }
         let reason = if ready_failed {
-            match self.ready_timeout() {
-                Some(t) => format!("did not become ready within {t:?}"),
-                None => "did not become ready".to_owned(),
-            }
+            self.timeout_reason()
         } else {
             super::health::describe_exit(exit_info)
         };

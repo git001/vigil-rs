@@ -936,6 +936,55 @@ async fn ready_timeout_stops_service_and_counts_as_failure() {
 }
 
 #[tokio::test]
+async fn a_oneshot_has_no_run_deadline_by_default() {
+    for run_timeout in [None, Some("0s".to_string())] {
+        let (mut actor, _rx) = make_actor_with_config(ServiceConfig {
+            command: Some("sleep 30".into()),
+            service_type: Some(vigil_types::plan::ServiceType::Oneshot),
+            run_timeout,
+            ..Default::default()
+        });
+        actor.try_start().await.unwrap();
+        assert_eq!(actor.state, ServiceState::Starting);
+        assert!(actor.ready_deadline.is_none(), "no ready-timeout either");
+        actor.cleanup().await;
+    }
+}
+
+#[tokio::test]
+async fn run_timeout_stops_a_oneshot_and_counts_as_failure() {
+    let mut exit_code_map = indexmap::IndexMap::new();
+    exit_code_map.insert(143, 0); // must not turn the timeout into a success
+    let (tx, mut rx) = spawn_run(
+        ServiceConfig {
+            command: Some("sleep 30".into()),
+            service_type: Some(vigil_types::plan::ServiceType::Oneshot),
+            run_timeout: Some("200ms".into()),
+            on_failure: Some(vigil_types::plan::OnExit::Ignore),
+            exit_code_map,
+            ..Default::default()
+        },
+        std::env::temp_dir(),
+    );
+    start(&tx).await;
+    let seen = wait_event(&mut rx, is_state(ServiceState::Inactive)).await;
+    assert!(
+        seen.iter()
+            .any(|k| matches!(k, EventKind::ProcessExited { success: false, .. })),
+        "{seen:?}"
+    );
+    assert!(
+        seen.iter().any(|k| matches!(
+            k,
+            EventKind::Unhealthy { event: "failed", message }
+                if message == "did not finish within 200ms"
+        )),
+        "{seen:?}"
+    );
+    shutdown(tx).await;
+}
+
+#[tokio::test]
 async fn notify_socket_is_not_inherited_without_ready_notify() {
     // vigild itself may run under systemd with NOTIFY_SOCKET set.
     let dir = tempfile::tempdir().unwrap();
