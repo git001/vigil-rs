@@ -269,6 +269,12 @@ spec:
   terminationGracePeriodSeconds: 30   # delay + time the services need to stop (below)
   containers:
     - name: app
+      resources:               # size them for the services, see the Pod example above
+        requests:
+          cpu: 250m
+          memory: 256Mi
+        limits:
+          memory: 512Mi
       env:
         - name: VIGIL_SHUTDOWN_DELAY
           value: 5s
@@ -359,6 +365,12 @@ missed: vigild compares against the files as it loaded them.
 spec:
   containers:
     - name: app
+      resources:               # size them for the services, see the Pod example above
+        requests:
+          cpu: 250m
+          memory: 256Mi
+        limits:
+          memory: 512Mi
       env:
         - name: VIGIL_LAYERS
           value: /etc/vigil/layers
@@ -431,6 +443,12 @@ identities:
 spec:
   containers:
     - name: app
+      resources:               # size them for the services, see the Pod example above
+        requests:
+          cpu: 250m
+          memory: 256Mi
+        limits:
+          memory: 512Mi
       volumeMounts:
         - name: layers
           mountPath: /etc/vigil/layers

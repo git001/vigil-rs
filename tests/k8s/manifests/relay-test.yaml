@@ -32,6 +32,9 @@ spec:
   containers:
     - name: app
       image: docker.io/library/busybox:1.36
+      resources:
+        requests: {cpu: 10m, memory: 16Mi}
+        limits: {memory: 32Mi}
       command: ["sh", "-c", "i=0; while :; do i=$((i+1)); echo \"logger-a line $i\"; sleep 1; done"]
       securityContext:
         allowPrivilegeEscalation: false
@@ -56,6 +59,9 @@ spec:
   containers:
     - name: app
       image: docker.io/library/busybox:1.36
+      resources:
+        requests: {cpu: 10m, memory: 16Mi}
+        limits: {memory: 32Mi}
       command: ["sh", "-c", "i=0; while :; do i=$((i+1)); echo \"multi-app line $i\"; sleep 1; done"]
       securityContext:
         allowPrivilegeEscalation: false
@@ -64,6 +70,9 @@ spec:
           drop: ["ALL"]
     - name: sidecar
       image: docker.io/library/busybox:1.36
+      resources:
+        requests: {cpu: 10m, memory: 16Mi}
+        limits: {memory: 32Mi}
       command: ["sh", "-c", "i=0; while :; do i=$((i+1)); echo \"multi-sidecar line $i\" >&2; sleep 1; done"]
       securityContext:
         allowPrivilegeEscalation: false
@@ -88,6 +97,9 @@ spec:
   containers:
     - name: app
       image: docker.io/library/busybox:1.36
+      resources:
+        requests: {cpu: 10m, memory: 16Mi}
+        limits: {memory: 32Mi}
       command: ["sh", "-c", "i=0; while :; do i=$((i+1)); echo \"excluded line $i\"; sleep 1; done"]
       securityContext:
         allowPrivilegeEscalation: false
@@ -112,6 +124,9 @@ spec:
   containers:
     - name: app
       image: docker.io/library/busybox:1.36
+      resources:
+        requests: {cpu: 10m, memory: 16Mi}
+        limits: {memory: 32Mi}
       command:
         - sh
         - -c
@@ -145,6 +160,9 @@ spec:
   containers:
     - name: app
       image: docker.io/library/busybox:1.36
+      resources:
+        requests: {cpu: 10m, memory: 16Mi}
+        limits: {memory: 32Mi}
       command: ["sh", "-c", "i=0; while :; do i=$((i+1)); echo \"other line $i\"; sleep 1; done"]
       securityContext:
         allowPrivilegeEscalation: false
