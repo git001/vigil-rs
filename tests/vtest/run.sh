@@ -20,7 +20,9 @@
 #               whose /etc/passwd lacks root:
 #               CARGO_TEST_ARGS="-- --skip resolve_uid_name_and --skip resolve_gid_name_and"
 #   K8S_TEST    Set to 1 in --coverage mode to also run tests/k8s/relay.sh
-#               (vigil-log-relay --kubernetes) against the cluster in KUBECONFIG.
+#               (vigil-log-relay --kubernetes) against the cluster in KUBECONFIG,
+#               and tests/k8s/e2e.sh (the release image in a pod) when
+#               E2E_IMAGE is set (see tests/k8s/build-image.sh).
 
 set -euo pipefail
 
@@ -173,6 +175,13 @@ export LLVM_PROFILE_FILE="${LLVM_PROFILE_FILE}"
 if [[ "${K8S_TEST:-0}" == 1 ]]; then
     echo "==> Running the Kubernetes relay test…"
     RELAY_BIN="${VIGIL_LOG_RELAY_BIN}" "${REPO_ROOT}/tests/k8s/relay.sh"
+    # The image runs its own (release) binaries: no coverage from this test.
+    if [[ -n "${E2E_IMAGE:-}" ]]; then
+        echo "==> Running the Kubernetes end-to-end test…"
+        "${REPO_ROOT}/tests/k8s/e2e.sh"
+    else
+        echo "==> Skipping the Kubernetes end-to-end test: E2E_IMAGE is not set (tests/k8s/build-image.sh)"
+    fi
 fi
 
 echo ""

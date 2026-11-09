@@ -1,0 +1,121 @@
+# Test pod for tests/k8s/e2e.sh: the release image with vigild as PID 1.
+#
+# It runs as on OpenShift: a non-root UID that is not in the image, group
+# 0, no capabilities and a read-only root file system; /tmp is an emptyDir
+# (VIGIL_PATH_PREFIX=/tmp/vigil). The probes are those of
+# docs/operator-guide/orchestrators.md, with short periods. e2e.sh puts the
+# image in place of VIGIL_E2E_IMAGE.
+#
+# Layers (ConfigMap, version 1):
+#   app            writes a line per second; creates /tmp/alive and
+#                  /tmp/ready when it starts.
+#   trace          writes a Java stack trace once (logs-multiline: java).
+#   orphan-maker   oneshot that leaves a child behind: vigild, as PID 1,
+#                  must reap it when it exits.
+#   alive-marker   level: alive check on /tmp/alive (liveness probe).
+#   ready-marker   level: ready check on /tmp/ready (readiness probe).
+# e2e-layers-v2.yaml adds the service extra.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vigil-e2e-test
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vigil-e2e-layers
+  namespace: vigil-e2e-test
+data:
+  001-e2e.yaml: |
+    services:
+      app:
+        command: /bin/sh -c 'touch /tmp/alive /tmp/ready; i=0; while true; do i=$((i+1)); echo "app line $i"; sleep 1; done'
+        startup: enabled
+      trace:
+        # A block scalar: the ": " in the trace would end a plain value.
+        command: >-
+          /bin/sh -c 'printf "ERROR e2e request failed\njava.lang.IllegalStateException: boom\n\tat e2e.A.b(A.java:1)\n"; exec sleep 100000'
+        startup: enabled
+        logs-multiline:
+          preset: java
+      orphan-maker:
+        type: oneshot
+        command: /bin/sh -c 'sleep 2 & exit 0'
+        startup: enabled
+    checks:
+      alive-marker:
+        level: alive
+        startup: enabled
+        period: 2s
+        threshold: 1
+        exec:
+          command: test -f /tmp/alive
+      ready-marker:
+        level: ready
+        startup: enabled
+        period: 2s
+        threshold: 1
+        exec:
+          command: test -f /tmp/ready
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vigil-e2e
+  namespace: vigil-e2e-test
+spec:
+  terminationGracePeriodSeconds: 30
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000710000
+    runAsGroup: 0
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: app
+      image: VIGIL_E2E_IMAGE
+      env:
+        - name: VIGIL_TLS_ADDR
+          value: "0.0.0.0:8443"
+        - name: VIGIL_WATCH_LAYERS
+          value: 2s
+      ports:
+        - containerPort: 8443
+      livenessProbe:
+        httpGet:
+          path: /v1/health?level=alive
+          port: 8443
+          scheme: HTTPS
+        initialDelaySeconds: 3
+        periodSeconds: 2
+        failureThreshold: 2
+      readinessProbe:
+        httpGet:
+          path: /v1/health?level=ready
+          port: 8443
+          scheme: HTTPS
+        initialDelaySeconds: 2
+        periodSeconds: 2
+        failureThreshold: 1
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          memory: 128Mi
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      volumeMounts:
+        - name: layers
+          mountPath: /etc/vigil/layers
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: layers
+      configMap:
+        name: vigil-e2e-layers
+    - name: tmp
+      emptyDir: {}

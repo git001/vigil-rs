@@ -41,6 +41,13 @@ Fix clippy warnings in the code; do not silence them with
 - **Kubernetes** (`tests/k8s/relay.sh`): tests `vigil-log-relay --kubernetes`
   against a real cluster. It needs `KUBECONFIG` and creates (and removes) the
   namespace `vigil-relay-test`.
+- **Kubernetes end-to-end** (`tests/k8s/e2e.sh`): runs the release image
+  (built from the `Dockerfile` by `tests/k8s/build-image.sh`, pushed to the
+  anonymous registry ttl.sh by default) as a pod like on OpenShift: vigild
+  as PID 1, random UID, probes, a changed ConfigMap, a liveness restart and
+  the shutdown. It needs `KUBECONFIG` and `E2E_IMAGE` and creates (and
+  removes) the namespace `vigil-e2e-test`. `K8S_TEST=1 run.sh --coverage`
+  runs both Kubernetes tests.
 - **Coverage**: `tests/vtest/run.sh --coverage` combines unit, integration
   and VTest2 coverage.
 

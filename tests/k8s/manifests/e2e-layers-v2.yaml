@@ -1,0 +1,43 @@
+# Version 2 of the layers of tests/k8s/manifests/e2e.yaml: the same, plus
+# the service extra. e2e.sh applies it to check that vigild
+# (VIGIL_WATCH_LAYERS) picks up a changed ConfigMap without kubectl exec.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vigil-e2e-layers
+  namespace: vigil-e2e-test
+data:
+  001-e2e.yaml: |
+    services:
+      app:
+        command: /bin/sh -c 'touch /tmp/alive /tmp/ready; i=0; while true; do i=$((i+1)); echo "app line $i"; sleep 1; done'
+        startup: enabled
+      trace:
+        # A block scalar: the ": " in the trace would end a plain value.
+        command: >-
+          /bin/sh -c 'printf "ERROR e2e request failed\njava.lang.IllegalStateException: boom\n\tat e2e.A.b(A.java:1)\n"; exec sleep 100000'
+        startup: enabled
+        logs-multiline:
+          preset: java
+      orphan-maker:
+        type: oneshot
+        command: /bin/sh -c 'sleep 2 & exit 0'
+        startup: enabled
+      extra:
+        command: /bin/sh -c 'echo "extra started"; exec sleep 100000'
+        startup: enabled
+    checks:
+      alive-marker:
+        level: alive
+        startup: enabled
+        period: 2s
+        threshold: 1
+        exec:
+          command: test -f /tmp/alive
+      ready-marker:
+        level: ready
+        startup: enabled
+        period: 2s
+        threshold: 1
+        exec:
+          command: test -f /tmp/ready
