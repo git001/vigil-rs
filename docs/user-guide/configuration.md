@@ -556,6 +556,15 @@ The ordering applies when vigild starts services by itself: at startup, on
 replan and with the `autostart` action. `vigil services start` starts the
 named services at once.
 
+**Shutdown** (SIGTERM, `vigil vigild stop`, a `shutdown` policy) uses the
+same order reversed: a service is stopped once every service that comes
+after it (by `after`, `requires` or its own `before`) has exited, so `app`
+with `requires: [db]` still has its database while it stops. Services
+without such a relation stop at the same time, and vigild exits once the
+last one is gone. Each one gets its [`stop-signal`](#stop-signal) and at
+most [`kill-delay`](#kill-delay) before SIGKILL, so the whole shutdown takes
+up to the sum of the `kill-delay`s along the longest chain.
+
 A dependency that autostart does not start (`startup: disabled`, or a
 `schedule`) behaves differently per key:
 
@@ -697,7 +706,9 @@ Default: `SIGTERM`
 
 Duration string (e.g. `5s`, `30s`, `500ms`). After sending `stop-signal`,
 vigild waits this long for the process to exit. If it is still running,
-SIGKILL is sent to the entire process group.
+SIGKILL is sent to the entire process group. This holds for vigild's own
+shutdown too, where services stop in the
+[reversed start order](#after--before--requires).
 
 Default: `5s`
 

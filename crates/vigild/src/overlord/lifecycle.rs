@@ -93,18 +93,50 @@ impl Overlord {
         self.begin_restarts(restarts).await;
     }
 
+    /// Stop every service, in the start order reversed: a service stops
+    /// once all services depending on it have stopped (see
+    /// [`super::stop_order`]); unrelated ones stop at the same time.
     pub(super) async fn stop_all(&mut self) {
+        let names: Vec<String> = self.services.keys().cloned().collect();
+        let (mut order, mut ready) =
+            super::stop_order::StopOrder::new(super::stop_order::dependencies(&self.plan, &names));
         let mut set = tokio::task::JoinSet::new();
-        for e in self.services.values() {
-            let tx = e.handle.tx.clone();
-            set.spawn(async move {
-                let (reply_tx, reply_rx) = oneshot::channel();
-                let _ = tx.send(SvcCmd::Stop(reply_tx)).await;
-                let _ = reply_rx.await;
-                let _ = tx.send(SvcCmd::Shutdown).await;
-            });
+        loop {
+            if !ready.is_empty() {
+                info!(services = ?ready, "stopping");
+            }
+            for name in ready.drain(..) {
+                let Some(e) = self.services.get(&name) else {
+                    continue;
+                };
+                let tx = e.handle.tx.clone();
+                set.spawn(async move {
+                    // Back once the process is gone, not when the stop
+                    // signal is out: its dependencies keep running until then.
+                    let (reply_tx, reply_rx) = oneshot::channel();
+                    let _ = tx.send(SvcCmd::StopWait(reply_tx)).await;
+                    let _ = reply_rx.await;
+                    let _ = tx.send(SvcCmd::Shutdown).await;
+                    name
+                });
+            }
+            // The actors report every state change and wait for room in the
+            // queues: keep them empty, or many services would block there
+            // and never stop. The events are not acted on any more (no
+            // deferred start, no alert while shutting down).
+            let joined = tokio::select! {
+                joined = set.join_next() => joined,
+                Some(_) = self.event_rx.recv() => continue,
+                Some(_) = self.check_event_rx.recv() => continue,
+            };
+            match joined {
+                Some(Ok(name)) => ready = order.done(&name),
+                // A stop task cannot panic; if it did, its dependencies
+                // would wait for ever, so stop the rest at once.
+                Some(Err(_)) => ready = order.rest(),
+                None => break,
+            }
         }
-        while set.join_next().await.is_some() {}
 
         for e in self.checks.values() {
             let _ = e.handle.tx.send(check::Cmd::Shutdown).await;

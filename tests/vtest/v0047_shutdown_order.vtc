@@ -1,0 +1,15 @@
+vtest "Shutdown stops services in the start order reversed: dependents first, unrelated ones at once"
+
+# fixtures/v0047: app requires db, proxy starts after app; each needs 1s
+# to stop. vigild logs their output to stdout, the terminal of p1.
+process p1 -winsz 100 200 "${vigild} --layers-dir ${vtestdir}/fixtures/v0047 --socket ${tmpdir}/vigild.sock --path-prefix ${tmpdir}/run" -start
+process p1 -expect-text 0 0 "[db] started"
+process p1 -expect-text 0 0 "[app] started"
+process p1 -expect-text 0 0 "[proxy] started"
+
+process p1 -kill TERM
+process p1 -expect-text 0 0 "vigild exited"
+# Each one is told to stop only after the ones depending on it have
+# exited, and vigild exits only after the last one.
+process p1 -match-text 0 0 "(?s)proxy stopped.*app stopping.*app stopped.*db stopping.*db stopped.*vigild exited"
+process p1 -wait

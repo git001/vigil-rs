@@ -193,7 +193,7 @@ process groups:
 | `SIGHUP` | Forwarded to all running services |
 | `SIGUSR1` | Forwarded to all running services |
 | `SIGUSR2` | Forwarded to all running services |
-| `SIGTERM` | Graceful shutdown: stop all services, then exit (with `--shutdown-delay`, after reporting not ready for that long) |
+| `SIGTERM` | Graceful shutdown: stop the services in the start order reversed, wait until they have exited, then exit (with `--shutdown-delay`, after reporting not ready for that long) |
 | `SIGINT` | Graceful shutdown, as `SIGTERM` |
 | `SIGQUIT` | Graceful shutdown, as `SIGTERM` |
 

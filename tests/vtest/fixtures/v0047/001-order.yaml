@@ -1,0 +1,18 @@
+# Three services that take a second to stop: each prints "<name> stopping"
+# on SIGTERM, waits 1s and prints "<name> stopped" (longer than the 0.5s
+# after which vigild used to send SIGKILL on shutdown). app requires db;
+# proxy, in front of app, starts after it. On shutdown vigild stops them in
+# the start order reversed: proxy, then app, then db, each once the one
+# before has exited.
+services:
+  db:
+    command: sh -c 'trap "echo db stopping; sleep 1; echo db stopped; exit 0" TERM; echo started; while :; do sleep 0.1; done'
+    startup: enabled
+  app:
+    command: sh -c 'trap "echo app stopping; sleep 1; echo app stopped; exit 0" TERM; echo started; while :; do sleep 0.1; done'
+    startup: enabled
+    requires: [db]
+  proxy:
+    command: sh -c 'trap "echo proxy stopping; sleep 1; echo proxy stopped; exit 0" TERM; echo started; while :; do sleep 0.1; done'
+    startup: enabled
+    after: [app]

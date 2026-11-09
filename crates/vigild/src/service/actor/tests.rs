@@ -1586,6 +1586,57 @@ async fn backoff_limit_reached_gives_up_with_error() {
     shutdown(tx).await;
 }
 
+/// `StopWait` (vigild's shutdown) answers once the process is gone, not
+/// when the stop signal is out; a process that ignores the signal is gone
+/// after the SIGKILL at `kill-delay`.
+#[tokio::test]
+async fn stop_wait_replies_once_the_process_is_gone() {
+    let dir = tempfile::tempdir().unwrap();
+    let up = dir.path().join("up");
+    let (tx, mut rx) = spawn_run(
+        ServiceConfig {
+            command: Some(format!(
+                r#"sh -c 'trap "" TERM; echo up > {}; while :; do sleep 0.05; done'"#,
+                up.display()
+            )),
+            kill_delay: Some("300ms".into()),
+            ..Default::default()
+        },
+        std::env::temp_dir(),
+    );
+    start(&tx).await;
+    wait_for_file(&up).await;
+
+    let begin = std::time::Instant::now();
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    tx.send(Cmd::StopWait(reply_tx)).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), reply_rx)
+        .await
+        .expect("no reply")
+        .unwrap();
+    assert!(
+        begin.elapsed() >= Duration::from_millis(300),
+        "replied before kill-delay: {:?}",
+        begin.elapsed()
+    );
+    let seen = wait_event(&mut rx, is_state(ServiceState::Inactive)).await;
+    assert!(
+        seen.iter().any(|k| matches!(
+            k,
+            EventKind::ProcessExited { exit: Some(e), .. } if e.signal == Some(9)
+        )),
+        "{seen:?}"
+    );
+    // A stopped service answers at once.
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    tx.send(Cmd::StopWait(reply_tx)).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), reply_rx)
+        .await
+        .expect("no reply for a stopped service")
+        .unwrap();
+    shutdown(tx).await;
+}
+
 #[tokio::test]
 async fn kill_delay_expiry_sends_sigkill() {
     let dir = tempfile::tempdir().unwrap();

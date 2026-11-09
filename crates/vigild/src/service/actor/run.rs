@@ -29,6 +29,11 @@ pub(in crate::service) async fn run(
     let push_tasks = spawn_log_push(&name, &actor.config, &log_store);
 
     loop {
+        if actor.child.is_none() {
+            for waiter in actor.stop_waiters.drain(..) {
+                let _ = waiter.send(());
+            }
+        }
         // Copies: the arms below borrow the actor mutably.
         let stop_deadline = actor.stop_deadline;
         let backoff_deadline = actor.backoff_deadline;
@@ -48,6 +53,11 @@ pub(in crate::service) async fn run(
                     Some(Cmd::Stop(reply)) => {
                         actor.stop().await;
                         let _ = reply.send(Ok(()));
+                    }
+                    Some(Cmd::StopWait(reply)) => {
+                        actor.stop().await;
+                        // Answered at the top of the loop once no process runs.
+                        actor.stop_waiters.push(reply);
                     }
                     Some(Cmd::Restart(reply)) => {
                         let _ = reply.send(actor.restart().await);

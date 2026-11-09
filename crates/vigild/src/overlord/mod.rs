@@ -32,6 +32,7 @@ pub mod plan;
 mod queries;
 mod restart;
 mod spawn;
+mod stop_order;
 mod sync;
 #[cfg(test)]
 mod tests;

@@ -90,6 +90,8 @@ pub(super) struct Actor {
     backoff_deadline: Option<tokio::time::Instant>,
     /// Start again once the stopping process is gone (`restart`).
     pending_restart: bool,
+    /// Replies of `StopWait`, sent once no process runs.
+    stop_waiters: Vec<tokio::sync::oneshot::Sender<()>>,
 }
 
 /// An optional duration field of the config, or `default` when unset. The
@@ -139,6 +141,7 @@ impl Actor {
             stop_deadline: None,
             backoff_deadline: None,
             pending_restart: false,
+            stop_waiters: Vec::new(),
             ready_failed: false,
             status_message: None,
             schedule: None,

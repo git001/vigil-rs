@@ -266,7 +266,7 @@ delay:
 
 ```yaml
 spec:
-  terminationGracePeriodSeconds: 30   # delay + time the services need to stop
+  terminationGracePeriodSeconds: 30   # delay + time the services need to stop (below)
   containers:
     - name: app
       env:
@@ -283,6 +283,14 @@ spec:
 
 The liveness probe (`level=alive`) is not affected, so the kubelet does
 not restart a container that is stopping. A second SIGTERM stops at once.
+
+The time the services need to stop: vigild stops them in the start order
+reversed, each after the ones that depend on it have exited, and gives each
+at most its `kill-delay` (default `5s`). The worst case is the sum of the
+`kill-delay`s along the longest `after`/`requires` chain, e.g. `proxy` →
+`app` → `db` with the defaults: 15s. Keep `terminationGracePeriodSeconds`
+above `--shutdown-delay` plus that sum, or the kubelet's SIGKILL ends the
+services first.
 
 **Per pod, not per Deployment:**
 

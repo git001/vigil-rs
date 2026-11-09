@@ -28,6 +28,10 @@ pub use policy::{ExitCodeMode, effective_on_failure, effective_on_success, shutd
 pub enum Cmd {
     Start(oneshot::Sender<anyhow::Result<()>>),
     Stop(oneshot::Sender<anyhow::Result<()>>),
+    /// Stop, and reply once the process is gone (after `stop-signal`, at
+    /// the latest after the `SIGKILL` at `kill-delay`). For vigild's own
+    /// shutdown, which must not end before its services.
+    StopWait(oneshot::Sender<()>),
     Restart(oneshot::Sender<anyhow::Result<()>>),
     /// The actor's own view of its state (tests; the overlord builds its
     /// snapshot from events).
