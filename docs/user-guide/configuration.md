@@ -1941,7 +1941,7 @@ Each level includes everything of the levels above it.
 |-------|-----------------|
 | `open` | `GET /v1/system-info`, `GET /v1/checks`, `GET /v1/health`, API docs — no authentication required |
 | `metrics` | `GET /v1/metrics` (Prometheus/OpenMetrics) |
-| `read` | The other `GET` endpoints: services, logs, alerts, changes |
+| `read` | The other `GET` endpoints: services, logs, alerts, changes, plan |
 | `write` | `read` + changes: `POST /v1/services`, `POST /v1/replan`, `POST /v1/signals`, `POST /v1/checks/refresh` |
 | `admin` | `write` + `POST /v1/vigild` (stop, restart) and identity management (`GET`, `POST`, `DELETE /v1/identities`) |
 
@@ -2091,3 +2091,40 @@ identities:
     tls:
       ca: /etc/vigil/certs/monitoring-ca.pem
 ```
+
+### Let a service call the API
+
+A service can control vigild with the `vigil` command, for example a job
+that renews a certificate and then restarts the web server:
+
+```yaml
+services:
+  cert-renew:
+    type: oneshot
+    command: sh -c "renew-cert --out /tmp/certs && vigil services restart web"
+    schedule: '0 4 * * *'
+    startup: enabled
+    environment:
+      VIGIL_SOCKET: /tmp/vigil/vigild.sock   # <path-prefix>/vigild.sock
+
+identities:
+  cert-renew:
+    access: write   # start, stop and restart services
+    local: {}       # any UID that can open the socket
+```
+
+- `VIGIL_SOCKET`: a service does not get vigild's environment, so `vigil`
+  needs the socket path.
+- The identity: `write` is enough for service actions. `local: {}` fits
+  OpenShift (random UID); with the socket's default mode `600` only
+  vigild's UID and root can open it.
+
+> [!WARNING]
+> Without its own identity the job works at first and then fails with
+> `forbidden`: vigild's UID is `admin` on the socket only until someone
+> adds an identity over the API
+> ([bootstrap](#default-access-caller-without-a-matching-identity)).
+
+A job that runs as another user (`user`, `user-id`) also needs
+`--socket-mode 660` with a shared group, its `user-id` in the identity, and
+`vigil --socket-uid <vigild's UID>`.

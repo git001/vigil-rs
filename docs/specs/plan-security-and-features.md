@@ -922,6 +922,51 @@ Pebble's exec and files API (Juju-specific, large attack surface) and
 notices (alerts cover them); `logs-push-format` stays a documented
 placeholder.
 
+### 5i: the remaining points of the comparison
+
+Decided by the user on 2026-11-09, point by point, after a second look at
+what gopherd and Pebble have and vigil-rs does not.
+
+**Done before v4.0:**
+
+| Point | Decision | Commit |
+|---|---|---|
+| H4 shutdown order | vigild stops its services in the start order reversed (`after`, `requires`, `before`) and waits for them; before, it did not wait at all (a bug since v1.0) | `14e74b7` |
+| H8 timeout of a oneshot run | `run-timeout` (default: no limit); the run is stopped like any service and fails with `did not finish within X` | `b23a9b3` |
+| H10 `--wait` | not as an option: `POST /v1/services` (and `vigil services start/stop/restart`) answers once the action is done; the change is `doing` meanwhile | `b861b7d` |
+| H18 read the plan | `GET /v1/plan` (access `read`) and `vigil plan`: the merged plan as one layer, secrets masked (`environment` values, `headers` but `env:NAME`, user info and query of URLs, the path of alert URLs, `password-hash`); `command`, `body-template`, `labels`, `send-info-fields` as written, with a warning in the docs | `9cc2bbe` |
+
+**Docs only:** H6 export-socket. A service that calls the API gets the
+socket path through `environment: {VIGIL_SOCKET: …}` and an identity of its
+own; the example is in configuration.md, "Let a service call the API".
+
+**After v4.0:**
+
+| Point | What |
+|---|---|
+| H1 | signal-rewrite: per service, which container signal reaches it, as which signal; until then `POST /v1/signals` |
+| H2 | start conditions (`condition-file-*`, `env-equals`); until then a template or a wrapper script |
+| H3 | the container's arguments to one service, or exec without vigild |
+| H5, H16 | log targets (file with rotation, syslog, Loki, OpenTelemetry), with the plugin architecture; until then logs-push and vigil-log-relay |
+| H7 | HTTP checks over a Unix socket; until then an `exec` check with `curl --unix-socket` |
+| H9 | `restart` of a service restarts the services that require it (replan does already) |
+| H11 | jitter for the backoff delay |
+| H12 | `umask` per service |
+| H15 | start and stop single checks over the API |
+| H19 | `--hold` (start no service) and `--args` (arguments for a service) |
+| H20 | layer subdirectories `NNN-name.d`; until then a `projected` volume puts several ConfigMaps into one layer directory |
+| F | a PID registry against the PID reuse gap of the reaper (S3) |
+| G | the sd_notify watchdog (phase 2); until then `alive` checks |
+
+**Not at all:**
+
+| Point | Why |
+|---|---|
+| H13 `remove-env` | services get an allowlist of variables (S2); there is nothing to remove |
+| H14 asynchronous changes | actions answer once done (H10); a client that must not wait sets a timeout |
+| H17 persistent identities | containers keep no state; identities that must survive a restart go into a layer file |
+| `POST /v1/layers` | the plan comes from the layer files (and a ConfigMap with `--watch-layers`); a plan changed over the API would be lost at the next restart and differ from the files |
+
 ## Phase 6: refactor before v4.0
 
 Decided by the user on 2026-11-07: before the v4.0 release, after phase 5.
@@ -1027,4 +1072,4 @@ steps; it feeds the changelog's "Breaking Changes" section.
 
 ## Open decisions
 
-None.
+None. The points left for after v4.0 are listed in 5i.
