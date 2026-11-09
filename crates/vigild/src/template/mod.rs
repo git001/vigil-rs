@@ -18,12 +18,16 @@
 //! variables are errors (use `default` or `is defined`). Rendered values are
 //! never logged.
 
+mod blocking;
+mod env;
 pub mod env_file;
 mod file;
 mod resources;
 
+pub use blocking::{FILE_IO_TIMEOUT, may_block, off_runtime, off_runtime_if};
+pub use env::{EnvLayer, child_env, vars_of};
+
 use std::collections::BTreeMap;
-use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -34,35 +38,6 @@ use minijinja::{Environment, UndefinedBehavior, context};
 /// Whether `s` would be rendered at all.
 pub fn is_template(s: &str) -> bool {
     s.contains("{{") || s.contains("{%")
-}
-
-pub use vigil_files::{FILE_IO_TIMEOUT, off_runtime};
-
-/// Whether building a child's environment (and command) may block: an
-/// `env-file` or a template (`file()`) reads files, a user switch looks the
-/// user up (NSS, possibly over the network). Otherwise it is plain CPU work.
-pub fn may_block<'a>(
-    env_files: &[String],
-    values: impl IntoIterator<Item = &'a str>,
-    user_switch: bool,
-) -> bool {
-    user_switch || !env_files.is_empty() || values.into_iter().any(is_template)
-}
-
-/// [`off_runtime`] when `blocking`, else `f` right here. Most exec checks
-/// and many services read nothing, and each run off the runtime would take
-/// a blocking thread, which tokio keeps for 10 s and which costs about
-/// 2 MiB.
-pub async fn off_runtime_if<T: Send + 'static>(
-    blocking: bool,
-    what: &str,
-    f: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
-) -> anyhow::Result<T> {
-    if blocking {
-        off_runtime(what, f).await
-    } else {
-        f()
-    }
 }
 
 /// A file read while building a service's start: its path and a hash of
@@ -144,48 +119,6 @@ fn check_environment(
         }
     }
     Ok(())
-}
-
-/// Explicit variables of a service (or exec check): `env-file` contents,
-/// then the rendered `environment` values.
-pub struct EnvLayer<'a> {
-    pub env_file: &'a [String],
-    pub environment: &'a IndexMap<String, String>,
-}
-
-/// Build a child's environment: what `policy` lets through from vigild's
-/// environment, then each layer's env files and `environment` values.
-///
-/// Templates in a layer's `environment` see everything before them (base
-/// set, pass-env, env files, earlier layers), but not the other entries of
-/// the same `environment`. vigild's whole environment is never visible.
-pub fn child_env(
-    renderer: &Renderer,
-    policy: &crate::process_util::EnvPolicy,
-    creds: Option<&crate::process_util::Credentials>,
-    layers: &[EnvLayer<'_>],
-) -> anyhow::Result<Vec<(OsString, OsString)>> {
-    // Read once so every build uses the same snapshot.
-    let parent: Vec<_> = std::env::vars_os().collect();
-    let mut explicit: IndexMap<String, String> = IndexMap::new();
-    for layer in layers {
-        env_file::load(layer.env_file, &mut explicit, &renderer.reads)?;
-        let vars = vars_of(&policy.build(parent.clone(), creds, &explicit));
-        for (k, v) in layer.environment {
-            let v = renderer
-                .render(v, &vars)
-                .map_err(|e| anyhow::anyhow!("environment {k:?}: {e}"))?;
-            explicit.insert(k.clone(), v);
-        }
-    }
-    Ok(policy.build(parent, creds, &explicit))
-}
-
-/// Environment entries with UTF-8 names and values, as template variables.
-pub fn vars_of(env: &[(OsString, OsString)]) -> BTreeMap<String, String> {
-    env.iter()
-        .filter_map(|(k, v)| Some((k.to_str()?.to_owned(), v.to_str()?.to_owned())))
-        .collect()
 }
 
 /// Renders templates for one service start and records the files read.
