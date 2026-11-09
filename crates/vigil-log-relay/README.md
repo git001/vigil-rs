@@ -65,7 +65,7 @@ vigil-log-relay --kubernetes \
 | `--namespace` | `NAMESPACE` | `default` | Namespace to watch |
 | `--pod-selector` | `POD_SELECTOR` | _(all pods)_ | Label selector, e.g. `app=myapp` |
 | `--watch-interval` | `WATCH_INTERVAL` | `10` | Seconds between stream-reconnect checks |
-| `--container NAME\|all\|n1,n2,...` | `CONTAINER_SELECTOR` | _(first / annotated container)_ | Container(s) to stream. `all` = every container in `pod.spec.containers`; comma-separated list = exactly those containers; omit = K8s default. |
+| `--container NAME\|all\|n1,n2,...` | `CONTAINER_SELECTOR` | _(first / annotated container)_ | Container(s) to stream. `all` = every container in `pod.spec.containers`; comma-separated list = those of them the pod has (a pod with none is skipped); omit = K8s default. |
 | `--tail-lines` | `TAIL_LINES` | `0` | Lines to emit on first connect (0 = disabled) |
 | `--since-seconds` | `SINCE_SECONDS` | `10` | Seconds back to start on reconnect |
 | `--exclude-pod` | — | — | Exclude pods by name regex (repeatable) |

@@ -8,7 +8,8 @@ pub(super) enum ContainerSelector {
     Default,
     /// --container all: stream every container listed in pod.spec.containers.
     All,
-    /// --container app,sidecar: stream exactly these named containers.
+    /// --container app,sidecar: stream these named containers, those of
+    /// them the pod has.
     Named(Vec<String>),
 }
 
@@ -28,15 +29,21 @@ impl ContainerSelector {
 
     /// Returns the container keys to stream for a given pod.
     /// An empty string key means "no container= param" (K8s default).
+    ///
+    /// A named container the pod does not have is left out: the API server
+    /// would refuse its log, and the relay would ask again on every
+    /// --watch-interval. A pod with none of the names gets no stream.
     pub(super) fn keys_for_pod(&self, pod: &Pod) -> Vec<String> {
-        match self {
-            Self::Default => vec![String::new()],
-            Self::Named(names) => names.clone(),
-            Self::All => pod
-                .spec
-                .as_ref()
-                .map(|spec| spec.containers.iter().map(|c| c.name.clone()).collect())
-                .unwrap_or_else(|| vec![String::new()]),
+        let containers = pod.spec.as_ref().map(|spec| &spec.containers);
+        match (self, containers) {
+            (Self::Default, _) | (Self::All, None) => vec![String::new()],
+            (Self::All, Some(c)) => c.iter().map(|c| c.name.clone()).collect(),
+            (Self::Named(names), None) => names.clone(),
+            (Self::Named(names), Some(c)) => names
+                .iter()
+                .filter(|n| c.iter().any(|c| &c.name == *n))
+                .cloned()
+                .collect(),
         }
     }
 }
@@ -72,8 +79,23 @@ mod tests {
             ["app", "sidecar"]
         );
         assert_eq!(
-            ContainerSelector::from_cli(Some(" app , ,logger")).keys_for_pod(&pod),
-            ["app", "logger"]
+            ContainerSelector::from_cli(Some(" sidecar , ,app")).keys_for_pod(&pod),
+            ["sidecar", "app"]
+        );
+        // A name the pod does not have is left out; none left: no stream.
+        assert_eq!(
+            ContainerSelector::from_cli(Some("app,logger")).keys_for_pod(&pod),
+            ["app"]
+        );
+        assert!(
+            ContainerSelector::from_cli(Some("logger"))
+                .keys_for_pod(&pod)
+                .is_empty()
+        );
+        // Without a spec the names are taken as they are.
+        assert_eq!(
+            ContainerSelector::from_cli(Some("logger")).keys_for_pod(&Pod::default()),
+            ["logger"]
         );
         // all without a spec: the default container.
         assert_eq!(

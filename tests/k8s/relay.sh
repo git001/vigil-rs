@@ -20,6 +20,10 @@
 #   - stream=Stdout/Stderr, or the fallback to one combined stream when the
 #     API server rejects the parameter (feature gate off)
 #   - --multiline java forwards a stack trace as one record
+#   - further relays, one option each: --container with a list of names
+#     (a pod without one of them is not asked for it), --tail-lines
+#     (--since-seconds then ignored), --since-seconds, --no-stream-param,
+#     --max-log-requests
 #   - a deleted and recreated pod is streamed again
 #   - the healthcheck endpoint answers
 
@@ -135,6 +139,60 @@ FIRST=$(grep -bE "${TRACE}" "${WORK}/out.ndjson" | head -1 | cut -d: -f1)
 echo "==> Healthcheck"
 HPORT=$(sed -n 's/.*healthcheck listening.*"addr":"[^"]*:\([0-9]*\)".*/\1/p' "${WORK}/relay.log" | head -1)
 curl -sf "http://127.0.0.1:${HPORT}/healthz" > /dev/null || fail "healthcheck on port ${HPORT}"
+
+# Further relays, each with one option, for a few seconds with --stdout-sink.
+# logger-a writes one line per second and has run for a while by now.
+#
+# side_relay NAME SECONDS ARGS...: stdout to NAME.out, the log to NAME.log.
+side_relay() {
+    local name=$1 secs=$2 pid
+    shift 2
+    "${RELAY_BIN}" --kubernetes --namespace "${NS}" --pod-selector app=vigil-relay-test \
+        --watch-interval 1 --stdout-sink --healthcheck 127.0.0.1:0 "$@" \
+        > "${WORK}/${name}.out" 2> "${WORK}/${name}.log" < /dev/null &
+    pid=$!
+    sleep "${secs}"
+    kill "${pid}"
+    wait "${pid}" || true
+}
+# Records of <pod>/<container> in NAME.out.
+count() { grep -c "\"pod\":\"$2\",\"container\":\"$3\"" "${WORK}/$1.out" || true; }
+ONLY_A='^(logger-multi|logger-trace|excluded-pod)$'
+ONLY_MULTI='^(logger-a|logger-trace|excluded-pod)$'
+
+echo "==> --container sidecar,app: the named containers a pod has"
+side_relay named 4 --container sidecar,app --exclude-pod '^(logger-trace|excluded-pod)$'
+test "$(count named logger-multi sidecar)" -ge 2 || fail "no sidecar lines with --container sidecar,app"
+test "$(count named logger-multi app)" -ge 2 || fail "no logger-multi/app lines with --container sidecar,app"
+test "$(count named logger-a app)" -ge 2 || fail "no logger-a/app lines with --container sidecar,app"
+! grep -q "failed to open log stream" "${WORK}/named.log" \
+    || fail "the relay asked for a container the pod does not have"
+
+echo "==> --tail-lines 3: the last 3 lines, --since-seconds is ignored"
+side_relay tail 3 --container app --exclude-pod "${ONLY_A}" --tail-lines 3 --since-seconds 30
+N=$(count tail logger-a app)
+# 3 old lines and at most 3 new ones; --since-seconds 30 would give 30.
+test "${N}" -ge 3 && test "${N}" -le 6 || fail "--tail-lines 3 forwarded ${N} lines"
+
+echo "==> --since-seconds 5: the lines of the last 5 seconds"
+side_relay since 3 --container app --exclude-pod "${ONLY_A}" --since-seconds 5
+N=$(count since logger-a app)
+# About 5 old lines and at most 3 new ones; the default of 10 would give 10 or more.
+test "${N}" -ge 4 && test "${N}" -le 9 || fail "--since-seconds 5 forwarded ${N} lines"
+
+echo "==> --no-stream-param: one combined stream"
+side_relay nostream 3 --container all --exclude-pod "${ONLY_MULTI}" --no-stream-param
+grep -q '"container":"sidecar","stream":"output"' "${WORK}/nostream.out" \
+    || fail "sidecar lines are not labelled output with --no-stream-param"
+! grep -q '"stream":"std\(out\|err\)"' "${WORK}/nostream.out" \
+    || fail "separate streams despite --no-stream-param"
+! grep -q 'rejects the `stream` parameter' "${WORK}/nostream.log" \
+    || fail "--no-stream-param still asked with stream="
+
+echo "==> --max-log-requests 1: one stream at a time"
+side_relay maxreq 4 --container all --exclude-pod '^(logger-trace|excluded-pod)$' --max-log-requests 1
+STREAMS=$(sed -n 's/.*"pod":"\([^"]*\)","container":"\([^"]*\)".*/\1\/\2/p' "${WORK}/maxreq.out" | sort -u | wc -l)
+test "${STREAMS}" -eq 1 || fail "--max-log-requests 1 streamed ${STREAMS} containers"
 
 echo "==> Deleted and recreated pod is streamed again"
 "${KUBECTL}" -n "${NS}" delete pod logger-a --wait=true > /dev/null

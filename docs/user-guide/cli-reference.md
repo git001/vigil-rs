@@ -588,7 +588,7 @@ feature gate is off, or `--no-stream-param` is set).
 |---|---|---|---|
 | `--namespace NS` | `NAMESPACE` | `default` | Namespace to watch |
 | `--pod-selector SELECTOR` | `POD_SELECTOR` | _(all pods)_ | Label selector, e.g. `app=myapp` |
-| `--container NAME\|all\|n1,n2,...` | `CONTAINER_SELECTOR` | _(default container)_ | Container(s) to stream: `all`, or a comma-separated list. Omit to let Kubernetes pick the default container |
+| `--container NAME\|all\|n1,n2,...` | `CONTAINER_SELECTOR` | _(default container)_ | Container(s) to stream: `all`, or a comma-separated list (a pod gets those it has; one with none is skipped). Omit to let Kubernetes pick the default container |
 | `--exclude-pod REGEX` | `EXCLUDE_POD` | — | Skip pods whose name matches (repeatable, OR-combined) |
 | `--tail-lines N` | `TAIL_LINES` | `0` | Emit the last N lines of each pod when its stream starts, then go live (`0` = disabled) |
 | `--since-seconds SECS` | `SINCE_SECONDS` | `10` | Start this far back on (re)connect, to cover the reconnect gap; ignored when `--tail-lines` is set |

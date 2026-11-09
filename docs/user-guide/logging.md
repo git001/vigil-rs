@@ -733,7 +733,8 @@ environment variables in the Kubernetes Deployment — no layer-level
 **Multi-container pods:** by default vigil-log-relay streams the first (or
 annotated) container only. Pass `--container all` to stream every container in
 `pod.spec.containers`, or `--container app,sidecar` for a comma-separated
-subset. When a container name is set, each ndjson record gains a `"container"`
+subset; a pod gets the named containers it has, and a pod with none of them
+is not streamed. When a container name is set, each ndjson record gains a `"container"`
 field so downstream systems can distinguish the sources.
 
 ```
