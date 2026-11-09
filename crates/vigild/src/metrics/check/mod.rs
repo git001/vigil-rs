@@ -13,9 +13,7 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
-use prometheus_client::encoding::EncodeLabelSet;
 use prometheus_client::metrics::family::Family;
-use prometheus_client::metrics::histogram::Histogram;
 use vigil_types::plan::CheckLevel;
 
 use prometheus_client::metrics::{counter::Counter, gauge::Gauge};
@@ -23,60 +21,11 @@ use prometheus_client::registry::Registry;
 
 use super::{MetricsStore, reg, register};
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
-struct CheckLabel {
-    check: String,
-    /// `alive` or `ready`.
-    level: String,
-}
+mod labels;
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
-struct CheckResultLabel {
-    check: String,
-    /// `alive` or `ready`.
-    level: String,
-    /// `success` or `error`.
-    result: String,
-}
-
-/// Buckets of the check duration histograms: 1 ms to 60 s.
-const DURATION_BUCKETS: [f64; 14] = [
-    0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0,
-];
-
-type DurationFamily = Family<CheckResultLabel, Histogram, fn() -> Histogram>;
-
-fn duration_family() -> DurationFamily {
-    Family::new_with_constructor(|| Histogram::new(DURATION_BUCKETS.into_iter()))
-}
-
-fn result_label(check: &str, level: CheckLevel, success: bool) -> CheckResultLabel {
-    CheckResultLabel {
-        check: check.to_owned(),
-        level: level_str(level).to_owned(),
-        result: if success { "success" } else { "error" }.to_owned(),
-    }
-}
-
-#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
-struct LevelLabel {
-    /// `alive` or `ready`.
-    level: String,
-}
-
-fn level_str(level: CheckLevel) -> &'static str {
-    match level {
-        CheckLevel::Alive => "alive",
-        CheckLevel::Ready => "ready",
-    }
-}
-
-fn label(check: &str, level: CheckLevel) -> CheckLabel {
-    CheckLabel {
-        check: check.to_owned(),
-        level: level_str(level).to_owned(),
-    }
-}
+use labels::{
+    CheckLabel, DurationFamily, LevelLabel, duration_family, label, level_str, result_label,
+};
 
 /// The running checks and their level.
 type KnownChecks = std::sync::Mutex<HashMap<String, CheckLevel>>;
