@@ -148,9 +148,13 @@ joined with a newline:
 Exactly one of `preset`, `start` and `continue` is set. So the log line of
 `logger.error("request failed", e)` or `logger.exception(…)` and its trace
 are one entry. An entry is complete when the next one starts, when no line
-came for `timeout` (default `200ms`, `10ms` to `10s`), or when it would
+came for `timeout` (default `1s`, `10ms` to `10s`), or when it would
 grow past `--log-max-line-bytes`. The timeout delays each entry by that
-much, when no further line follows at once.
+much, when no further line follows at once. The default was `200ms`
+before 4.0.1: on a node with no CPU to spare, the lines of one stack trace
+can arrive more than 200 ms apart, and the trace was split (one in about
+72,000 in our load test). Set a shorter `timeout` where a quiet service's
+log lines must appear sooner.
 
 The joined entry is one entry everywhere: in `vigil logs`, `/v1/logs`, the
 stream and `logs-push`. On vigild's stdout (`podman logs`) only its first
@@ -698,8 +702,10 @@ one record, with the same rules as vigild's
 parts (a line longer than the limit, or a stack trace that would grow past
 `--max-line-bytes`) is forwarded or dropped as a whole: the filter decides
 on its first part. `--multiline-timeout`
-(default `200ms`, `10ms` to `10s`) is how long a record waits for a further
-line. Where vigild runs the service, its own `logs-multiline` is the better
+(default `1s`, `10ms` to `10s`; `200ms` before 4.0.1) is how long a record
+waits for a further line. Pod logs pass through the container runtime and
+the kubelet, so on a busy node the lines of one stack trace can arrive with
+gaps; a shorter timeout may split a trace there. Where vigild runs the service, its own `logs-multiline` is the better
 place: then `vigil logs`, the API and every consumer get the joined entry.
 
 ```yaml

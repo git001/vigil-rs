@@ -159,7 +159,7 @@ services:
     logs-push-format: ndjson          # ndjson (default; currently the only supported format)
     logs-multiline:                    # join the lines of a stack trace into one entry
       preset: java                     # java | python | indent; or start: REGEX, or continue: REGEX
-      timeout: 200ms                   # wait this long for a further line (default: 200ms)
+      timeout: 1s                      # wait this long for a further line (default: 1s)
 
     # --- Layer merging ---
     override: merge                    # merge (default) | replace
@@ -921,8 +921,11 @@ line before it. Exactly one of these sets the rule:
 | `start: REGEX` | it does not match (a matching line starts a new entry) |
 | `continue: REGEX` | it matches |
 
-`timeout` (default `200ms`, allowed `10ms` to `10s`) is how long an entry
-waits for a further line. An entry is at most `--log-max-line-bytes` long
+`timeout` (default `1s`, allowed `10ms` to `10s`; `200ms` before 4.0.1)
+is how long an entry waits for a further line. When no further line
+follows, the entry appears that much later; a shorter value suits a quiet
+service whose lines should appear at once, a longer one a busy node (see
+[Logging](logging.md#stack-traces-logs-multiline)). An entry is at most `--log-max-line-bytes` long
 (default 128 KiB); a longer one is split. A later layer replaces the whole
 block. Two rules at once, an invalid regex, an unknown preset or key, and
 `logs-forward: passthrough` (vigild does not read the output then) are load

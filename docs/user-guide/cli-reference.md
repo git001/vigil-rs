@@ -671,7 +671,7 @@ Nothing is dropped for being long; see
 | `--multiline PRESET` | `MULTILINE` | — | Join the lines of a stack trace into one record: `java`, `python` or `indent` (rules as vigild's [`logs-multiline`](configuration.md#logs-multiline)) |
 | `--multiline-start REGEX` | `MULTILINE_START` | — | A matching line (message) starts a new record, others belong to the one before |
 | `--multiline-continue REGEX` | `MULTILINE_CONTINUE` | — | A matching line (message) belongs to the record before it |
-| `--multiline-timeout DURATION` | `MULTILINE_TIMEOUT` | `200ms` | How long a joined record waits for a further line (`10ms` to `10s`) |
+| `--multiline-timeout DURATION` | `MULTILINE_TIMEOUT` | `1s` | How long a joined record waits for a further line (`10ms` to `10s`; `200ms` before 4.0.1) |
 
 At most one of `--multiline`, `--multiline-start` and
 `--multiline-continue`. They work in every source mode: pod logs are

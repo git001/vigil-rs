@@ -23,7 +23,7 @@ pub struct LogsMultiline {
     #[serde(rename = "continue", skip_serializing_if = "Option::is_none")]
     pub continue_: Option<String>,
     /// How long to wait for a further line before an entry is complete.
-    /// Default `200ms`.
+    /// Default `1s`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<String>,
 }

@@ -107,3 +107,12 @@ fn send_buffer_lines_default_and_range() {
         assert!(parse(&["--source-url", "http://x/", "--send-buffer-lines", bad]).is_err());
     }
 }
+
+#[test]
+fn multiline_timeout_defaults_to_vigilds_default() {
+    let cli = parse(&[]).unwrap();
+    assert_eq!(
+        cli.lines.multiline_timeout,
+        vigil_types::lines::DEFAULT_MULTILINE_TIMEOUT
+    );
+}

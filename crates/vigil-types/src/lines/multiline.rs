@@ -13,8 +13,10 @@ use super::Line;
 use crate::duration::parse_duration;
 use crate::plan::{LogsMultiline, MultilinePreset};
 
-/// How long an entry waits for a further line by default.
-pub const DEFAULT_MULTILINE_TIMEOUT: Duration = Duration::from_millis(200);
+/// How long an entry waits for a further line by default. On a busy node
+/// the lines of one stack trace can reach a reader more than 200 ms apart;
+/// a second keeps them together and only delays the last entry of a burst.
+pub const DEFAULT_MULTILINE_TIMEOUT: Duration = Duration::from_secs(1);
 /// Shortest allowed multi-line timeout.
 pub const MIN_MULTILINE_TIMEOUT: Duration = Duration::from_millis(10);
 /// Longest allowed multi-line timeout: every line of a service waits this

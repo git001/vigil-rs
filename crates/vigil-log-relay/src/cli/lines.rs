@@ -73,7 +73,7 @@ pub struct Lines {
         long,
         env = "MULTILINE_TIMEOUT",
         value_name = "DURATION",
-        default_value = "200ms",
+        default_value = "1s",
         value_parser = parse_timeout,
         help_heading = "Lines"
     )]
