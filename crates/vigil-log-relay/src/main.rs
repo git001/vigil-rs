@@ -27,6 +27,7 @@ mod filter;
 mod healthcheck;
 mod join;
 mod keepalive;
+mod queue;
 mod source_http;
 mod source_k8s;
 mod source_unix;
@@ -114,7 +115,8 @@ async fn run(cli: Cli) -> Result<()> {
     }
 
     let addr = format!("{}:{}", cli.sink.tcp_sink_host, cli.sink.tcp_sink_port);
-    let (tx, rx) = mpsc::channel::<String>(8192);
+    let (tx, rx) = mpsc::channel::<String>(cli.sink.send_buffer_lines);
+    tokio::spawn(queue::report_drops(cli.sink.send_buffer_lines));
 
     if cli.sink.stdout_sink {
         // Stdout sink — write each line to stdout (lines end with '\n').

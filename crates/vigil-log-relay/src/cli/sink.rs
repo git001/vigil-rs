@@ -32,6 +32,20 @@ pub struct Sink {
     #[arg(long, env = "STDOUT_SINK", help_heading = "Sink")]
     pub stdout_sink: bool,
 
+    /// Lines kept for the sink while it is down or slow (64 to 1048576).
+    ///
+    /// A line that does not fit is dropped; the drops are summed up in one
+    /// warning per second. Each kept line costs its length in memory.
+    #[arg(
+        long,
+        env = "SEND_BUFFER_LINES",
+        default_value_t = 8192,
+        value_name = "N",
+        value_parser = parse_send_buffer_lines,
+        help_heading = "Sink"
+    )]
+    pub send_buffer_lines: usize,
+
     // ---- TCP Sink ---------------------------------------------------------
     /// Sink host. Output is ndjson only (one JSON object per line).
     #[arg(
@@ -142,5 +156,15 @@ impl Sink {
             reconnect_delay_ms: self.dest_reconnect_delay,
             reconnect_max_ms: self.dest_reconnect_max,
         }
+    }
+}
+
+/// `--send-buffer-lines`: 64 to 1048576.
+fn parse_send_buffer_lines(s: &str) -> Result<usize, String> {
+    let n: usize = s.parse().map_err(|_| format!("{s:?} is not a number"))?;
+    if (64..=1_048_576).contains(&n) {
+        Ok(n)
+    } else {
+        Err(format!("{n} is out of range (64 to 1048576)"))
     }
 }

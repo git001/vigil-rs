@@ -653,6 +653,7 @@ its first record), other lines as text.
 | Flag | Env var | Default | Description |
 |---|---|---|---|
 | `--stdout-sink` | `STDOUT_SINK` | `false` | Write the lines to stdout instead of TCP; the relay's own log goes to stderr |
+| `--send-buffer-lines N` | `SEND_BUFFER_LINES` | `8192` | Lines kept while the sink is down or slow (64 to 1048576); more are dropped, summed up in one warning per second |
 | `--tcp-sink-host HOST` | `TCP_SINK_HOST` | `127.0.0.1` | TCP sink host |
 | `--tcp-sink-port PORT` | `TCP_SINK_PORT` | `5170` | TCP sink port |
 | `--dest-connect-timeout MS` | `DEST_CONNECT_TIMEOUT` | `10000` | TCP connect timeout (`0` = none) |

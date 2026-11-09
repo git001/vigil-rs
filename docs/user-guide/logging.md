@@ -631,8 +631,11 @@ The file holds `user:password`; the identity can come from a layer file (see
 
 **TCP sink** — when the sink is down or restarts, the relay connects again
 (`--dest-reconnect-delay`, doubling up to `--dest-reconnect-max`) and keeps
-the lines meanwhile, up to 8192; beyond that it drops lines with the
-warning `send buffer full — dropping log line`. Before each write it checks
+the lines meanwhile, up to `--send-buffer-lines` (`SEND_BUFFER_LINES`,
+default 8192, 64 to 1048576; each kept line costs its length in memory).
+Beyond that it drops lines and sums them up in one warning per second:
+`send buffer full — dropped log lines … dropped=430 buffer_lines=8192`.
+Before each write it checks
 whether the sink closed the connection, so a restarted sink gets the line
 that would otherwise vanish into the dead connection. Plain TCP has no
 acknowledgement, though: a line written in the moment the sink goes away

@@ -174,6 +174,7 @@ vigil-log-relay --source-url https://vigild.example.com/v1/logs/follow?format=nd
 | Flag | Env | Default | Description |
 |------|-----|---------|-------------|
 | `--stdout-sink` | `STDOUT_SINK` | `false` | Write to stdout instead of TCP |
+| `--send-buffer-lines N` | `SEND_BUFFER_LINES` | `8192` | Lines kept while the sink is down or slow (64 to 1048576); more are dropped, summed up in one warning per second |
 
 ---
 

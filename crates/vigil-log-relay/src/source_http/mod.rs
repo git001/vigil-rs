@@ -20,7 +20,6 @@ use std::time::Duration;
 use anyhow::{Result, bail};
 use tokio::sync::mpsc;
 use tokio::time::interval;
-use tracing::warn;
 
 use crate::Liveness;
 
@@ -93,9 +92,7 @@ pub fn sse_payload(line: String) -> Option<String> {
 /// Send one payload to the sink channel, as one line.
 pub fn queue_payload(mut payload: String, tx: &mpsc::Sender<String>) {
     payload.push('\n');
-    if tx.try_send(payload).is_err() {
-        warn!("send buffer full — dropping log line");
-    }
+    crate::queue::send(tx, payload);
 }
 
 /// Increment the failure counter; bail if max_retries exceeded.

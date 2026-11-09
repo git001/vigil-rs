@@ -4,7 +4,6 @@
 use chrono::{DateTime, FixedOffset};
 use serde::Serialize;
 use tokio::sync::mpsc;
-use tracing::warn;
 use vigil_types::lines::Line;
 
 use crate::LineFilter;
@@ -103,9 +102,7 @@ impl Records<'_> {
         };
         if let Ok(mut json) = serde_json::to_string(&record) {
             json.push('\n');
-            if self.tx.try_send(json).is_err() {
-                warn!(pod = %self.pod, stream = self.stream, "send buffer full — dropping log line");
-            }
+            crate::queue::send(self.tx, json);
         }
     }
 }

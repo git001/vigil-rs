@@ -91,3 +91,19 @@ fn dest_write_timeout_replaces_dest_read_timeout() {
     assert_eq!(cli.sink.dest_write_timeout, 500);
     assert!(parse(&["--source-url", "http://x/", "--dest-read-timeout", "500"]).is_err());
 }
+
+#[test]
+fn send_buffer_lines_default_and_range() {
+    assert_eq!(
+        parse(&["--source-url", "http://x/"])
+            .unwrap()
+            .sink
+            .send_buffer_lines,
+        8192
+    );
+    let cli = parse(&["--source-url", "http://x/", "--send-buffer-lines", "64"]).unwrap();
+    assert_eq!(cli.sink.send_buffer_lines, 64);
+    for bad in ["63", "1048577", "lots"] {
+        assert!(parse(&["--source-url", "http://x/", "--send-buffer-lines", bad]).is_err());
+    }
+}

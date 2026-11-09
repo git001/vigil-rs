@@ -92,6 +92,7 @@ tests/vtest/run.sh
 | `v0043_relay_proxy.vtc` | Plain HTTP through a proxy: `--source-proxy` and `HTTP_PROXY` send the absolute-form request to the proxy, `--source-no-proxy` connects directly |
 | `v0044_relay_tls.vtc` | The relay on vigild's TLS stream: `--source-cacert` or `--source-insecure` with a client certificate (mTLS identity); without a certificate 403, without the CA no connection |
 | `v0045_relay_tcp_sink_reconnect.vtc` | The TCP sink stops and comes back on the same port: the relay reconnects and not one numbered line is missing |
+| `v0046_relay_send_buffer.vtc` | `--send-buffer-lines 64` with the sink down: 430 of 494 lines are dropped and reported in one summed-up warning, not one per line |
 
 ## How it works
 

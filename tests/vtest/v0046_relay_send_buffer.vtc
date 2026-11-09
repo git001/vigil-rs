@@ -1,0 +1,35 @@
+vtest "vigil-log-relay --send-buffer-lines: with the sink down the buffer fills, the drops come in one summed-up warning per second"
+
+# The source sends 500 lines at once (-bodylen 32000: VTest2 makes lines of
+# 64 bytes); 6 of them start with ":" and are dropped as SSE comments, 494
+# remain. The TCP sink is a port nobody listens on (${bad_backend}), so no
+# line leaves the relay: 64 fit into the buffer, 430 are dropped.
+server s1 {
+	rxreq
+	txresp -hdr "Content-Type: text/plain" -bodylen 32000
+} -start
+
+shell {
+	${vigil_log_relay} --source-url http://${s1_sock}/ \
+		--source-reconnect-delay 60000 \
+		--tcp-sink-host $(echo ${bad_backend} | cut -d: -f1) --tcp-sink-port $(echo ${bad_backend} | cut -d: -f2) \
+		--send-buffer-lines 64 --healthcheck 127.0.0.1:0 \
+		> ${tmpdir}/relay.log 2>&1 < /dev/null &
+	pid=$!
+	for i in $(seq 1 30); do
+		grep -q "dropped log lines" ${tmpdir}/relay.log && break
+		sleep 0.1
+	done
+	sleep 1.2
+	kill $pid
+	# One warning for the whole burst (two if it spans a second), never one per line.
+	# (Each check on its own line: set -e ignores a failing "test a && test b".)
+	n=$(grep -c "dropped log lines" ${tmpdir}/relay.log)
+	test $n -ge 1
+	test $n -le 2
+	sum=$(sed -n 's/.*dropped log lines.* dropped=\([0-9]*\).*/\1/p' ${tmpdir}/relay.log | awk '{s += $1} END {print s}')
+	test $sum -eq 430
+	grep -q "buffer_lines=64" ${tmpdir}/relay.log
+}
+
+server s1 -wait
