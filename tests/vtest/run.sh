@@ -179,6 +179,8 @@ if [[ "${K8S_TEST:-0}" == 1 ]]; then
     if [[ -n "${E2E_IMAGE:-}" ]]; then
         echo "==> Running the Kubernetes end-to-end test…"
         "${REPO_ROOT}/tests/k8s/e2e.sh"
+        echo "==> Running the Kubernetes scaling test…"
+        "${REPO_ROOT}/tests/k8s/scale.sh"
     else
         echo "==> Skipping the Kubernetes end-to-end test: E2E_IMAGE is not set (tests/k8s/build-image.sh)"
     fi

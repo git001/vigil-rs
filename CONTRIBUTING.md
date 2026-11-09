@@ -46,8 +46,10 @@ Fix clippy warnings in the code; do not silence them with
   anonymous registry ttl.sh by default) as a pod like on OpenShift: vigild
   as PID 1, random UID, probes, a changed ConfigMap, a liveness restart and
   the shutdown. It needs `KUBECONFIG` and `E2E_IMAGE` and creates (and
-  removes) the namespace `vigil-e2e-test`. `K8S_TEST=1 run.sh --coverage`
-  runs both Kubernetes tests.
+  removes) the namespace `vigil-e2e-test`. `tests/k8s/scale.sh` runs the
+  same image as a Deployment behind a Service under load and scales it up
+  and down (namespace `vigil-scale-test`): not a single request may fail.
+  `K8S_TEST=1 run.sh --coverage` runs all three Kubernetes tests.
 - **Coverage**: `tests/vtest/run.sh --coverage` combines unit, integration
   and VTest2 coverage.
 

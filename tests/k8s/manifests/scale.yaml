@@ -1,0 +1,157 @@
+# Test Deployment for tests/k8s/scale.sh: the release image with several
+# replicas behind a Service, and a client that sends requests all the time.
+# scale.sh puts the image in place of VIGIL_E2E_IMAGE.
+#
+# Layers (ConfigMap):
+#   web    an HTTP server on :9091 (vigil-log-relay's GET /healthz; its
+#          source is never reachable, so it forwards nothing and keeps
+#          answering 200). vigild stops it only after VIGIL_SHUTDOWN_DELAY.
+#   tick   a oneshot every 5 seconds: runs in every replica.
+# The client pod curls the Service ten times a second and logs
+# "<unix time> <HTTP code>" for each request.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vigil-scale-test
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vigil-scale-layers
+  namespace: vigil-scale-test
+data:
+  001-scale.yaml: |
+    services:
+      web:
+        command: >-
+          vigil-log-relay --source-url http://127.0.0.1:1/ --stdout-sink
+          --healthcheck 0.0.0.0:9091 --healthcheck-max-age 86400
+          --source-reconnect-delay 30000 --source-reconnect-max 30000
+        startup: enabled
+        logs-forward: disabled
+      tick:
+        type: oneshot
+        schedule: '*/5 * * * * *'
+        command: /bin/sh -c 'echo "tick from $HOSTNAME"'
+        pass-env-glob: [HOSTNAME]
+        startup: enabled
+    checks:
+      web-up:
+        level: ready
+        startup: enabled
+        period: 1s
+        threshold: 1
+        http:
+          url: http://127.0.0.1:9091/healthz
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vigil-scale
+  namespace: vigil-scale-test
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: vigil-scale
+  template:
+    metadata:
+      labels:
+        app: vigil-scale
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000710000
+        runAsGroup: 0
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: app
+          image: VIGIL_E2E_IMAGE
+          env:
+            - name: VIGIL_TLS_ADDR
+              value: "0.0.0.0:8443"
+            - name: VIGIL_SHUTDOWN_DELAY
+              value: 5s
+          ports:
+            - containerPort: 9091
+            - containerPort: 8443
+          readinessProbe:
+            httpGet:
+              path: /v1/health?level=ready
+              port: 8443
+              scheme: HTTPS
+            periodSeconds: 1
+            failureThreshold: 1
+          livenessProbe:
+            httpGet:
+              path: /v1/health?level=alive
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: layers
+              mountPath: /etc/vigil/layers
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: layers
+          configMap:
+            name: vigil-scale-layers
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vigil-scale
+  namespace: vigil-scale-test
+spec:
+  selector:
+    app: vigil-scale
+  ports:
+    - port: 9091
+      targetPort: 9091
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: client
+  namespace: vigil-scale-test
+spec:
+  terminationGracePeriodSeconds: 1
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000710000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: client
+      image: VIGIL_E2E_IMAGE
+      command:
+        - /bin/sh
+        - -c
+        - |
+          while true; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://vigil-scale:9091/healthz)
+            echo "$(date +%s) ${code}"
+            sleep 0.1
+          done
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]

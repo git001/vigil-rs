@@ -22,6 +22,10 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PODMAN="${PODMAN:-podman}"
 RUST_IMAGE="${RUST_IMAGE:-docker.io/library/rust:1.99-alpine}"
 COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
+# Uncommitted changes are built too; the name says so.
+if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain --untracked-files=no)" ]]; then
+    COMMIT="${COMMIT}-dirty"
+fi
 RANDOM_PART="$(od -An -N4 -tx4 /dev/urandom | tr -d ' ')"
 E2E_IMAGE="${E2E_IMAGE:-ttl.sh/vigil-rs-e2e-${COMMIT}-${RANDOM_PART}:2h}"
 # Inside the repository, so the build container can write it; ignored by git.
