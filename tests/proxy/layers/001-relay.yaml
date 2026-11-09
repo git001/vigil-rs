@@ -1,0 +1,23 @@
+# vigild for tests/proxy/squid.sh: a service that writes a line every 0.2s,
+# and two read identities for vigil-log-relay and vigil:
+#   relay        every client certificate of the test's CA (through the
+#                plain proxy, the TLS session ends at vigild)
+#   relay-basic  user and password (through the man-in-the-middle proxy,
+#                which a client certificate cannot pass); the password is
+#                in tests/proxy/relay-user
+#
+# squid.sh replaces @CERT_DIR@ with the directory of its certificates.
+services:
+  log-svc:
+    command: "/bin/sh -c 'i=0; while true; do echo proxy-test-line-$i; i=$((i+1)); sleep 0.2; done'"
+    startup: enabled
+
+identities:
+  relay:
+    access: read
+    tls:
+      ca: @CERT_DIR@/ca.crt
+  relay-basic:
+    access: read
+    basic:
+      password-hash: "$6$testextra$Cq1GhPxDNtKxM7J.P1EovJ64dyEsjMy59Cr2zHgWhpmUsETC.YtW8GFsrGO810Kh5f/9.SYG53plbhT3VaA7z/"

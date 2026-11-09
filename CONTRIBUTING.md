@@ -50,6 +50,13 @@ Fix clippy warnings in the code; do not silence them with
   same image as a Deployment behind a Service under load and scales it up
   and down (namespace `vigil-scale-test`): not a single request may fail.
   `K8S_TEST=1 run.sh --coverage` runs all three Kubernetes tests.
+- **HTTPS proxy** (`tests/proxy/squid.sh`): vigil-log-relay and vigil reach
+  vigild's TLS API through squid, once through a plain tunnel (CONNECT, with
+  a client certificate) and once through a man in the middle that re-signs
+  with its own CA (`--source-proxy-cacert`, `--proxy-cacert`). It needs
+  podman and openssl and builds the squid image from
+  `tests/proxy/Containerfile` locally. `PROXY_TEST=1 run.sh --coverage`
+  runs it.
 - **Coverage**: `tests/vtest/run.sh --coverage` combines unit, integration
   and VTest2 coverage.
 

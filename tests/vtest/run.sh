@@ -23,6 +23,9 @@
 #               (vigil-log-relay --kubernetes) against the cluster in KUBECONFIG,
 #               and tests/k8s/e2e.sh (the release image in a pod) when
 #               E2E_IMAGE is set (see tests/k8s/build-image.sh).
+#   PROXY_TEST  Set to 1 in --coverage mode to also run tests/proxy/squid.sh
+#               (HTTPS through squid, tunnel and man in the middle; needs
+#               podman and openssl).
 
 set -euo pipefail
 
@@ -184,6 +187,12 @@ if [[ "${K8S_TEST:-0}" == 1 ]]; then
     else
         echo "==> Skipping the Kubernetes end-to-end test: E2E_IMAGE is not set (tests/k8s/build-image.sh)"
     fi
+fi
+
+if [[ "${PROXY_TEST:-0}" == 1 ]]; then
+    echo "==> Running the HTTPS proxy test (squid)…"
+    VIGILD_BIN="${VIGILD_BIN}" VIGIL_BIN="${VIGIL_BIN}" RELAY_BIN="${VIGIL_LOG_RELAY_BIN}" \
+        "${REPO_ROOT}/tests/proxy/squid.sh"
 fi
 
 echo ""

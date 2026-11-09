@@ -1,0 +1,8 @@
+# squid for tests/proxy/squid.sh. Alpine's squid is built with OpenSSL, so
+# it can bump TLS (ssl_bump, man in the middle); Ubuntu's squid images use
+# GnuTLS and cannot. Built locally by squid.sh, never pushed.
+FROM docker.io/library/alpine:3.23
+RUN apk add --no-cache squid \
+    && /usr/lib/squid/security_file_certgen -c -s /var/cache/squid/ssl_db -M 4MB \
+    && chown -R squid:squid /var/cache/squid/ssl_db
+ENTRYPOINT ["squid", "-N", "-f", "/etc/squid/test/squid.conf"]
