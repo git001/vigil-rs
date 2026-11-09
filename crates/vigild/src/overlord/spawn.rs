@@ -55,13 +55,14 @@ pub async fn spawn(
     // dead NFS mount behind a `tls:` file) ends the start with an error
     // instead of blocking it.
     let dir = layers_dir.clone();
+    let notify = notify_dir.clone();
     let plan::Loaded {
         plan: plan_val,
         alerts,
         checks: check_clients,
         identities,
         files,
-    } = crate::template::off_runtime("layers", move || plan::load(&dir)).await?;
+    } = crate::template::off_runtime("layers", move || plan::load(&dir, &notify)).await?;
     let identity_store = IdentityStore::with_layer(identities);
     let watched_files = watch_layers::WatchedFiles::new(files);
 

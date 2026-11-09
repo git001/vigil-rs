@@ -110,9 +110,29 @@ impl Drop for RemoveOnDrop {
     }
 }
 
+/// Hex digits of the random part of a socket name.
+const RANDOM_DIGITS: usize = 16;
+
 fn random_suffix() -> String {
     let n = uuid::Uuid::new_v4().as_u128() as u64;
-    format!("{n:016x}")
+    format!("{n:0RANDOM_DIGITS$x}")
+}
+
+/// Whether notify sockets fit into `sun_path` in `dir`: the shortest
+/// name, `<dir>/<16 hex digits>.sock`, must. Checked when the layers are
+/// loaded, so that a too long `--path-prefix` stops the start or the
+/// replan instead of every start of a `ready: notify` service.
+pub fn check_dir(dir: &Path) -> anyhow::Result<()> {
+    let shortest = dir.join(format!("{}.sock", "0".repeat(RANDOM_DIGITS)));
+    let len = shortest.as_os_str().len();
+    let max_dir = SUN_PATH_MAX - (shortest.as_os_str().len() - dir.as_os_str().len());
+    anyhow::ensure!(
+        len <= SUN_PATH_MAX,
+        "notify socket paths in {dir:?} are at least {len} bytes, the limit for Unix sockets \
+         is {SUN_PATH_MAX}: shorten --path-prefix (the notify directory may have at most \
+         {max_dir} bytes)"
+    );
+    Ok(())
 }
 
 /// `<dir>/<service>-<rand>.sock`, or `<dir>/<rand>.sock` if that would not

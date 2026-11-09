@@ -134,9 +134,10 @@ user, point `--path-prefix` at a directory that user may create, e.g.
 > **Keep `--path-prefix` at 78 bytes or less**, e.g. `/run/vigil` or
 > `/tmp/vigil`. A control socket path that is too long stops vigild at
 > startup with `socket path "…" is N bytes, the limit for Unix sockets is
-> 107`. A notify socket path that is too long only shows when a
-> `ready: notify` service starts: that start fails (`binding notify
-> socket`). Deep directories reach the limit easily, e.g. a CI workspace, a
+> 107`. When a layer has a `ready: notify` service, vigild also rejects
+> the layers if the notify socket paths would be too long: at startup it
+> does not start, a replan keeps the running plan (`notify socket paths in
+> "…" are at least N bytes`). Deep directories reach the limit easily, e.g. a CI workspace, a
 > volume mounted under a long path, or a `$TMPDIR` inside a home directory.
 > The same limit applies to `--socket` and to the paths given to
 > `vigil --socket` and `vigil-log-relay --source-socket`.

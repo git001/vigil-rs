@@ -20,9 +20,11 @@ impl Overlord {
     /// reload resolves it.
     pub(super) async fn reload_layers(&mut self) -> anyhow::Result<()> {
         let dir = self.layers_dir.clone();
+        let notify = self.notify_dir.clone();
         // Reading files off the async runtime: a hanging file system must
         // not block the overlord.
-        let loaded = crate::template::off_runtime("layers", move || super::plan::load(&dir)).await;
+        let loaded =
+            crate::template::off_runtime("layers", move || super::plan::load(&dir, &notify)).await;
         match loaded {
             Ok(loaded) => {
                 self.apply_plan(loaded).await;

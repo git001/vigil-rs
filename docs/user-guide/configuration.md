@@ -632,9 +632,9 @@ quickly readiness is detected.
   > **This needs a `--path-prefix` of at most 78 bytes.** A Unix socket
   > path can be at most 107 bytes long (a Linux limit), and the notify
   > socket adds at least 29 (`/notify/<16 hex digits>.sock`; the service
-  > name is left out when it does not fit). vigild starts with a longer
-  > prefix, but every start of a `ready: notify` service then fails
-  > (`binding notify socket`). See
+  > name is left out when it does not fit). With a longer prefix vigild
+  > rejects layers that have a `ready: notify` service: it does not start,
+  > and a replan keeps the running plan. See
   > [Socket path limit](installation.md#socket-path-limit-107-bytes).
 - Understood messages: `READY=1`, `STATUS=<text>` (shown as `status-message`
   in the API and in `vigil services list`), `STOPPING=1` (logged). Other

@@ -68,8 +68,8 @@ no `--socket` is needed on either side.
 > at most 107 bytes long (a Linux limit). The control socket
 > `<path-prefix>/vigild.sock` adds 12 bytes, a `ready: notify` socket
 > `<path-prefix>/notify/<16 hex digits>.sock` adds 29. A prefix on a deep
-> volume mount fails: vigild does not start, or the notify service does not
-> start. See [Socket path limit](../user-guide/installation.md#socket-path-limit-107-bytes).
+> volume mount fails: vigild does not start, or (with a `ready: notify`
+> service) rejects the layers. See [Socket path limit](../user-guide/installation.md#socket-path-limit-107-bytes).
 
 ## OCI image labels
 

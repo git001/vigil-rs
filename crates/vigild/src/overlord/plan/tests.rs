@@ -10,8 +10,11 @@ use super::check::level_warning;
 use super::dependencies::dependency_warnings;
 use super::*;
 
+/// A notify directory as short as the default one (`/run/vigil/notify`).
+const NOTIFY_DIR: &str = "/run/vigil/notify";
+
 fn load_plan(dir: &Path) -> anyhow::Result<Plan> {
-    load(dir).map(|l| l.plan)
+    load(dir, Path::new(NOTIFY_DIR)).map(|l| l.plan)
 }
 
 fn write(dir: &TempDir, name: &str, content: &str) {
@@ -31,7 +34,7 @@ fn later_layer_replaces_a_whole_identity() {
         "002-site.yaml",
         "identities:\n  ops:\n    access: read\n    local:\n      user-id: 1000\n",
     );
-    let loaded = load(dir.path()).unwrap();
+    let loaded = load(dir.path(), Path::new(NOTIFY_DIR)).unwrap();
     let ops = &loaded.identities[0];
     assert_eq!(ops.access, vigil_types::identity::IdentityAccess::Read);
     assert_eq!(ops.local.as_ref().unwrap().user_id, Some(1000));
@@ -109,6 +112,42 @@ fn load_err(yaml: &str) -> String {
     let dir = TempDir::new().unwrap();
     write(&dir, "001.yaml", yaml);
     format!("{:#}", load_plan(dir.path()).unwrap_err())
+}
+
+#[test]
+fn ready_notify_needs_a_notify_dir_that_fits_into_sun_path() {
+    let dir = TempDir::new().unwrap();
+    write(
+        &dir,
+        "001.yaml",
+        "services:\n  app:\n    command: sleep 9\n    ready: notify\n",
+    );
+    // The longest prefix that fits: 78 bytes, so the notify directory has
+    // 85 and the shortest socket path 107.
+    let fits = format!("/{}/notify", "p".repeat(77));
+    load(dir.path(), Path::new(&fits)).unwrap();
+    let too_long = format!("/{}/notify", "p".repeat(78));
+    let err = format!(
+        "{:#}",
+        load(dir.path(), Path::new(&too_long)).err().unwrap()
+    );
+    assert!(err.contains("service \"app\": ready: notify"), "{err}");
+    assert!(
+        err.contains("are at least 108 bytes, the limit for Unix sockets is 107"),
+        "{err}"
+    );
+    assert!(
+        err.contains("shorten --path-prefix (the notify directory may have at most 85 bytes)"),
+        "{err}"
+    );
+
+    // Without a ready: notify service the length does not matter.
+    write(
+        &dir,
+        "001.yaml",
+        "services:\n  app:\n    command: sleep 9\n",
+    );
+    load(dir.path(), Path::new(&too_long)).unwrap();
 }
 
 #[test]
@@ -343,7 +382,7 @@ fn all_example_layers_load() {
     for entry in fs::read_dir(&examples).unwrap() {
         let layers = entry.unwrap().path().join("layers");
         if layers.is_dir() {
-            load_with(&layers, &examples_env())
+            load_with(&layers, Path::new(NOTIFY_DIR), &examples_env())
                 .map(|_| ())
                 .unwrap_or_else(|e| panic!("{layers:?}: {e:#}"));
             checked += 1;
@@ -353,7 +392,7 @@ fn all_example_layers_load() {
     // subdir; they are layers dirs themselves.
     for name in ["layers", "layers-minimal"] {
         let dir = examples.join(name);
-        load_with(&dir, &examples_env())
+        load_with(&dir, Path::new(NOTIFY_DIR), &examples_env())
             .map(|_| ())
             .unwrap_or_else(|e| panic!("{dir:?}: {e:#}"));
         checked += 1;

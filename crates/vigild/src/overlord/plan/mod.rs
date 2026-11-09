@@ -13,7 +13,7 @@ mod tests;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use vigil_types::plan::{Layer, Plan};
+use vigil_types::plan::{Layer, Plan, ReadyMode};
 
 use crate::process_util::{REDUNDANT_LISTS, redundant_lists};
 
@@ -47,15 +47,15 @@ pub struct Loaded {
 
 /// Read, merge and validate the layers in `dir`, prepare the alerts
 /// against vigild's environment, build the HTTP check clients and load the
-/// identities. Reads files: call it off the async runtime (see
-/// `off_runtime`).
-pub fn load(dir: &Path) -> anyhow::Result<Loaded> {
-    load_with(dir, &crate::alert::LoadEnv::process())
+/// identities. `notify_dir` is where `ready: notify` sockets go. Reads
+/// files: call it off the async runtime (see `off_runtime`).
+pub fn load(dir: &Path, notify_dir: &Path) -> anyhow::Result<Loaded> {
+    load_with(dir, notify_dir, &crate::alert::LoadEnv::process())
 }
 
-fn load_with(dir: &Path, env: &crate::alert::LoadEnv) -> anyhow::Result<Loaded> {
+fn load_with(dir: &Path, notify_dir: &Path, env: &crate::alert::LoadEnv) -> anyhow::Result<Loaded> {
     let plan = read_plan(dir)?;
-    validate(&plan)?;
+    validate(&plan, notify_dir)?;
     let alerts = crate::alert::prepare_alerts(&plan.alerts, env)?;
     let checks = crate::check::prepare_checks(&plan.checks)?;
     let identities = crate::identity::load_layer_identities(&plan.identities)?;
@@ -122,9 +122,17 @@ fn read_plan(dir: &Path) -> anyhow::Result<Plan> {
 
 /// Checks that need more than deserialization. Runs on startup and on every
 /// replan, so a bad layer is rejected before anything is (re)started.
-fn validate(plan: &Plan) -> anyhow::Result<()> {
+fn validate(plan: &Plan, notify_dir: &Path) -> anyhow::Result<()> {
     for (name, svc) in &plan.services {
         validate_service(plan, name, svc).with_context(|| format!("service {name:?}"))?;
+    }
+    if let Some(name) = plan
+        .services
+        .iter()
+        .find_map(|(name, svc)| (svc.ready == Some(ReadyMode::Notify)).then_some(name))
+    {
+        crate::service::notify::check_dir(notify_dir)
+            .with_context(|| format!("service {name:?}: ready: notify"))?;
     }
     check_dependency_cycles(plan)?;
     for (name, check) in &plan.checks {
