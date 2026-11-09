@@ -13,7 +13,8 @@
 # Environment variables:
 #   VTEST       Path to the vtest binary   (default: /datadisk/git-repos/VTest2/vtest)
 #   VIGILD_BIN  Path to a pre-built vigild (default: target/debug/vigild)
-#               Ignored in --coverage mode; the instrumented binary is used.
+#               Ignored in --coverage mode; the instrumented binary is used,
+#               built in target/llvm-cov-target/ (target/debug/ is left alone).
 #   CARGO_TEST_ARGS  Extra arguments for `cargo test` in --coverage mode,
 #               split on whitespace. Example for an unprivileged sandbox
 #               whose /etc/passwd lacks root:
@@ -116,6 +117,12 @@ if ! command -v cargo-llvm-cov &>/dev/null && ! cargo llvm-cov --version &>/dev/
 fi
 
 echo "==> Loading coverage environment…"
+# Instrumented builds get their own target directory: built in target/,
+# they would replace the normal binaries in target/debug/ (and `cargo
+# llvm-cov clean` remove them), and every switch between the two would
+# rebuild all dependencies because the compiler flags differ. show-env
+# derives CARGO_LLVM_COV_TARGET_DIR and LLVM_PROFILE_FILE from this.
+export CARGO_TARGET_DIR="${REPO_ROOT}/target/llvm-cov-target"
 # Export the llvm-cov env vars into this shell so that all subsequent
 # cargo invocations produce instrumented binaries and write profraw files.
 eval "$(cargo llvm-cov show-env --sh 2>/dev/null)"
@@ -132,15 +139,23 @@ cargo llvm-cov clean --workspace 2>/dev/null || true
 echo "==> Building instrumented vigild, vigil, and vigil-log-relay binaries…"
 cargo build -p vigild -p vigil -p vigil-log-relay
 
-# The instrumented binaries land in the same target/debug/ as a normal build.
+# The instrumented binaries, apart from the normal build in target/debug/.
 VIGILD_BIN="${CARGO_LLVM_COV_TARGET_DIR}/debug/vigild"
 VIGIL_BIN="${CARGO_LLVM_COV_TARGET_DIR}/debug/vigil"
 VIGIL_LOG_RELAY_BIN="${CARGO_LLVM_COV_TARGET_DIR}/debug/vigil-log-relay"
 
 echo "==> Running unit + Rust integration tests…"
-# With the show-env vars active, cargo test writes profraw files into target/.
+# With the show-env vars active, cargo test writes profraw files into
+# CARGO_LLVM_COV_TARGET_DIR. On success only the summary is shown; on a
+# failure the whole output, so that the failing tests' output is visible.
 read -ra CARGO_TEST_EXTRA <<< "${CARGO_TEST_ARGS:-}"
-cargo test --workspace "${CARGO_TEST_EXTRA[@]}" 2>&1 | tail -5
+CARGO_TEST_LOG="${CARGO_LLVM_COV_TARGET_DIR}/cargo-test.log"
+if ! cargo test --workspace "${CARGO_TEST_EXTRA[@]}" > "${CARGO_TEST_LOG}" 2>&1; then
+    cat "${CARGO_TEST_LOG}"
+    echo "ERROR: cargo test failed (output above, also in ${CARGO_TEST_LOG})" >&2
+    exit 1
+fi
+awk '/^test result:/ { p += $4; i += $8 } END { print "    " p " passed, " i " ignored" }' "${CARGO_TEST_LOG}"
 
 echo "==> Running VTest2 tests…"
 # LLVM_PROFILE_FILE is set by show-env.  Explicitly re-export it so that
@@ -165,7 +180,7 @@ echo "==> Coverage report (unit + integration + VTest2)…"
 # cargo llvm-cov report only knows about test binaries built by cargo test.
 # To map profraw data from vigil/vigil-log-relay VTest2 subprocess runs back
 # to their source lines we must call the underlying llvm tools directly:
-#   1. llvm-profdata merge — collects all *.profraw files in target/
+#   1. llvm-profdata merge — collects all *.profraw files in the target dir
 #   2. llvm-cov report/show — accepts explicit --object flags per binary
 LLVM_BIN="$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin"
 LLVM_PROFDATA="${LLVM_BIN}/llvm-profdata"
