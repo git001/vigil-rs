@@ -20,7 +20,9 @@ shell {
 # the terminal of p1; -expect-text waits there for a line. A wide terminal
 # keeps long log lines on one row.
 process p1 -winsz 200 400 "${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock --tls-addr 127.0.0.1:0 --watch-layers 1s" -start
-process p1 -expect-text 0 0 "API listening"
+# "watching layers" comes once the layers are loaded and the watcher has
+# its baseline ("API listening" comes before the layers are loaded).
+process p1 -expect-text 0 0 "watching layers"
 
 # The TLS port vigild got is known only at run time; vigil system-info
 # shows it. VTest2 has no TLS: the TLS calls use vigil (--insecure for the

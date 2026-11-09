@@ -132,7 +132,6 @@ pub fn spawn(
 ) -> JoinHandle<()> {
     let interval = clamp_interval(interval);
     tokio::spawn(async move {
-        info!(dir = %dir.display(), ?interval, "watching layers");
         let mut detector = Detector::default();
         let mut reader = PeriodicRead::default();
         let mut ticker = tokio::time::interval(interval);
@@ -155,7 +154,13 @@ pub fn spawn(
                 // Unreadable this round, or the last read still hangs.
                 _ => continue,
             };
+            let first = detector.baseline.is_none();
             if !detector.update(hash) {
+                if first {
+                    // Logged once the baseline is taken: from now on every
+                    // change is seen.
+                    info!(dir = %dir.display(), ?interval, "watching layers");
+                }
                 continue;
             }
             info!(dir = %dir.display(), "layers changed, replanning");

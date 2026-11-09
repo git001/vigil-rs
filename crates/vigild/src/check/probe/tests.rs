@@ -441,10 +441,33 @@ async fn timed_out_exec_check_is_killed_with_its_children() {
         .map(|l| l.trim().parse().unwrap())
         .collect();
     assert_eq!(pids.len(), 2, "{pids:?}");
+    // The children of the shell were orphaned when it died and belong to
+    // init now: a killed child can still be a zombie until init reaps it,
+    // or not yet have run to its death. So wait for each to be gone or a
+    // zombie; one that is still running after 2 s was not killed.
     for pid in pids {
-        let alive = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok();
-        assert!(!alive, "process {pid} of the timed-out check still runs");
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while still_runs(pid) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "process {pid} of the timed-out check still runs"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
+}
+
+/// Whether `pid` exists and is not a zombie (state `Z` or `X` in
+/// /proc/<pid>/stat; the state follows the last `)`, as the command name
+/// may contain one).
+fn still_runs(pid: i32) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    let state = stat
+        .rsplit_once(')')
+        .and_then(|(_, rest)| rest.trim_start().chars().next());
+    !matches!(state, Some('Z' | 'X') | None)
 }
 
 #[tokio::test]
@@ -793,7 +816,7 @@ async fn http_failure_reason_has_the_status() {
 
 #[tokio::test]
 async fn http_connection_refused_reason() {
-    let port = closed_port();
+    let (_closed, port) = closed_port();
     let check = make_check(format!("http://127.0.0.1:{port}/health"));
     let err = probe_http(&client(&check), &check, Duration::from_secs(5))
         .await
@@ -808,7 +831,7 @@ async fn http_connection_refused_reason() {
 
 #[tokio::test]
 async fn tcp_connection_refused_reason() {
-    let port = closed_port();
+    let (_closed, port) = closed_port();
     let err = probe_tcp("127.0.0.1", port, Duration::from_secs(5))
         .await
         .unwrap_err();
@@ -819,13 +842,15 @@ async fn tcp_connection_refused_reason() {
     assert!(err.to_lowercase().contains("connection refused"), "{err}");
 }
 
-/// A port nothing listens on: bound, then released.
-fn closed_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+/// A port that refuses connections. The socket is bound but does not
+/// listen, so the kernel answers a connect with a reset; and as long as it
+/// lives, no test running in parallel can get the same port (a port that
+/// was bound and released could be handed out again at once).
+fn closed_port() -> (tokio::net::TcpSocket, u16) {
+    let sock = tokio::net::TcpSocket::new_v4().unwrap();
+    sock.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let port = sock.local_addr().unwrap().port();
+    (sock, port)
 }
 
 // ------------------------------------------------------------------
@@ -902,9 +927,7 @@ async fn refused_connection_has_no_connect_time() {
     assert!(ok.connect.is_some());
 
     // The same client against a closed port.
-    let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let closed_port = closed.local_addr().unwrap().port();
-    drop(closed);
+    let (_closed, closed_port) = closed_port();
     let refused = make_check(format!("http://127.0.0.1:{closed_port}/ok"));
     let probe = perform(
         &http_config(refused),
@@ -938,8 +961,9 @@ async fn tcp_connect_time_only_on_success_and_none_for_exec() {
     assert!(probe.result.is_ok());
     assert!(probe.connect.is_some());
     drop(listener);
+    let (_closed, closed_port) = closed_port();
     let probe = perform(
-        &tcp(port),
+        &tcp(closed_port),
         Duration::from_secs(5),
         None,
         &empty_svc_configs(),

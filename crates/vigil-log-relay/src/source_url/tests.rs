@@ -96,10 +96,12 @@ async fn non_2xx_exits_after_max_retries() {
 
 #[tokio::test]
 async fn connect_error_exits_after_max_retries() {
-    // Bind and immediately drop — port becomes unavailable (ECONNREFUSED)
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap().to_string();
-    drop(listener);
+    // Bound but not listening: a connect gets ECONNREFUSED, and while the
+    // socket lives no test running in parallel can get the port (a port
+    // that was bound and released could be handed out again at once).
+    let closed = tokio::net::TcpSocket::new_v4().unwrap();
+    closed.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let addr = closed.local_addr().unwrap().to_string();
 
     let (tx, _rx) = mpsc::channel(8);
     let err = tokio::time::timeout(

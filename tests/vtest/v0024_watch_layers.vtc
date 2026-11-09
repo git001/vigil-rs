@@ -24,7 +24,10 @@ shell {ln -s ${vtestdir}/fixtures/v0024/start ${tmpdir}/layers}
 # -expect-text waits there for a line. A wide terminal keeps long log lines
 # on one row.
 process p1 -winsz 200 400 "env WEBHOOK_URL=http://${s1_sock}/webhook ${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock --watch-layers 1s" -start
-process p1 -expect-text 0 0 "API listening"
+# "API listening" comes before the layers are loaded; "watching layers"
+# once they are loaded and the watcher has taken its baseline. A change
+# before that would already be in the first plan.
+process p1 -expect-text 0 0 "watching layers"
 
 # 1. A new layer is applied without "vigil replan": web shows up and starts.
 shell {ln -sfn ${vtestdir}/fixtures/v0024/app ${tmpdir}/layers}
