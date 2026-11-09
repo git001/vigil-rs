@@ -1,0 +1,61 @@
+vtest "vigil-log-relay TCP sink: reconnects to a restarted sink, no line is lost"
+
+# vigild runs log-svc (fixtures/v0010), which prints relay-test-line-N every
+# 0.2s. The relay reads it over the socket and writes to a TCP sink
+# (helpers/tcp_capture.py). The sink stops and comes back on the same port
+# a second later: the relay keeps the lines meanwhile, reconnects and sends
+# them; together both sinks have every number from the first on.
+process p1 -winsz 200 400 "${vigild} --layers-dir ${vtestdir}/fixtures/v0010 --socket ${tmpdir}/vigild.sock --path-prefix ${tmpdir}/run" -start
+process p1 -expect-text 0 0 "API listening"
+
+shell {
+	${vtestdir}/helpers/tcp_capture.py ${tmpdir}/sink_port.txt ${tmpdir}/sink1.txt \
+		> /dev/null 2>&1 < /dev/null &
+	echo $! > ${tmpdir}/sink1.pid
+	for i in $(seq 1 50); do
+		test -s ${tmpdir}/sink_port.txt && break
+		sleep 0.1
+	done
+	${vigil_log_relay} --source-socket ${tmpdir}/vigild.sock \
+		--tcp-sink-port $(cat ${tmpdir}/sink_port.txt) \
+		--dest-reconnect-delay 100 --dest-reconnect-max 200 \
+		--healthcheck 127.0.0.1:0 \
+		> ${tmpdir}/relay.log 2>&1 < /dev/null &
+	echo $! > ${tmpdir}/relay.pid
+	for i in $(seq 1 50); do
+		test "$(cat ${tmpdir}/sink1.txt 2>/dev/null | grep -c relay-test-line)" -ge 3 && break
+		sleep 0.1
+	done
+	test "$(grep -c relay-test-line ${tmpdir}/sink1.txt)" -ge 3
+}
+
+# The sink goes away; the relay sees the closed connection before its next
+# write (a write would still succeed into the kernel buffer, and the line
+# would be lost), keeps the line and retries.
+shell {
+	kill $(cat ${tmpdir}/sink1.pid)
+	sleep 1
+	${vtestdir}/helpers/tcp_capture.py --port $(cat ${tmpdir}/sink_port.txt) \
+		${tmpdir}/sink_port2.txt ${tmpdir}/sink2.txt > /dev/null 2>&1 < /dev/null &
+	echo $! > ${tmpdir}/sink2.pid
+	for i in $(seq 1 50); do
+		test "$(cat ${tmpdir}/sink2.txt 2>/dev/null | grep -c relay-test-line)" -ge 3 && break
+		sleep 0.1
+	done
+	kill $(cat ${tmpdir}/relay.pid) $(cat ${tmpdir}/sink2.pid)
+	grep -q "tcp sink cannot connect" ${tmpdir}/relay.log
+	test "$(grep -c 'tcp sink connected' ${tmpdir}/relay.log)" -eq 2
+}
+
+# The numbers in both sinks: from the first one on, none is missing.
+shell {
+	cat ${tmpdir}/sink1.txt ${tmpdir}/sink2.txt \
+		| sed -n 's/.*relay-test-line-\([0-9]*\).*/\1/p' | sort -n | uniq > ${tmpdir}/got
+	first=$(head -1 ${tmpdir}/got)
+	last=$(tail -1 ${tmpdir}/got)
+	seq $first $last > ${tmpdir}/want
+	diff ${tmpdir}/want ${tmpdir}/got
+}
+
+process p1 -kill TERM
+process p1 -wait

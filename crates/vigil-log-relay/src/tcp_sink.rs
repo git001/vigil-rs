@@ -94,6 +94,15 @@ pub async fn run(addr: String, mut rx: mpsc::Receiver<String>, cfg: SinkConfig) 
                         }
                     };
 
+                    // A write to a connection the sink already closed still
+                    // succeeds (into the kernel buffer) and the line is lost;
+                    // only the next write fails. So look first.
+                    if peer_closed(&stream) {
+                        warn!(addr = %addr, "the sink closed the connection — reconnecting");
+                        pending = Some(line);
+                        break;
+                    }
+
                     // Write with optional per-write timeout
                     let write_result = if cfg.write_timeout_ms > 0 {
                         match timeout(
@@ -129,6 +138,21 @@ pub async fn run(addr: String, mut rx: mpsc::Receiver<String>, cfg: SinkConfig) 
                 sleep(backoff).await;
                 backoff = (backoff * 2).min(Duration::from_millis(cfg.reconnect_max_ms));
             }
+        }
+    }
+}
+
+/// The sink closed (or reset) the connection. A sink sends nothing, so
+/// anything it does send is read and dropped; only the end of the stream
+/// or an error counts. Does not wait.
+fn peer_closed(stream: &TcpStream) -> bool {
+    let mut buf = [0u8; 1024];
+    loop {
+        match stream.try_read(&mut buf) {
+            Ok(0) => return true,
+            Ok(_) => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return false,
+            Err(_) => return true,
         }
     }
 }
@@ -251,6 +275,50 @@ mod tests {
         );
 
         run_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn a_line_after_the_sink_closed_goes_to_the_next_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let (tx, rx) = mpsc::channel::<String>(8);
+        let run_handle = tokio::spawn(run(addr, rx, default_cfg()));
+
+        // The sink takes the first connection and closes it at once.
+        let (first, _) = listener.accept().await.unwrap();
+        drop(first);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Without the check the write would succeed into the dead
+        // connection and the line would be lost.
+        tx.send("after-close\n".to_string()).await.unwrap();
+        let (mut second, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+            .await
+            .expect("no second connection")
+            .unwrap();
+        let mut buf = [0u8; 64];
+        let n = tokio::time::timeout(Duration::from_secs(5), second.read(&mut buf))
+            .await
+            .expect("nothing received")
+            .unwrap();
+        assert_eq!(&buf[..n], b"after-close\n");
+        run_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn peer_closed_reads_and_drops_what_the_sink_sends() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let stream = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (mut sink, _) = listener.accept().await.unwrap();
+        assert!(!peer_closed(&stream));
+        sink.write_all(b"hello").await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!peer_closed(&stream));
+        drop(sink);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(peer_closed(&stream));
     }
 
     #[tokio::test]

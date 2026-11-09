@@ -91,6 +91,7 @@ tests/vtest/run.sh
 | `v0042_relay_reconnect.vtc` | Reconnects: `--source-user-file` is read again per connection (rotated password), `--source-idle-timeout`, a successful connect resets the failure counter, the third failure in a row ends the relay (`--source-reconnect-retries 3`, exit code 1) |
 | `v0043_relay_proxy.vtc` | Plain HTTP through a proxy: `--source-proxy` and `HTTP_PROXY` send the absolute-form request to the proxy, `--source-no-proxy` connects directly |
 | `v0044_relay_tls.vtc` | The relay on vigild's TLS stream: `--source-cacert` or `--source-insecure` with a client certificate (mTLS identity); without a certificate 403, without the CA no connection |
+| `v0045_relay_tcp_sink_reconnect.vtc` | The TCP sink stops and comes back on the same port: the relay reconnects and not one numbered line is missing |
 
 ## How it works
 

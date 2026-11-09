@@ -611,7 +611,7 @@ Key parameters:
 --include REGEX                  Forward a line only if it matches this regex (repeatable)
 --exclude REGEX                  Drop a line if it matches this regex (applied after --include, repeatable)
 --max-line-bytes BYTES           Longest message; longer lines are forwarded in parts (default: 131072)
---multiline PRESET               --kubernetes: join stack traces (java, python, indent)
+--multiline PRESET               Join stack traces into one record (java, python, indent)
 ```
 
 **From vigild's TLS API** — a relay on another host (or in another
@@ -628,6 +628,16 @@ vigil-log-relay \
 
 The file holds `user:password`; the identity can come from a layer file (see
 [Identities](configuration.md#identities)).
+
+**TCP sink** — when the sink is down or restarts, the relay connects again
+(`--dest-reconnect-delay`, doubling up to `--dest-reconnect-max`) and keeps
+the lines meanwhile, up to 8192; beyond that it drops lines with the
+warning `send buffer full — dropping log line`. Before each write it checks
+whether the sink closed the connection, so a restarted sink gets the line
+that would otherwise vanish into the dead connection. Plain TCP has no
+acknowledgement, though: a line written in the moment the sink goes away
+can still be lost. A sink that must not lose a line needs its own
+delivery guarantee (e.g. a local spool of the collector).
 
 **Stdout sink** — `--stdout-sink` writes all forwarded lines directly to stdout instead of
 opening a TCP connection. Useful for debugging or piping output to another process.
