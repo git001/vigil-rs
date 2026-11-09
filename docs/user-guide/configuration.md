@@ -518,7 +518,10 @@ watched files) run outside vigild's event loop and are given up after
 process; vigild therefore stops waiting for it, logs a warning, and starts no
 further read of the same files until the hanging one returns. A start whose
 files cannot be read in time fails (`error`, reason in the log); the rest of
-vigild (other services, the API, reaping) keeps working.
+vigild (other services, the API, reaping) keeps working. At most 16 such
+reads run at a time; when that many hang, further ones wait until their
+time limit runs out. A service or exec check that reads no files (no
+`env-file`, no template, no `user`) does not need this at all.
 
 #### `startup`
 

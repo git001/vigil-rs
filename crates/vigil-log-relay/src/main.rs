@@ -49,6 +49,7 @@ fn main() -> Result<()> {
             cli.worker_threads,
             vigil_types::runtime::available_cpus(),
         ))
+        .max_blocking_threads(vigil_types::runtime::MAX_BLOCKING_THREADS)
         .enable_all()
         .build()?
         .block_on(run(cli))

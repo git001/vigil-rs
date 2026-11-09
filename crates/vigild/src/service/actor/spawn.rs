@@ -15,7 +15,7 @@ use crate::process_util::{
     EnvPolicy, apply_credentials, apply_env, parse_command_templated, resolve_credentials,
 };
 use crate::service::notify::NotifySocket;
-use crate::template::{EnvLayer, Renderer, child_env, off_runtime, vars_of};
+use crate::template::{EnvLayer, Renderer, child_env, may_block, off_runtime_if, vars_of};
 
 use super::Actor;
 
@@ -46,11 +46,20 @@ impl Actor {
         // pass-env policy lets through plus env-file (see `child_env`);
         // `command` sees the child's final environment. Rendering reads
         // files, so it runs off the async runtime with a timeout.
+        let blocking = may_block(
+            &self.config.env_file,
+            self.config
+                .environment
+                .values()
+                .map(String::as_str)
+                .chain([cmd_str]),
+            creds.is_some(),
+        );
         let cmd_str = cmd_str.to_owned();
         let env_file = self.config.env_file.clone();
         let environment = self.config.environment.clone();
         let creds_for_env = creds.clone();
-        let (mut env, argv, reads) = off_runtime("templates", move || {
+        let (mut env, argv, reads) = off_runtime_if(blocking, "templates", move || {
             let renderer = Renderer::new();
             let env = child_env(
                 &renderer,

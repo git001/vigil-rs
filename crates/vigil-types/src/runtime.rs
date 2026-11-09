@@ -14,6 +14,12 @@ use std::num::NonZeroUsize;
 /// Workers when none are requested (fewer when fewer CPUs are available).
 pub const DEFAULT_WORKER_THREADS: usize = 2;
 
+/// Upper bound of tokio's blocking pool (file reads, user lookups), instead
+/// of tokio's 512. Reads have a time limit; when this many hang (e.g. on a
+/// dead NFS mount), further ones wait in the queue until theirs runs out
+/// instead of each taking another thread.
+pub const MAX_BLOCKING_THREADS: usize = 16;
+
 /// `requested`, or [`DEFAULT_WORKER_THREADS`] but not more than `available`
 /// CPUs (at least 1).
 pub fn worker_threads(requested: Option<NonZeroUsize>, available: usize) -> usize {

@@ -297,3 +297,19 @@ fn fallback_values_are_returned_verbatim() {
         "--loglevel=debug"
     );
 }
+
+#[test]
+fn may_block_only_for_files_templates_or_a_user_switch() {
+    use super::may_block;
+    let none: [&str; 0] = [];
+    assert!(!may_block(&[], ["plain", "--port=8080"], false));
+    assert!(!may_block(&[], none, false));
+    assert!(may_block(&["/vault/secrets/db".into()], none, false));
+    assert!(may_block(&[], ["{{ file('/x') }}"], false));
+    assert!(may_block(
+        &[],
+        ["{% if env.A is defined %}-v{% endif %}"],
+        false
+    ));
+    assert!(may_block(&[], none, true));
+}

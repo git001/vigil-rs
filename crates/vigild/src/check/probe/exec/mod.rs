@@ -11,7 +11,7 @@ use tracing::{debug, warn};
 use vigil_types::plan::{ExecCheck, ServiceConfig};
 
 use crate::process_util::{EnvPolicy, apply_credentials, apply_env, resolve_credentials};
-use crate::template::{EnvLayer, Renderer, child_env, off_runtime};
+use crate::template::{EnvLayer, Renderer, child_env, may_block, off_runtime_if};
 
 use super::{ProbeResult, timed_out};
 
@@ -136,10 +136,19 @@ async fn build_command(
     // Service context first (env-file, environment), the check's
     // environment on top; templates rendered as for the service, off the
     // async runtime (they may read files).
+    let blocking = may_block(
+        ctx_svc.map_or(&[][..], |s| &s.env_file),
+        ctx_svc
+            .into_iter()
+            .flat_map(|s| s.environment.values())
+            .chain(exec.environment.values())
+            .map(String::as_str),
+        creds.is_some(),
+    );
     let ctx_layer = ctx_svc.map(|s| (s.env_file.clone(), s.environment.clone()));
     let check_env = exec.environment.clone();
     let creds_for_env = creds.clone();
-    let built = off_runtime("exec check environment", move || {
+    let built = off_runtime_if(blocking, "exec check environment", move || {
         let mut layers = Vec::with_capacity(2);
         if let Some((env_file, environment)) = &ctx_layer {
             layers.push(EnvLayer {

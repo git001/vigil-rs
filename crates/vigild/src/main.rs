@@ -77,6 +77,7 @@ fn main() -> anyhow::Result<()> {
             args.worker_threads,
             vigil_types::runtime::available_cpus(),
         ))
+        .max_blocking_threads(vigil_types::runtime::MAX_BLOCKING_THREADS)
         .enable_all()
         .build()?
         .block_on(async_main(args, use_reaper))
