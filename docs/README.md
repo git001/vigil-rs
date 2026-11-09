@@ -57,6 +57,8 @@ vigil-log-relay  Forwards log streams (vigild, Kubernetes pods) to a TCP sink.
 ```bash
 # Start the daemon (runtime files under /tmp/vigil, e.g. on OpenShift)
 vigild --layers-dir /etc/vigil/layers --path-prefix /tmp/vigil
+# Keep the prefix at most 78 bytes long: Unix socket paths are limited to
+# 107 bytes (see user-guide/installation.md, "Socket path limit").
 
 # Use the CLI (inside the container; same prefix)
 export VIGIL_PATH_PREFIX=/tmp/vigil

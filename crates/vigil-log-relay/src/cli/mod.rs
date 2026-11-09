@@ -41,6 +41,7 @@ pub struct Cli {
     pub source_url: Option<String>,
 
     /// Read ndjson stream via a Unix-domain socket (cannot combine with --source-url).
+    /// At most 107 bytes (Linux limit for Unix socket paths).
     #[arg(
         long,
         env = "SOURCE_SOCKET",

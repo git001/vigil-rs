@@ -63,6 +63,12 @@ Default: **1000 lines** per service.
 vigild --log-buffer 5000 --layers-dir /etc/vigil/layers
 ```
 
+**Memory:** a full buffer costs about its line count times (line length +
+30 bytes) per service: about 120 KiB with the default 1000 lines of 90
+characters, 12 MiB for 100 such services. It counts against the
+container's memory limit; see
+[Sizing memory and CPU](../operator-guide/container-setup.md#sizing-memory-and-cpu).
+
 The buffer size also governs the live stream: the broadcast channel holds
 `max(64, min(buffer/2, 4096))` entries. A consumer of `/v1/logs/follow` that
 falls this far behind skips the entries it missed and continues; see

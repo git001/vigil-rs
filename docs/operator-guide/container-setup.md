@@ -63,6 +63,14 @@ ENTRYPOINT ["/usr/local/bin/vigild"]
 `vigil` inside the container finds the socket through `VIGIL_PATH_PREFIX`;
 no `--socket` is needed on either side.
 
+> [!WARNING]
+> **Keep `VIGIL_PATH_PREFIX` at 78 bytes or less.** A Unix socket path can be
+> at most 107 bytes long (a Linux limit). The control socket
+> `<path-prefix>/vigild.sock` adds 12 bytes, a `ready: notify` socket
+> `<path-prefix>/notify/<16 hex digits>.sock` adds 29. A prefix on a deep
+> volume mount fails: vigild does not start, or the notify service does not
+> start. See [Socket path limit](../user-guide/installation.md#socket-path-limit-107-bytes).
+
 ## OCI image labels
 
 Add standard OCI annotations for compliance and tooling:
@@ -78,8 +86,8 @@ LABEL org.opencontainers.image.description="My application supervised by vigil-r
 | Flag | Env var | Default | Description |
 |---|---|---|---|
 | `--layers-dir <PATH>` | `VIGIL_LAYERS` | `/etc/vigil/layers` | Directory containing layer YAML files |
-| `--path-prefix <DIR>` | `VIGIL_PATH_PREFIX` | `/run/vigil` | Directory for everything vigild creates at runtime (control socket, sd_notify sockets). Checked at startup: must be a directory owned by vigild's UID, not a symlink, not writable by others (`g+w` is fine). A missing **last** component is created with mode 0711 (search only for others), and so is `notify/` inside it. vigild refuses to start otherwise. On OpenShift use e.g. `/tmp/vigil`. |
-| `--socket <PATH>` | `VIGIL_SOCKET` | `<path-prefix>/vigild.sock` | Unix socket path for the HTTP API. vigild refuses to start if the path is a symlink, a non-socket file, or a stale socket it cannot remove. |
+| `--path-prefix <DIR>` | `VIGIL_PATH_PREFIX` | `/run/vigil` | Directory for everything vigild creates at runtime (control socket, sd_notify sockets). Checked at startup: must be a directory owned by vigild's UID, not a symlink, not writable by others (`g+w` is fine). A missing **last** component is created with mode 0711 (search only for others), and so is `notify/` inside it. vigild refuses to start otherwise. On OpenShift use e.g. `/tmp/vigil`. **At most 78 bytes** ([socket path limit](../user-guide/installation.md#socket-path-limit-107-bytes)). |
+| `--socket <PATH>` | `VIGIL_SOCKET` | `<path-prefix>/vigild.sock` | Unix socket path for the HTTP API. vigild refuses to start if the path is a symlink, a non-socket file, or a stale socket it cannot remove, or if it is longer than **107 bytes** ([socket path limit](../user-guide/installation.md#socket-path-limit-107-bytes)). |
 | `--socket-mode <OCTAL>` | `VIGIL_SOCKET_MODE` | `600` | Permission bits of the Unix socket. While no identity was added over the API, root and vigild's own UID are admin on the socket (bootstrap); widen this (e.g. `660`) only together with local identities. |
 | `--tls-addr <ADDR>` | `VIGIL_TLS_ADDR` | — | Enable HTTPS listener, e.g. `0.0.0.0:8443` |
 | `--tls-client-ca <PATH>` | `VIGIL_TLS_CLIENT_CA` | — | PEM CA certificate(s) to verify client certificates (mTLS); see [TLS](tls.md) |
@@ -103,6 +111,47 @@ container what its services need, plus a few millicores for vigild. The
 other direction applies too: with a CPU limit below 1 CPU vigild uses one
 thread, and you do not need to raise the limit to get two. The same holds
 for `VIGIL_LOG_WORKER_THREADS` of `vigil-log-relay`.
+
+## Sizing memory and CPU
+
+The container's memory limit covers **every process in it**: vigild, the
+services, the processes that exec checks start, and `vigil-log-relay` if it
+runs there. Size the limit after the services first; vigild's own share
+grows with the number of services and checks and with how much they log:
+
+| Part | Memory (RSS) | CPU |
+|---|---|---|
+| vigild without services | about 22 MiB | none while idle |
+| each service | about 30 KiB, plus its log buffer | none while it is quiet |
+| each service's log buffer | up to `--log-buffer` lines (default 1000), each line's length plus about 30 bytes: about 120 KiB with 1000 lines of 90 characters | about 18 µs per line (each line is also written to vigild's stdout) |
+| each exec check | almost nothing in vigild; **every run starts a process** (`command`), which counts against the limit while it runs | about 0.5 millicores per run per second, plus the command's own CPU |
+| each HTTP or TCP check | runs inside vigild, almost nothing | small |
+| reading files (`env-file`, templates, `user`) | up to 16 extra threads of about 2 MiB each while starts read files; they end after 10 s idle | — |
+
+Measured with the release build on Linux x86_64 (2 runtime workers):
+
+| Setup | vigild RSS | vigild CPU |
+|---|---|---|
+| no services | 22 MiB | 0 |
+| 20 quiet services | 29 MiB | 0 |
+| 100 quiet services | 31 MiB | 0 |
+| 100 exec checks, `period: 1s` | 27 MiB | 50 millicores |
+| 100 services, 100 lines/s each, buffers full | 43 MiB | 180 millicores |
+| the same with `--log-buffer 100` | 33 MiB | — |
+
+As a rule of thumb, reserve for vigild **25 MiB plus 150 KiB per service**
+at the default log buffer, and add 32 MiB if many services that read files
+start at the same time. Services that write long lines need more: the
+buffer keeps whole lines. Lower `--log-buffer` when many services log a
+lot: `vigil logs` and `/v1/logs` then go back fewer lines, and a slow
+`/v1/logs/follow` consumer skips lines sooner (see
+[Logging](../user-guide/logging.md#log-ring-buffer)); the output on
+vigild's stdout is unaffected. Each exec check costs a
+process start per `period`: many exec checks with a short period cost more
+CPU than one HTTP check for the same thing.
+
+The Pod example in [Orchestrators](orchestrators.md) shows a `resources`
+block; the numbers above tell how much of it vigild itself uses.
 
 ## Signal forwarding
 

@@ -21,14 +21,14 @@ pub(crate) struct Args {
         long,
         env = "VIGIL_PATH_PREFIX",
         default_value = vigil_types::paths::DEFAULT_PATH_PREFIX,
-        help = "Runtime directory of vigild (same as vigild --path-prefix).\nThe socket is <path-prefix>/vigild.sock unless --socket is set."
+        help = "Runtime directory of vigild (same as vigild --path-prefix).\nThe socket is <path-prefix>/vigild.sock unless --socket is set.\nAt most 95 bytes, Unix socket paths are limited to 107."
     )]
     path_prefix: PathBuf,
 
     #[arg(
         long,
         env = "VIGIL_SOCKET",
-        help = "Unix socket path of the vigild daemon.\nDefault: <path-prefix>/vigild.sock. Ignored when --url is set."
+        help = "Unix socket path of the vigild daemon.\nDefault: <path-prefix>/vigild.sock. Ignored when --url is set.\nAt most 107 bytes (Linux limit for Unix socket paths)."
     )]
     socket: Option<PathBuf>,
 

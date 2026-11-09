@@ -14,7 +14,7 @@ vigil [FLAGS] <COMMAND>
 | Flag | Env var | Default | Description |
 |---|---|---|---|
 | `--path-prefix <DIR>` | `VIGIL_PATH_PREFIX` | `/run/vigil` | Runtime directory of vigild (same variable as for vigild). The socket is `<path-prefix>/vigild.sock` unless `--socket` is set. |
-| `--socket <PATH>` | `VIGIL_SOCKET` | `<path-prefix>/vigild.sock` | Unix socket path. Ignored when `--url` is set. |
+| `--socket <PATH>` | `VIGIL_SOCKET` | `<path-prefix>/vigild.sock` | Unix socket path, **at most 107 bytes** ([socket path limit](installation.md#socket-path-limit-107-bytes)). Ignored when `--url` is set. |
 | `--socket-uid <UID>` | `VIGIL_SOCKET_UID` | — | Also trust a daemon socket owned by this UID. By default `vigil` only talks to a vigild running as root or as your own UID and refuses any other listener. |
 | `--url <URL>` | `VIGIL_URL` | — | Base URL of vigild's HTTPS API (e.g. `https://host:8443`). Overrides `--socket`. vigild has no plain HTTP listener; `http://` only makes sense through a proxy or tunnel that adds TLS. |
 | `-k`, `--insecure` | `VIGIL_INSECURE` | false | Skip TLS certificate verification. Only effective with `--url https://...`. The variable takes `true` or `false`. |
@@ -508,7 +508,7 @@ from its variable; combine several with `|`.
 
 | Flag | Env var | Description |
 |---|---|---|
-| `--source-socket PATH` | `SOURCE_SOCKET` | Read the stream over a Unix socket, e.g. vigild's `<path-prefix>/vigild.sock` |
+| `--source-socket PATH` | `SOURCE_SOCKET` | Read the stream over a Unix socket, e.g. vigild's `<path-prefix>/vigild.sock`. **At most 107 bytes** ([socket path limit](installation.md#socket-path-limit-107-bytes)) |
 | `--source-url URL` | `SOURCE_URL` | Read the stream from an HTTP(S) URL, e.g. `https://vigild:8443/v1/logs/follow?format=ndjson` |
 | `--kubernetes` | `SOURCE_KUBERNETES` | Stream the logs of Running pods via the Kubernetes API |
 

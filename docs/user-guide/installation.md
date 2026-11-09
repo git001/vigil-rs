@@ -85,8 +85,8 @@ environment variable shown; boolean variables take `true` or `false`.
 | Flag | Env var | Default | Description |
 |------|---------|---------|-------------|
 | `--layers-dir <PATH>` | `VIGIL_LAYERS` | `/etc/vigil/layers` | Directory containing layer YAML files |
-| `--path-prefix <DIR>` | `VIGIL_PATH_PREFIX` | `/run/vigil` | Directory for everything vigild creates at runtime (control socket, `ready: notify` sockets). Must be owned by vigild's UID, not a symlink, not writable by others; a missing last component is created (mode `0711`). On OpenShift use e.g. `/tmp/vigil` |
-| `--socket <PATH>` | `VIGIL_SOCKET` | `<path-prefix>/vigild.sock` | Unix socket for the HTTP API |
+| `--path-prefix <DIR>` | `VIGIL_PATH_PREFIX` | `/run/vigil` | Directory for everything vigild creates at runtime (control socket, `ready: notify` sockets). Must be owned by vigild's UID, not a symlink, not writable by others; a missing last component is created (mode `0711`). On OpenShift use e.g. `/tmp/vigil`. **At most 78 bytes**, see [Socket path limit](#socket-path-limit-107-bytes) |
+| `--socket <PATH>` | `VIGIL_SOCKET` | `<path-prefix>/vigild.sock` | Unix socket for the HTTP API. **At most 107 bytes**, see [Socket path limit](#socket-path-limit-107-bytes) |
 | `--socket-mode <MODE>` | `VIGIL_SOCKET_MODE` | `600` | Permission bits of the Unix socket (octal). Widen (e.g. `660`) only together with local identities: without identities every caller that can connect is admin |
 | `--tls-addr <ADDR>` | `VIGIL_TLS_ADDR` | *(disabled)* | `host:port` for the HTTPS API; port `0` picks a free port (shown in the log and as `https-address` in `vigil system-info`). vigild does not start if the address cannot be bound |
 | `--cert <PATH>` | `VIGIL_CERT` | *(auto-generated)* | PEM certificate for TLS |
@@ -116,6 +116,29 @@ vigild creates the path prefix when its parent exists and is writable, so
 `/run/vigil` needs no `mkdir` when vigild runs as root. Running as another
 user, point `--path-prefix` at a directory that user may create, e.g.
 `/tmp/vigil`.
+
+### Socket path limit: 107 bytes
+
+> [!WARNING]
+> **A Unix socket path can be at most 107 bytes long** (the size of
+> `sun_path` in the kernel, minus the closing NUL). This is a limit of
+> Linux, not of vigil-rs, and it counts bytes, not characters. It applies
+> to every socket vigild creates under the path prefix:
+>
+> | Socket | Path | Longest `--path-prefix` |
+> |---|---|---|
+> | Control socket | `<path-prefix>/vigild.sock` | 95 bytes |
+> | `ready: notify` | `<path-prefix>/notify/<16 hex digits>.sock` | **78 bytes** |
+>
+> **Keep `--path-prefix` at 78 bytes or less**, e.g. `/run/vigil` or
+> `/tmp/vigil`. A control socket path that is too long stops vigild at
+> startup with `socket path "…" is N bytes, the limit for Unix sockets is
+> 107`. A notify socket path that is too long only shows when a
+> `ready: notify` service starts: that start fails (`binding notify
+> socket`). Deep directories reach the limit easily, e.g. a CI workspace, a
+> volume mounted under a long path, or a `$TMPDIR` inside a home directory.
+> The same limit applies to `--socket` and to the paths given to
+> `vigil --socket` and `vigil-log-relay --source-socket`.
 
 Minimal Dockerfile setup:
 

@@ -50,10 +50,12 @@ pub(crate) struct Args {
     /// sd_notify sockets). Checked at startup: must be a directory owned by
     /// vigild's UID, not a symlink, not writable by others. A missing last
     /// component is created (mode 0711). On OpenShift use e.g. /tmp/vigil.
+    /// WARNING: at most 78 bytes, Unix socket paths are limited to 107.
     #[arg(long, env = "VIGIL_PATH_PREFIX", default_value = path_prefix::DEFAULT_PATH_PREFIX)]
     pub(crate) path_prefix: PathBuf,
 
     /// Unix socket path for the HTTP API. Default: <path-prefix>/vigild.sock.
+    /// At most 107 bytes (Linux limit for Unix socket paths).
     #[arg(long, env = "VIGIL_SOCKET")]
     pub(crate) socket: Option<PathBuf>,
 

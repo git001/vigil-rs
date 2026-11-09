@@ -86,6 +86,11 @@ vigild --layers-dir /etc/vigil/layers
 vigild --layers-dir /etc/vigil/layers --path-prefix /tmp/vigil
 ```
 
+> [!WARNING]
+> **Keep `--path-prefix` short: at most 78 bytes.** Unix socket paths are
+> limited to 107 bytes by Linux, and vigild puts its sockets under the
+> prefix. See [Socket path limit](docs/user-guide/installation.md#socket-path-limit-107-bytes).
+
 ### Use the CLI
 
 ```bash

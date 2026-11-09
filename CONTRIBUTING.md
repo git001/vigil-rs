@@ -109,7 +109,10 @@ Sign off your commits (`git commit -s`).
   `true` or `false`. Arguments of single `vigil` commands are the exception.
 - **Unprivileged containers.** Every feature must work under OpenShift's
   restricted profile: a random UID, no capabilities, a read-only `/run`.
-  Runtime files go under `--path-prefix`.
+  Runtime files go under `--path-prefix`. A socket path there can be at
+  most 107 bytes (Linux `sun_path`), so tests use a short temporary
+  directory, not a path inside the scratch or workspace directory; a
+  `--path-prefix` longer than 78 bytes breaks `ready: notify`.
 - **API errors.** Handlers check the caller's access before they look at
   the query or the body, and every error uses the JSON error envelope.
 - **Small files.** Keep source files at about 200 lines (without tests);

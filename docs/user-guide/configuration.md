@@ -624,6 +624,15 @@ quickly readiness is detected.
   service user) and passes its path in `NOTIFY_SOCKET`, also with
   `pass-env: false`. The socket is removed when the process exits, so a
   leftover process of an earlier start cannot report into a later one.
+
+  > [!WARNING]
+  > **This needs a `--path-prefix` of at most 78 bytes.** A Unix socket
+  > path can be at most 107 bytes long (a Linux limit), and the notify
+  > socket adds at least 29 (`/notify/<16 hex digits>.sock`; the service
+  > name is left out when it does not fit). vigild starts with a longer
+  > prefix, but every start of a `ready: notify` service then fails
+  > (`binding notify socket`). See
+  > [Socket path limit](installation.md#socket-path-limit-107-bytes).
 - Understood messages: `READY=1`, `STATUS=<text>` (shown as `status-message`
   in the API and in `vigil services list`), `STOPPING=1` (logged). Other
   fields are ignored; file descriptors (`FDSTORE=1`) are closed. Watchdog

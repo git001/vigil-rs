@@ -32,9 +32,11 @@ spec:
         initialDelaySeconds: 10
         periodSeconds: 15
 
-      # Size these for the services vigild runs; vigild itself needs a few
-      # millicores and about 20 MiB. VIGIL_WORKER_THREADS is not a CPU
-      # request, see container-setup.md.
+      # Size these for the services vigild runs, including the processes of
+      # exec checks. vigild itself needs about 25 MiB plus 150 KiB per
+      # service, more with many services or checks; see "Sizing memory and
+      # CPU" in container-setup.md. VIGIL_WORKER_THREADS is not a CPU
+      # request.
       resources:
         requests:
           cpu: 250m
@@ -54,7 +56,9 @@ spec:
 
 The example sets no CPU limit, a common choice to avoid throttling. vigild
 then sees every CPU of the node but still uses only 2 worker threads (see
-[`VIGIL_WORKER_THREADS`](container-setup.md#vigild-cli-flags)).
+[`VIGIL_WORKER_THREADS`](container-setup.md#vigild-cli-flags)). How much
+memory and CPU vigild needs per service and per check is listed in
+[Sizing memory and CPU](container-setup.md#sizing-memory-and-cpu).
 
 ### Environment variables and Secrets
 
