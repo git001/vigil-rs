@@ -164,6 +164,7 @@ digraph service_dependencies {
             <tr><td align="left"><b>requires: [D]</b></td><td align="left">S waits for D, and is stopped when D stops for good</td></tr>
             <tr><td align="left"><b>startup: disabled</b></td><td align="left">not started by autostart; only by hand</td></tr>
             <tr><td align="left"><b>schedule</b></td><td align="left">started by its cron schedule, not by autostart</td></tr>
+            <tr><td align="left"><b>shutdown</b></td><td align="left">the other way round: D stops after S has exited</td></tr>
             </table>
         >];
     }

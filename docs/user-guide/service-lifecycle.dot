@@ -62,7 +62,7 @@ digraph service_lifecycle {
         fontcolor = "#374151";
 
         stop_why [fillcolor = "#f3f4f6",
-                  label = "vigil services stop / restart,\nreplan with a changed config,\non-check-failure: restart,\na required service stopped"];
+                  label = "vigil services stop / restart,\nreplan with a changed config,\non-check-failure: restart,\na required service stopped,\nvigild shuts down (after the\nservices that depend on it)"];
         stopping [fillcolor = "#e5e7eb", penwidth = 2,
                   label = "stopping\nstop-signal (SIGTERM), SIGKILL\nafter kill-delay (5s)"];
         inactive_stop [fillcolor = "#e5e7eb", penwidth = 2,
