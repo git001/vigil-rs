@@ -20,6 +20,8 @@ All notable changes to vigil-rs are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+Upgrading from v3: see the [migration guide](docs/user-guide/migration-v3-to-v4.md).
 """
 
 body = """
@@ -75,6 +77,14 @@ split_commits = false
 
 commit_preprocessors = [
     { pattern = '\(#([0-9]+)\)', replace = "([#${1}](https://github.com/git001/vigil-rs/pull/${1}))" },
+    # Five v4 commits put the "!" before the scope ("fix!(vigild):"), which
+    # is no conventional commit: their type and BREAKING CHANGE footer would
+    # be lost.
+    { pattern = '^(\w+)!\(([^)]*)\):', replace = "${1}(${2})!:" },
+    # 87335a3: a footer line starting with "`pass-env-glob: " would be read
+    # as a footer of its own and cut the migration note.
+    { pattern = 'e\.g\.\n`pass-env-glob', replace = "e.g. `pass-env-glob" },
+    { pattern = 'An\nenv:VAR that is unset', replace = "An env:VAR that is unset" },
 ]
 
 # First match wins.
@@ -88,6 +98,9 @@ commit_parsers = [
     # whatever their type ("type!:" or a "BREAKING CHANGE:" footer).
     { message = "^\\w+(\\(.*\\))?!:", group = "<!-- 0 -->⚠ Breaking Changes" },
     { footer = "^BREAKING[ -]CHANGE", group = "<!-- 0 -->⚠ Breaking Changes" },
+
+    # Mentions security in its body, but only fixes the examples.
+    { sha = "6d08627f2f5e68ce82428500ed69cb282156f80e", group = "<!-- 5 -->Fixed" },  # 4.0: make every example run with v4
 
     # Security first, so a security fix lands under "Security", not "Fixed".
     # Only code/dependency commits count: docs that merely mention
