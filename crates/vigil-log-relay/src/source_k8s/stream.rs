@@ -23,6 +23,8 @@ pub struct StreamCtx {
     pub stream_param: Arc<AtomicBool>,
     pub filter: Arc<LineFilter>,
     pub tx: mpsc::Sender<String>,
+    /// `--max-line-bytes` and `--multiline*`.
+    pub lines: Arc<crate::join::JoinConfig>,
 }
 
 /// Start a stream task if none is active for this (pod, container_key)

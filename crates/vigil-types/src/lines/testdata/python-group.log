@@ -1,0 +1,14 @@
+2026-11-09 02:31:10,969 ERROR app: group failed
+  + Exception Group Traceback (most recent call last):
+  |   File "/app/pytrace.py", line 6, in case
+  |     try: f()
+  |          ~^^
+  |   File "/app/pytrace.py", line 16, in group
+  |     raise ExceptionGroup("several", [ValueError("a"), TypeError("b")])
+  | ExceptionGroup: several (2 sub-exceptions)
+  +-+---------------- 1 ----------------
+    | ValueError: a
+    +---------------- 2 ----------------
+    | TypeError: b
+    +------------------------------------
+2026-11-09 02:31:10,972 WARNING app: next

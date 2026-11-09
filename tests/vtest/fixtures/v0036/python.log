@@ -1,0 +1,12 @@
+2026-11-09 10:15:30,123 ERROR app: request failed
+Traceback (most recent call last):
+  File "/app/app.py", line 10, in handle
+    load()
+KeyError: 'id'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/app/app.py", line 12, in handle
+RuntimeError: load failed
+2026-11-09 10:15:31,000 INFO app: next

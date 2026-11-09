@@ -9,4 +9,4 @@ mod tests;
 
 pub use push::{spawn_push_tcp, spawn_push_unix};
 pub use reader::spawn_reader;
-pub use store::{DEFAULT_BUFFER_CAPACITY, LogStore};
+pub use store::{DEFAULT_BUFFER_CAPACITY, LogOptions, LogStore, MAX_MAX_LINE, MIN_MAX_LINE};

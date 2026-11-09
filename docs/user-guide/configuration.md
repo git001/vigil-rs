@@ -156,6 +156,9 @@ services:
     logs-push-socket: /run/collector/input.sock  # push ndjson to a Unix socket
     logs-push-addr: 127.0.0.1:5170    # push ndjson to a TCP address (both may be set)
     logs-push-format: ndjson          # ndjson (default; currently the only supported format)
+    logs-multiline:                    # join the lines of a stack trace into one entry
+      preset: java                     # java | python | indent; or start: REGEX, or continue: REGEX
+      timeout: 200ms                   # wait this long for a further line (default: 200ms)
 
     # --- Layer merging ---
     override: merge                    # merge (default) | replace
@@ -862,6 +865,41 @@ filebeat.inputs:
 
 Format for pushed log lines. `ndjson` — one JSON object per line, same schema
 as `GET /v1/logs/follow?format=ndjson`.
+
+#### `logs-multiline`
+
+Joins the lines of a stack trace into one log entry, together with the log
+line before it. Exactly one of these sets the rule:
+
+| Key | A line belongs to the entry before it when … |
+|---|---|
+| `preset: java` | it is indented, starts with `Caused by: `, or names an exception class (`java.lang.IllegalStateException: boom`) |
+| `preset: python` | it is indented, is `Traceback (most recent call last):`, names an exception (`KeyError: 'id'`), is one of the sentences between chained exceptions, or is empty |
+| `preset: indent` | it starts with a space or a tab |
+| `start: REGEX` | it does not match (a matching line starts a new entry) |
+| `continue: REGEX` | it matches |
+
+`timeout` (default `200ms`, allowed `10ms` to `10s`) is how long an entry
+waits for a further line. An entry is at most `--log-max-line-bytes` long
+(default 128 KiB); a longer one is split. A later layer replaces the whole
+block. Two rules at once, an invalid regex, an unknown preset or key, and
+`logs-forward: passthrough` (vigild does not read the output then) are load
+errors.
+
+```yaml
+services:
+  api:
+    command: java -jar /app/api.jar
+    logs-multiline:
+      preset: java
+  worker:
+    command: python3 /app/worker.py
+    logs-multiline:
+      start: '^\d{4}-\d{2}-\d{2} '   # each log line starts with a date
+```
+
+See [Logging](logging.md#stack-traces-logs-multiline) for where the joined
+entry shows and how it looks.
 
 #### `override`
 

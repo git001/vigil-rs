@@ -1,0 +1,18 @@
+# vtest v0036: two services print a stack trace from a fixture file (path
+# in TRACE_DIR, passed on from vigild) and then wait. With logs-multiline
+# each trace must become one log entry together with its log line; the
+# line after it is an entry of its own.
+services:
+  java-app:
+    command: /bin/sh -c 'cat "$TRACE_DIR/java.log"; exec sleep 100'
+    startup: enabled
+    pass-env-glob: [TRACE_DIR]
+    logs-multiline:
+      preset: java
+  python-app:
+    command: /bin/sh -c 'cat "$TRACE_DIR/python.log"; exec sleep 100'
+    startup: enabled
+    pass-env-glob: [TRACE_DIR]
+    logs-multiline:
+      preset: python
+      timeout: 100ms

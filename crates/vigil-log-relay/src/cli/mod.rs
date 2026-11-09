@@ -6,6 +6,7 @@ use clap::Parser;
 
 mod connection;
 mod kubernetes;
+mod lines;
 mod reconnect;
 mod sink;
 #[cfg(test)]
@@ -13,6 +14,7 @@ mod tests;
 
 pub use connection::Connection;
 pub use kubernetes::Kubernetes;
+pub use lines::{Lines, record_limit};
 pub use reconnect::Reconnect;
 pub use sink::Sink;
 
@@ -72,6 +74,9 @@ pub struct Cli {
 
     #[command(flatten)]
     pub sink: Sink,
+
+    #[command(flatten)]
+    pub lines: Lines,
 
     // ---- Health Check -----------------------------------------------------
     /// Address serving GET /healthz → 200 ok / 503 stale. Port 0 picks a
@@ -145,6 +150,7 @@ impl Cli {
                 return Err(format!("{flag} cannot be used with --kubernetes"));
             }
         }
+        self.lines.multiline_rule()?;
         if self.conn.source_insecure && (self.kubernetes || self.source_socket.is_some()) {
             return Err(
                 "--source-insecure only applies to --source-url; with --kubernetes \

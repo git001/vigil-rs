@@ -18,13 +18,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Result, bail};
-use tokio::io::AsyncRead;
-use tokio::io::BufReader;
 use tokio::sync::mpsc;
 use tokio::time::interval;
-use tracing::{info, warn};
+use tracing::warn;
 
-use crate::{LineFilter, Liveness};
+use crate::Liveness;
 
 // ---------------------------------------------------------------------------
 // Configuration types (re-exported from crate root via main.rs)
@@ -37,6 +35,7 @@ pub struct ReconnectConfig {
     pub max_retries: u64,
 }
 
+#[derive(Default)]
 pub struct SourceConnConfig {
     /// TCP connect timeout in ms (0 = no timeout).
     pub connect_timeout_ms: u64,
@@ -44,6 +43,10 @@ pub struct SourceConnConfig {
     pub read_timeout_ms: u64,
     /// Per-line idle timeout in ms; reconnects if no line arrives (0 = disabled).
     pub idle_timeout_ms: u64,
+    /// Longest message and multi-line rule (`--max-line-bytes`,
+    /// `--multiline*`); a record may be longer, see
+    /// [`crate::cli::record_limit`].
+    pub join: crate::join::JoinConfig,
     /// TCP keepalive (see [`crate::keepalive`]).
     pub keepalive: crate::keepalive::Keepalive,
     /// Skip TLS certificate verification for the source connection.
@@ -70,29 +73,25 @@ pub struct SourceConnConfig {
 // Shared helpers (used by source_url and source_unix)
 // ---------------------------------------------------------------------------
 
-/// Forward one line to the TCP sink channel, handling both ndjson and SSE framing.
-///
-/// SSE metadata lines and keepalives are dropped. `data:` prefixes are stripped
-/// so the output is always plain ndjson regardless of source framing.
-pub fn forward_line(line: String, tx: &mpsc::Sender<String>, filter: &LineFilter) {
+/// The payload of a line, handling both ndjson and SSE framing: `None` for
+/// SSE metadata, keepalives and empty lines, the rest without a `data:`
+/// prefix, so the output is plain ndjson regardless of source framing.
+pub fn sse_payload(line: String) -> Option<String> {
     if line.is_empty() || line.starts_with(':') {
-        return;
+        return None;
     }
     if line.starts_with("event:") || line.starts_with("id:") || line.starts_with("retry:") {
-        return;
+        return None;
     }
-    let payload = if let Some(rest) = line.strip_prefix("data:") {
-        rest.trim_start_matches(' ').to_owned()
-    } else {
-        line
+    let payload = match line.strip_prefix("data:") {
+        Some(rest) => rest.trim_start_matches(' ').to_owned(),
+        None => line,
     };
-    if payload.is_empty() {
-        return;
-    }
-    if !filter.allow(&payload) {
-        return;
-    }
-    let mut payload = payload;
+    (!payload.is_empty()).then_some(payload)
+}
+
+/// Send one payload to the sink channel, as one line.
+pub fn queue_payload(mut payload: String, tx: &mpsc::Sender<String>) {
     payload.push('\n');
     if tx.try_send(payload).is_err() {
         warn!("send buffer full — dropping log line");
@@ -126,54 +125,10 @@ pub fn spawn_liveness_ticker(liveness: Arc<Liveness>) {
     });
 }
 
-/// Drive the inner streaming loop shared by `source_url` and `source_unix`.
-///
-/// Reads lines from `lines` until EOF, a read error, or an idle-timeout
-/// expiry.  Returns `true` on a clean EOF and `false` on any unclean exit
-/// (error or timeout), so the caller knows whether to increment the failure
-/// counter.
-///
-/// * `idle_timeout_ms` — per-line timeout in milliseconds; 0 disables it.
-/// * `source_label` — human-readable name used in log messages
-///   (e.g. the URL string or socket path).
-pub async fn stream_loop<R>(
-    mut lines: tokio::io::Lines<BufReader<R>>,
-    tx: &mpsc::Sender<String>,
-    filter: &LineFilter,
-    idle_timeout_ms: u64,
-    source_label: &str,
-) -> bool
-where
-    R: AsyncRead + Unpin,
-{
-    loop {
-        let next = if idle_timeout_ms > 0 {
-            match tokio::time::timeout(Duration::from_millis(idle_timeout_ms), lines.next_line())
-                .await
-            {
-                Ok(r) => r,
-                Err(_) => {
-                    warn!(source = %source_label, "idle timeout — reconnecting");
-                    return false;
-                }
-            }
-        } else {
-            lines.next_line().await
-        };
+mod keyed;
+mod stream;
 
-        match next {
-            Ok(Some(line)) => forward_line(line, tx, filter),
-            Ok(None) => {
-                info!(source = %source_label, "stream EOF — reconnecting");
-                return true;
-            }
-            Err(e) => {
-                warn!(source = %source_label, error = %e, "read error — reconnecting");
-                return false;
-            }
-        }
-    }
-}
+pub use stream::stream_loop;
 
 #[cfg(test)]
 mod tests;

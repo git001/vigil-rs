@@ -1,0 +1,33 @@
+vtest "Service output that is not clean text: invalid UTF-8 and a line longer than 16 KiB do not stop the reader"
+
+# fixtures/v0035: odd-output writes "before", two bytes that are not UTF-8,
+# 40000 times "x" in one line, "after", and then waits. All of it must
+# arrive, and the service must still run on its first start. With
+# --log-max-line-bytes 16384 the long line comes in 3 entries.
+process p1 -winsz 200 400 "${vigild} --layers-dir ${vtestdir}/fixtures/v0035 --socket ${tmpdir}/vigild.sock --path-prefix ${tmpdir}/run --log-max-line-bytes 16384" -start
+process p1 -expect-text 0 0 "API listening"
+process p1 -expect-text 0 0 "[odd-output] after"
+
+# Not restarted: one start, still active.
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url /v1/metrics -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "vigil_service_start_count_total.service=.odd-output.. 1[^0-9]"
+	expect resp.body ~ "vigil_service_active.service=.odd-output.. 1[^0-9]"
+} -run
+
+# The bad bytes became U+FFFD, the long line came in 3 entries (16384 +
+# 16384 + 7232 bytes), and "after" follows them.
+client c2 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/logs?services=odd-output&n=10" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "message.:.before."
+	expect resp.body ~ "message.:.\xef\xbf\xbd\xef\xbf\xbd."
+	expect resp.body ~ "message.:.x+..,[^]]*message.:.x+..,[^]]*message.:.x+..,[^]]*message.:.after."
+	expect resp.body !~ "message.:.x+..,[^]]*message.:.x+..,[^]]*message.:.x+..,[^]]*message.:.x+."
+} -run
+
+process p1 -kill TERM
+process p1 -wait

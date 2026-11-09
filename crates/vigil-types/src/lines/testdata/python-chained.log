@@ -1,0 +1,21 @@
+2026-11-09 02:31:10,902 ERROR app: chained failed
+Traceback (most recent call last):
+  File "/app/pytrace.py", line 10, in chained
+    try: load()
+         ~~~~^^
+  File "/app/pytrace.py", line 4, in load
+    def load(): return {}["id"]
+                       ~~^^^^^^
+KeyError: 'id'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/app/pytrace.py", line 6, in case
+    try: f()
+         ~^^
+  File "/app/pytrace.py", line 11, in chained
+    except KeyError as e: raise RuntimeError("load failed") from e
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: load failed
+2026-11-09 02:31:10,907 WARNING app: next

@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use futures::TryStreamExt;
-use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_util::io::StreamReader;
@@ -129,9 +128,9 @@ pub async fn run(
                 backoff = Duration::from_millis(cfg.initial_delay_ms);
 
                 let byte_stream = resp.bytes_stream().map_err(std::io::Error::other);
-                let lines = BufReader::new(StreamReader::new(byte_stream)).lines();
+                let reader = StreamReader::new(byte_stream);
 
-                let clean_eof = stream_loop(lines, &tx, &filter, conn.idle_timeout_ms, &url).await;
+                let clean_eof = stream_loop(reader, &tx, &filter, &conn, &url).await;
                 if !clean_eof {
                     failures = bump_failures(failures, cfg.max_retries, &url)?;
                 }

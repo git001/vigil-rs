@@ -12,11 +12,7 @@ fn passthrough() -> LineFilter {
 /// Send `line` through `forward_line` and return what arrived in the channel,
 /// with the trailing newline stripped for easier assertions.
 fn fwd(line: &str, filter: &LineFilter) -> Option<String> {
-    let (tx, mut rx) = mpsc::channel(4);
-    forward_line(line.to_owned(), &tx, filter);
-    rx.try_recv()
-        .ok()
-        .map(|s| s.trim_end_matches('\n').to_owned())
+    sse_payload(line.to_owned()).filter(|p| filter.allow(p))
 }
 
 // --- SSE skips ---
@@ -97,7 +93,7 @@ fn forward_line_respects_exclude_filter() {
 #[test]
 fn forwarded_line_ends_with_newline() {
     let (tx, mut rx) = mpsc::channel(4);
-    forward_line(r#"{"msg":"hi"}"#.to_owned(), &tx, &passthrough());
+    queue_payload(r#"{"msg":"hi"}"#.to_owned(), &tx);
     let got = rx.try_recv().unwrap();
     assert!(got.ends_with('\n'));
 }
@@ -125,4 +121,85 @@ fn bump_failures_exits_at_limit() {
 #[test]
 fn bump_failures_below_limit_is_ok() {
     assert!(bump_failures(1, 3, "src").is_ok());
+}
+
+#[tokio::test]
+async fn stream_loop_survives_invalid_utf8_and_splits_too_long_lines() {
+    let mut input = b"{\"a\":1}\n\xff{\"b\":2}\n".to_vec();
+    input.extend(std::iter::repeat_n(b'x', 12000));
+    input.extend(b"\n{\"c\":3}\n");
+    let (tx, mut rx) = mpsc::channel(8);
+    // --max-line-bytes 1024: records up to 6 × 1024 + 4096 = 10240 bytes.
+    let conn = SourceConnConfig {
+        join: crate::join::JoinConfig {
+            max: 1024,
+            multiline: None,
+        },
+        ..Default::default()
+    };
+    let clean_eof = stream_loop(&input[..], &tx, &passthrough(), &conn, "test").await;
+    assert!(clean_eof);
+    drop(tx);
+    let mut got = Vec::new();
+    while let Some(line) = rx.recv().await {
+        got.push(line);
+    }
+    let parts = ["x".repeat(10240) + "\n", "x".repeat(1760) + "\n"];
+    assert_eq!(
+        got,
+        [
+            "{\"a\":1}\n",
+            "\u{fffd}{\"b\":2}\n",
+            &parts[0],
+            &parts[1],
+            "{\"c\":3}\n"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn stream_loop_joins_stack_traces_per_service() {
+    let rec = |svc: &str, msg: &str| {
+        format!(
+            "{{\"service\":\"{svc}\",\"stream\":\"stdout\",\"message\":{}}}\n",
+            serde_json::to_string(msg).unwrap()
+        )
+    };
+    let input = [
+        rec("api", "ERROR failed"),
+        rec("web", "GET /"),
+        rec("api", "java.lang.IllegalStateException: boom"),
+        rec("api", "\tat a.B.c(B.java:1)"),
+        rec("api", "next"),
+    ]
+    .concat();
+    let conn = SourceConnConfig {
+        join: crate::join::JoinConfig {
+            max: 1024,
+            multiline: Some((
+                vigil_types::lines::Rule::Preset(vigil_types::plan::MultilinePreset::Java),
+                std::time::Duration::from_secs(10),
+            )),
+        },
+        ..Default::default()
+    };
+    let (tx, mut rx) = mpsc::channel(8);
+    assert!(stream_loop(input.as_bytes(), &tx, &passthrough(), &conn, "test").await);
+    drop(tx);
+    let mut got = Vec::new();
+    while let Some(line) = rx.recv().await {
+        got.push(line);
+    }
+    // At the end of the stream the pending entries are sent too.
+    got.sort();
+    let mut want = vec![
+        rec(
+            "api",
+            "ERROR failed\njava.lang.IllegalStateException: boom\n\tat a.B.c(B.java:1)",
+        ),
+        rec("api", "next"),
+        rec("web", "GET /"),
+    ];
+    want.sort();
+    assert_eq!(got, want);
 }

@@ -9,9 +9,11 @@ use serde::{Deserialize, Serialize};
 use super::{Override, append_unique};
 use crate::signal::StopSignal;
 
+mod multiline;
 mod options;
 mod watch_files;
 
+pub use multiline::{LogsMultiline, MultilinePreset};
 pub use options::{LogsForward, LogsPushFormat, OnExit, ReadyMode, ServiceType, Startup};
 pub use watch_files::{FileChangeAction, WatchFiles};
 
@@ -140,6 +142,10 @@ pub struct ServiceConfig {
     /// Format for pushed log lines. Default: `ndjson`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logs_push_format: Option<LogsPushFormat>,
+    /// Join the lines of a stack trace into one log entry. A later layer
+    /// replaces the whole block.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logs_multiline: Option<LogsMultiline>,
 }
 
 impl ServiceConfig {
@@ -182,6 +188,7 @@ pub(super) fn merge_service(base: &mut ServiceConfig, overlay: &ServiceConfig) {
             logs_push_socket,
             logs_push_addr,
             logs_push_format,
+            logs_multiline,
         ]
     );
     append_unique(&mut base.after, &overlay.after);

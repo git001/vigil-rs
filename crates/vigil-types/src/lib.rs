@@ -4,6 +4,8 @@
 pub mod api;
 pub mod duration;
 pub mod identity;
+#[cfg(feature = "lines")]
+pub mod lines;
 pub mod no_proxy;
 pub mod paths;
 pub mod plan;

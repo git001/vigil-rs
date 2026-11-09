@@ -184,6 +184,7 @@ async fn spawn_reader_feeds_log_store() {
         reader,
         Arc::clone(&store),
         false,
+        None,
     );
 
     use tokio::io::AsyncWriteExt;
@@ -210,6 +211,7 @@ async fn spawn_reader_records_correct_stream_type() {
         reader,
         Arc::clone(&store),
         false,
+        None,
     );
 
     use tokio::io::AsyncWriteExt;
@@ -221,6 +223,93 @@ async fn spawn_reader_records_correct_stream_type() {
     let tail = store.tail(&["stderr-svc".to_string()], 100).await;
     assert_eq!(tail.len(), 1);
     assert_eq!(tail[0].stream, LogStream::Stderr);
+}
+
+#[tokio::test]
+async fn spawn_reader_survives_invalid_utf8_and_splits_long_lines() {
+    use tokio::io::{AsyncWriteExt, duplex};
+    const MAX_LOG_LINE: usize = 1024;
+    let store = LogStore::with_max_line(100, 64, MAX_LOG_LINE);
+    assert_eq!(store.max_line(), MAX_LOG_LINE);
+    let (mut writer, reader) = duplex(1024);
+    spawn_reader(
+        "odd-svc".into(),
+        LogStream::Stdout,
+        reader,
+        Arc::clone(&store),
+        false,
+        None,
+    );
+
+    // Each write_all only returns once the reader took the bytes: a reader
+    // that stopped at the bad byte would make the later writes fail.
+    writer.write_all(b"before\n\xff\xfe\n").await.unwrap();
+    let long = vec![b'x'; MAX_LOG_LINE + 10];
+    writer.write_all(&long).await.unwrap();
+    writer.write_all(b"\nafter\n").await.unwrap();
+    drop(writer);
+
+    let svc = ["odd-svc".to_string()];
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let msgs = loop {
+        let tail = store.tail(&svc, 100).await;
+        if tail.len() >= 5 || std::time::Instant::now() > deadline {
+            break tail.into_iter().map(|e| e.message).collect::<Vec<_>>();
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    assert_eq!(msgs.len(), 5, "{msgs:?}");
+    assert_eq!(msgs[0], "before");
+    assert_eq!(msgs[1], "\u{fffd}\u{fffd}");
+    assert_eq!(msgs[2].len(), MAX_LOG_LINE);
+    assert_eq!(msgs[3], "x".repeat(10));
+    assert_eq!(msgs[4], "after");
+}
+
+#[tokio::test]
+async fn spawn_reader_joins_a_stack_trace_into_one_entry() {
+    use tokio::io::{AsyncWriteExt, duplex};
+    use vigil_types::plan::{LogsMultiline, MultilinePreset};
+    let store = LogStore::new(100, 64);
+    let (mut writer, reader) = duplex(1024);
+    let multiline = LogsMultiline {
+        preset: Some(MultilinePreset::Java),
+        timeout: Some("20ms".into()),
+        ..Default::default()
+    };
+    spawn_reader(
+        "java-svc".into(),
+        LogStream::Stdout,
+        reader,
+        Arc::clone(&store),
+        false,
+        Some(&multiline),
+    );
+    writer
+        .write_all(
+            b"ERROR failed\njava.lang.IllegalStateException: boom\n\tat a.B.c(B.java:1)\nnext\n",
+        )
+        .await
+        .unwrap();
+
+    // "next" is complete only after the timeout, while the pipe stays open.
+    let svc = ["java-svc".to_string()];
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let msgs = loop {
+        let tail = store.tail(&svc, 100).await;
+        if tail.len() >= 2 || std::time::Instant::now() > deadline {
+            break tail.into_iter().map(|e| e.message).collect::<Vec<_>>();
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    assert_eq!(
+        msgs,
+        [
+            "ERROR failed\njava.lang.IllegalStateException: boom\n\tat a.B.c(B.java:1)",
+            "next"
+        ]
+    );
+    drop(writer);
 }
 
 // -----------------------------------------------------------------------

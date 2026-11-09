@@ -30,6 +30,7 @@ pub(super) fn validate_service(plan: &Plan, name: &str, svc: &ServiceConfig) -> 
     crate::template::check_service(svc)?;
     validate_watch_files(svc)?;
     validate_healthy_time(svc)?;
+    validate_multiline(svc)?;
     parse_field("kill-delay", svc.kill_delay.as_deref())?;
     let delay = parse_field("backoff-delay", svc.backoff_delay.as_deref())?;
     let limit = parse_field("backoff-limit", svc.backoff_limit.as_deref())?;
@@ -135,5 +136,20 @@ fn validate_ready(plan: &Plan, svc: &ServiceConfig) -> anyhow::Result<()> {
         (_, Some(_)) => anyhow::bail!("ready-check is only valid with ready: check"),
         (_, None) => {}
     }
+    Ok(())
+}
+
+/// `logs-multiline:` needs exactly one valid rule and a timeout within its
+/// bounds, and output that vigild reads (not `logs-forward: passthrough`).
+fn validate_multiline(svc: &ServiceConfig) -> anyhow::Result<()> {
+    let Some(m) = &svc.logs_multiline else {
+        return Ok(());
+    };
+    anyhow::ensure!(
+        svc.logs_forward != Some(vigil_types::plan::LogsForward::Passthrough),
+        "logs-multiline needs output that vigild reads; with logs-forward: passthrough it does not"
+    );
+    // The entry size does not matter for the check.
+    vigil_types::lines::Multiline::from_config(m, 1).map_err(anyhow::Error::msg)?;
     Ok(())
 }

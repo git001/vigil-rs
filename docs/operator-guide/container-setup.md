@@ -98,6 +98,7 @@ LABEL org.opencontainers.image.description="My application supervised by vigil-r
 | `--reaper` | `VIGIL_REAPER` | — | Force subreaper mode (automatic when PID 1) |
 | `--log-format <FMT>` | `VIGIL_LOG_FORMAT` | `text` | Log format: `text` or `json` |
 | `--log-buffer <N>` | `VIGIL_LOG_BUFFER` | `1000` | Per-service log ring-buffer size (lines); see [Logging](../user-guide/logging.md) |
+| `--log-max-line-bytes <BYTES>` | `VIGIL_LOG_MAX_LINE_BYTES` | `131072` | Longest log entry of a service (1024 to 1048576 bytes); a longer line or joined stack trace is split. See [Logging](../user-guide/logging.md#long-lines) |
 | `--watch-layers <INTERVAL>` | `VIGIL_WATCH_LAYERS` | — | Reload the layers when their files change, checking every `INTERVAL` (`1s` to `24h`); see [Orchestrators](orchestrators.md#replan-on-configmap-change) |
 | `--worker-threads <N>` | `VIGIL_WORKER_THREADS` | `2` (1 with a single CPU) | Worker threads of the async runtime; each costs about 2 MiB. Without a limit tokio would start one per CPU of the node |
 
@@ -123,7 +124,7 @@ grows with the number of services and checks and with how much they log:
 |---|---|---|
 | vigild without services | about 22 MiB | none while idle |
 | each service | about 30 KiB, plus its log buffer | none while it is quiet |
-| each service's log buffer | up to `--log-buffer` lines (default 1000), each line's length plus about 30 bytes: about 120 KiB with 1000 lines of 90 characters | about 18 µs per line (each line is also written to vigild's stdout) |
+| each service's log buffer | up to `--log-buffer` entries (default 1000), each its length plus about 30 bytes: about 120 KiB with 1000 lines of 90 characters. An entry is at most `--log-max-line-bytes` (128 KiB): at worst 128 MiB per service, if every entry in the buffer is that long | about 18 µs per line (each line is also written to vigild's stdout) |
 | each exec check | almost nothing in vigild; **every run starts a process** (`command`), which counts against the limit while it runs | about 0.5 millicores per run per second, plus the command's own CPU |
 | each HTTP or TCP check | runs inside vigild, almost nothing | small |
 | reading files (`env-file`, templates, `user`) | up to 16 extra threads of about 2 MiB each while starts read files; they end after 10 s idle | — |
@@ -142,7 +143,9 @@ Measured with the release build on Linux x86_64 (2 runtime workers):
 As a rule of thumb, reserve for vigild **25 MiB plus 150 KiB per service**
 at the default log buffer, and add 32 MiB if many services that read files
 start at the same time. Services that write long lines need more: the
-buffer keeps whole lines. Lower `--log-buffer` when many services log a
+buffer keeps whole entries, and with `logs-multiline` a stack trace is one
+entry (a Java trace typically 1 to 10 KB, a `StackOverflowError` with its
+1024 frames 33 KB). Lower `--log-buffer` when many services log a
 lot: `vigil logs` and `/v1/logs` then go back fewer lines, and a slow
 `/v1/logs/follow` consumer skips lines sooner (see
 [Logging](../user-guide/logging.md#log-ring-buffer)); the output on

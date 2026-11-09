@@ -41,13 +41,16 @@ name = "vigil-log-relay"
 path = "src/main.rs"
 
 [dependencies]
-vigil-types        = { path = "../vigil-types" }
+vigil-types        = { path = "../vigil-types", features = ["lines"] }
 vigil-tls          = { workspace = true }
 vigil-files        = { workspace = true, features = ["tokio"] }
 # Workspace shared deps
 tokio              = { workspace = true }
 serde              = { workspace = true }
-serde_json         = { workspace = true }
+# raw_value: a joined record keeps the other fields of its first record
+# byte for byte and in their order.
+serde_json         = { workspace = true, features = ["raw_value"] }
+indexmap           = { workspace = true }
 clap               = { workspace = true }
 anyhow             = { workspace = true }
 chrono             = { workspace = true }

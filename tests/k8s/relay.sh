@@ -19,6 +19,7 @@
 #   - --container all streams both containers of a pod
 #   - stream=Stdout/Stderr, or the fallback to one combined stream when the
 #     API server rejects the parameter (feature gate off)
+#   - --multiline java forwards a stack trace as one record
 #   - a deleted and recreated pod is streamed again
 #   - the healthcheck endpoint answers
 
@@ -52,6 +53,8 @@ fail() {
     echo "FAIL: $*" >&2
     echo "--- relay log (last 20 lines)" >&2
     tail -20 "${WORK}/relay.log" >&2 || true
+    echo "--- sink output of logger-trace (last 8 records)" >&2
+    grep '"pod":"logger-trace"' "${WORK}/out.ndjson" 2>/dev/null | tail -8 >&2 || true
     exit 1
 }
 
@@ -89,6 +92,7 @@ wait_for 10 "TCP sink listening" test -s "${WORK}/port"
     --pod-selector app=vigil-relay-test \
     --container all \
     --exclude-pod '^excluded-' \
+    --multiline java \
     --watch-interval 1 \
     --since-seconds 2 \
     --tcp-sink-host 127.0.0.1 \
@@ -115,6 +119,18 @@ else
     grep -q '"container":"sidecar","stream":"stderr"' "${WORK}/out.ndjson" \
         || fail "sidecar lines are not labelled stderr"
 fi
+
+echo "==> --multiline java: a stack trace is one record"
+TRACE='"pod":"logger-trace".*"message":"ERROR request [0-9]+ failed\\njava\.lang\.IllegalStateException: boom\\n\\tat com\.example\.A\.b\(A\.java:1\)\\n\\tat com\.example\.C\.d\(C\.java:2\)"'
+# A function, so that wait_for counts again on every try.
+has_traces() { test "$(grep -cE "${TRACE}" "${WORK}/out.ndjson" || true)" -ge 2; }
+wait_for 30 "two joined stack traces from logger-trace" has_traces
+# The stream may start in the middle of a trace; from the first joined one
+# on, no line of a trace may come as a record of its own.
+FIRST=$(grep -bE "${TRACE}" "${WORK}/out.ndjson" | head -1 | cut -d: -f1)
+! tail -c +"$((FIRST + 1))" "${WORK}/out.ndjson" \
+    | grep -qE '"pod":"logger-trace".*"message":"(\\tat|java\.lang)' \
+    || fail "a line of a stack trace was forwarded as a record of its own"
 
 echo "==> Healthcheck"
 HPORT=$(sed -n 's/.*healthcheck listening.*"addr":"[^"]*:\([0-9]*\)".*/\1/p' "${WORK}/relay.log" | head -1)

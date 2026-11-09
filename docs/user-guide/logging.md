@@ -65,8 +65,10 @@ vigild --log-buffer 5000 --layers-dir /etc/vigil/layers
 
 **Memory:** a full buffer costs about its line count times (line length +
 30 bytes) per service: about 120 KiB with the default 1000 lines of 90
-characters, 12 MiB for 100 such services. It counts against the
-container's memory limit; see
+characters, 12 MiB for 100 such services. Long entries (stack traces with
+`logs-multiline`, JSON lines) cost their length: at worst `--log-buffer`
+times `--log-max-line-bytes` per service, 128 MiB with the defaults. It
+counts against the container's memory limit; see
 [Sizing memory and CPU](../operator-guide/container-setup.md#sizing-memory-and-cpu).
 
 The buffer size also governs the live stream: the broadcast channel holds
@@ -83,6 +85,80 @@ The ring buffer is filled regardless of the `logs-forward` setting (except
   `logs-forward: disabled`.
 - The SSE stream (`/v1/logs/follow`) always includes these services.
 - Only `passthrough` services are invisible to the buffer and API.
+
+A service's output does not have to be clean text. vigild reads it line by
+line to its end in any case:
+
+- Bytes that are not valid UTF-8 are stored and forwarded as `�` (U+FFFD).
+- A line longer than `--log-max-line-bytes` (default **128 KiB**) is stored
+  and forwarded in several entries of at most that size, cut between
+  characters. Nothing is lost, and a service that writes without newlines
+  cannot make vigild's memory grow.
+- A `\r` before the newline is removed.
+
+A service whose output must reach vigild's stdout byte for byte (binary
+data, another character set) uses `logs-forward: passthrough`: vigild then
+does not read it at all.
+
+### Long lines
+
+| Method | Description |
+|--------|-------------|
+| `--log-max-line-bytes <BYTES>` | CLI flag passed to `vigild` |
+| `VIGIL_LOG_MAX_LINE_BYTES=<BYTES>` | Environment variable |
+
+Default: **131072** (128 KiB); allowed 1024 to 1048576 (1 MiB). The default
+leaves room for a stack trace joined by `logs-multiline` or written as one
+JSON line (logback's JSON encoder, python-json-logger, structlog): Java
+and Python traces typically have 1 to 10 KB, a Java `StackOverflowError`
+with the JVM's limit of 1024 frames 33 KB. A smaller
+limit splits such a line into parts that are no valid JSON.
+
+### Stack traces: `logs-multiline`
+
+A stack trace is many lines. Without further settings each line is an
+entry of its own, as with `docker logs` and `kubectl logs`, and a log
+collector has to join them again. With `logs-multiline` vigild joins them
+itself, since it still sees each service's output alone and in order:
+
+```yaml
+services:
+  api:
+    command: java -jar /app/api.jar
+    logs-multiline:
+      preset: java          # or python, or indent
+  worker:
+    command: python3 /app/worker.py
+    logs-multiline:
+      start: '^\d{4}-\d{2}-\d{2} '   # every log line starts with a date
+      timeout: 500ms
+```
+
+A line either starts a new entry or belongs to the one before it, then
+joined with a newline:
+
+| Setting | A line belongs to the entry before it when … |
+|---|---|
+| `preset: java` | it is indented (`\tat …`, `\t... 2 more`, `\tSuppressed: …`), starts with `Caused by: `, or names an exception class (`java.lang.IllegalStateException: boom`, a qualified name ending in `Exception`, `Error` or `Throwable`) |
+| `preset: python` | it is indented, is `Traceback (most recent call last):`, names an exception (`KeyError: 'id'`, a name ending in `Error`, `Exception`, `Warning`, `Interrupt` or `Exit`), is one of the sentences between chained exceptions, or is empty |
+| `preset: indent` | it starts with a space or a tab |
+| `start: REGEX` | it does **not** match the regex |
+| `continue: REGEX` | it matches the regex |
+
+Exactly one of `preset`, `start` and `continue` is set. So the log line of
+`logger.error("request failed", e)` or `logger.exception(…)` and its trace
+are one entry. An entry is complete when the next one starts, when no line
+came for `timeout` (default `200ms`, `10ms` to `10s`), or when it would
+grow past `--log-max-line-bytes`. The timeout delays each entry by that
+much, when no further line follows at once.
+
+The joined entry is one entry everywhere: in `vigil logs`, `/v1/logs`, the
+stream and `logs-push`. On vigild's stdout (`podman logs`) only its first
+line has the `[service]` prefix, so the trace looks as the service wrote
+it. In the text format of `/v1/logs/follow` (`[service] message`) and of
+SSE the lines of an entry are separate lines again; use `format=ndjson` or
+`json` for a collector. `logs-multiline` needs `logs-forward: enabled` or
+`disabled`: with `passthrough` vigild does not read the output.
 
 ---
 
@@ -534,6 +610,8 @@ Key parameters:
 --healthcheck-max-age SECS       Seconds without tick before /healthz returns 503 (default: 30)
 --include REGEX                  Forward a line only if it matches this regex (repeatable)
 --exclude REGEX                  Drop a line if it matches this regex (applied after --include, repeatable)
+--max-line-bytes BYTES           Longest message; longer lines are forwarded in parts (default: 131072)
+--multiline PRESET               --kubernetes: join stack traces (java, python, indent)
 ```
 
 **From vigild's TLS API** — a relay on another host (or in another
@@ -569,6 +647,44 @@ Evaluation order:
 1. If any `--include` pattern is given, a line must match at least one to proceed.
 2. If the line then matches any `--exclude` pattern, it is dropped.
 3. Otherwise the line is forwarded to the TCP sink (or stdout).
+
+**Line limits:** bytes that are not valid UTF-8 become `�` (U+FFFD) in
+every source mode. Nothing is dropped for being long:
+
+- `--max-line-bytes` (`MAX_LINE_BYTES`, default 128 KiB as vigild's
+  `--log-max-line-bytes`, allowed 1 KiB to 64 MiB) is the longest
+  message. In `--kubernetes` mode a longer pod log line is forwarded in
+  several records, each with the line's timestamp.
+- In socket and URL mode a line is one record from vigild (ndjson or SSE).
+  A record may be up to 6 times `--max-line-bytes` plus 4 KiB long (JSON
+  escaping, the other fields), so a vigild record is never cut as long as
+  `--max-line-bytes` is at least vigild's `--log-max-line-bytes`. A longer
+  line is forwarded in parts; the parts are no valid JSON, and the relay
+  logs a warning (`forwarding a line longer than the limit in parts`).
+  A collector keeps them as raw text.
+
+**Stack traces** — `--multiline java|python|indent`, `--multiline-start
+REGEX` or `--multiline-continue REGEX` join the lines of a stack trace into
+one record, with the same rules as vigild's
+[`logs-multiline`](#stack-traces-logs-multiline), in every source mode:
+
+- Pod logs (`--kubernetes`): per pod and container; the record has the
+  timestamp of its first line.
+- Records from vigild (socket or URL mode): per `service` and `stream`, on
+  their `message`, so the interleaved output of other services does not
+  break a trace. The joined record is the first one with the joined
+  message; its other fields (`timestamp`, …) stay as they were, in their
+  order. A record that vigild already joined (`logs-multiline`) is one
+  entry and stays one.
+- Other lines (a source that sends plain text): joined as text. vigild's
+  `format=text` puts `[service] ` in front of each line, which hides the
+  indentation from the rules; read vigild with `format=ndjson` (the
+  default `--source-path`).
+
+`--include`/`--exclude` apply to the whole record. `--multiline-timeout`
+(default `200ms`, `10ms` to `10s`) is how long a record waits for a further
+line. Where vigild runs the service, its own `logs-multiline` is the better
+place: then `vigil logs`, the API and every consumer get the joined entry.
 
 ```yaml
 # Only forward lines whose message contains ERROR or WARN, but not the

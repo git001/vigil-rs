@@ -184,11 +184,13 @@ pub struct Connection {
 
 impl Connection {
     /// The connection settings of `--source-url` and `--source-socket`.
-    pub fn source_conn_config(&self) -> SourceConnConfig {
+    /// `join`: line limit and multi-line rule of the stream.
+    pub fn source_conn_config(&self, join: crate::join::JoinConfig) -> SourceConnConfig {
         SourceConnConfig {
             connect_timeout_ms: self.source_connect_timeout,
             read_timeout_ms: self.source_read_timeout,
             idle_timeout_ms: self.source_idle_timeout,
+            join,
             keepalive: Keepalive {
                 interval_secs: self.source_keepalive_interval,
                 timeout_secs: self.source_keepalive_timeout,

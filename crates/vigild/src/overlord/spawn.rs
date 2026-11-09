@@ -36,7 +36,7 @@ pub async fn spawn(
     layers_dir: PathBuf,
     http_address: String,
     https_address: Option<String>,
-    log_buffer: usize,
+    logs: crate::logs::LogOptions,
     exit_code_mode: service::ExitCodeMode,
     notify_dir: PathBuf,
     watch_layers: Option<std::time::Duration>,
@@ -48,8 +48,8 @@ pub async fn spawn(
     // Large enough to absorb brief consumer stalls without dropping entries;
     // small enough that a permanently-disconnected follower doesn't hold
     // unbounded memory.
-    let broadcast_capacity = (log_buffer / 2).clamp(64, 4096);
-    let log_store = LogStore::new(log_buffer, broadcast_capacity);
+    let broadcast_capacity = (logs.buffer / 2).clamp(64, 4096);
+    let log_store = LogStore::with_max_line(logs.buffer, broadcast_capacity, logs.max_line);
     let metrics = MetricsStore::new();
     // Off the async runtime like every replan: a hanging file system (a
     // dead NFS mount behind a `tls:` file) ends the start with an error

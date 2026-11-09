@@ -1,0 +1,40 @@
+vtest "logs-multiline: a Java and a Python stack trace become one log entry each, with their log line"
+
+# fixtures/v0036: java-app and python-app print the traces in java.log and
+# python.log (a log line, the trace, then one more log line). In the
+# JSON body "." stands for the escapes: ".n" is the newline between the
+# joined lines, ".t" a tab; "[^]]*" skips text with escaped quotes.
+process p1 -winsz 200 400 "env TRACE_DIR=${vtestdir}/fixtures/v0036 ${vigild} --layers-dir ${vtestdir}/fixtures/v0036/layers --socket ${tmpdir}/vigild.sock --path-prefix ${tmpdir}/run" -start
+process p1 -expect-text 0 0 "API listening"
+process p1 -expect-text 0 0 "[java-app] 2026-11-09 10:15:30.200  INFO"
+process p1 -expect-text 0 0 "[python-app] 2026-11-09 10:15:31,000 INFO app: next"
+
+# On vigild's stdout only the first line of an entry has the prefix.
+process p1 -match-text 0 0 "Servlet.service.. threw exception *\njava.lang.IllegalStateException: boom"
+process p1 -match-text 0 0 "ERROR app: request failed *\nTraceback .most recent call last.:"
+
+# Java: two entries; the trace with "Caused by" and "... 2 more" belongs
+# to the ERROR line.
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/logs?services=java-app&n=10" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "message.:.[^\"]*threw exception.njava.lang.IllegalStateException: boom.n.tat com.example[^\"]*.nCaused by: java.io.IOException: disk full[^\"]*.n.t... 2 more.[^ a-z]"
+	expect resp.body ~ "message.:.2026-11-09 10:15:30.200  INFO[^\"]*next request.[^ a-z]"
+	expect resp.body !~ "message.:..tat "
+	expect resp.body !~ "message.:.Caused by"
+} -run
+
+# Python: two entries; both tracebacks and the sentence between them
+# belong to the ERROR line.
+client c2 -connect ${tmpdir}/vigild.sock {
+	txreq -method GET -url "/v1/logs?services=python-app&n=10" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.body ~ "message.:.2026-11-09 10:15:30,123 ERROR app: request failed.nTraceback[^]]*KeyError: 'id'.n.nThe above exception[^]]*.n.nTraceback[^]]*RuntimeError: load failed.[^ a-z]"
+	expect resp.body ~ "message.:.2026-11-09 10:15:31,000 INFO app: next.[^ a-z]"
+	expect resp.body !~ "message.:.Traceback"
+} -run
+
+process p1 -kill TERM
+process p1 -wait

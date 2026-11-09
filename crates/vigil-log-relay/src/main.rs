@@ -25,6 +25,7 @@ use tracing::info;
 mod cli;
 mod filter;
 mod healthcheck;
+mod join;
 mod keepalive;
 mod source_http;
 mod source_k8s;
@@ -136,7 +137,15 @@ async fn run(cli: Cli) -> Result<()> {
     tokio::spawn(healthcheck::serve(health_listener, liveness.clone()));
 
     // Connection + reconnect config for HTTP source modes
-    let source_conn = cli.conn.source_conn_config();
+    let join = join::JoinConfig {
+        max: cli.lines.max_line_bytes,
+        multiline: cli
+            .lines
+            .multiline_rule()
+            .map_err(anyhow::Error::msg)?
+            .map(|rule| (rule, cli.lines.multiline_timeout)),
+    };
+    let source_conn = cli.conn.source_conn_config(join.clone());
     let reconnect = cli.reconnect.reconnect_config();
     let filter = LineFilter::new(&cli.sink.include, &cli.sink.exclude)?;
 
@@ -164,7 +173,7 @@ async fn run(cli: Cli) -> Result<()> {
             healthcheck = %cli.healthcheck,
             "source: kubernetes pod logs",
         );
-        tokio::spawn(source_k8s::run(cli, tx, liveness, filter))
+        tokio::spawn(source_k8s::run(cli, tx, liveness, filter, join))
     } else if let Some(url) = cli.source_url.clone() {
         info!(url = %url, sink = %sink_label, healthcheck = %cli.healthcheck, "source: http url");
         tokio::spawn(source_url::run(

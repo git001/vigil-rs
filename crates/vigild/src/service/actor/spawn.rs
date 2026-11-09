@@ -149,6 +149,7 @@ impl Actor {
                     stdout,
                     Arc::clone(&self.log_store),
                     forward,
+                    self.config.logs_multiline.as_ref(),
                 );
             }
             if let Some(stderr) = child.stderr.take() {
@@ -158,6 +159,7 @@ impl Actor {
                     stderr,
                     Arc::clone(&self.log_store),
                     forward,
+                    self.config.logs_multiline.as_ref(),
                 );
             }
         }

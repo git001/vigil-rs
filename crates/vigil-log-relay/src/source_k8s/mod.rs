@@ -12,6 +12,7 @@
 mod client;
 mod pods;
 mod reader;
+mod records;
 mod selector;
 mod stream;
 
@@ -42,6 +43,7 @@ pub async fn run(
     tx: mpsc::Sender<String>,
     liveness: Arc<Liveness>,
     filter: LineFilter,
+    join: crate::join::JoinConfig,
 ) -> Result<()> {
     let filter = Arc::new(filter);
     let exclude_pod_re: Vec<Regex> = cli
@@ -79,6 +81,7 @@ pub async fn run(
             stream_param,
             filter,
             tx,
+            lines: Arc::new(join),
         },
         cli.k8s.tail_lines,
         cli.k8s.since_seconds,

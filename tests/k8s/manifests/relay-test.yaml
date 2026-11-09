@@ -6,6 +6,8 @@
 # logger-a       matches the selector; its default container is streamed.
 # logger-multi   matches the selector; two containers, the sidecar writes
 #                to stderr (checks --container all and the stream field).
+# logger-trace   matches the selector; writes a Java stack trace every 2s
+#                (checks --multiline java: one record per trace).
 # excluded-pod   matches the selector but is dropped by --exclude-pod.
 # other-app      does not match the selector.
 apiVersion: v1
@@ -87,6 +89,39 @@ spec:
     - name: app
       image: docker.io/library/busybox:1.36
       command: ["sh", "-c", "i=0; while :; do i=$((i+1)); echo \"excluded line $i\"; sleep 1; done"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: logger-trace
+  namespace: vigil-relay-test
+  labels:
+    app: vigil-relay-test
+spec:
+  terminationGracePeriodSeconds: 1
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000710000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: app
+      image: docker.io/library/busybox:1.36
+      command:
+        - sh
+        - -c
+        - |
+          i=0
+          while :; do
+            i=$((i+1))
+            printf 'ERROR request %s failed\njava.lang.IllegalStateException: boom\n\tat com.example.A.b(A.java:1)\n\tat com.example.C.d(C.java:2)\n' "$i"
+            sleep 2
+          done
       securityContext:
         allowPrivilegeEscalation: false
         readOnlyRootFilesystem: true

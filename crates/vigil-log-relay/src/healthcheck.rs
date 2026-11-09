@@ -105,3 +105,42 @@ pub async fn serve(listener: TcpListener, liveness: Arc<Liveness>) -> Result<()>
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::*;
+
+    /// Status line of `GET /healthz` against `serve` with `liveness`.
+    async fn status(liveness: Arc<Liveness>) -> String {
+        let listener = bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(serve(listener, liveness));
+        let mut conn = tokio::net::TcpStream::connect(addr).await.unwrap();
+        conn.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let mut resp = String::new();
+        conn.read_to_string(&mut resp).await.unwrap();
+        server.abort();
+        resp.lines().next().unwrap_or_default().to_string()
+    }
+
+    #[tokio::test]
+    async fn healthz_is_ok_while_fresh_and_503_when_stale() {
+        let fresh = Liveness::new(30);
+        assert_eq!(status(Arc::clone(&fresh)).await, "HTTP/1.1 200 OK");
+
+        // No tick for longer than max age: stale.
+        let stale = Liveness::new(30);
+        stale.last_tick.store(now_secs() - 31, Ordering::Relaxed);
+        assert_eq!(
+            status(Arc::clone(&stale)).await,
+            "HTTP/1.1 503 Service Unavailable"
+        );
+        // A tick makes it fresh again.
+        stale.tick();
+        assert_eq!(status(stale).await, "HTTP/1.1 200 OK");
+    }
+}

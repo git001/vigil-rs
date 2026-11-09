@@ -1,0 +1,11 @@
+# vtest v0035: a service whose output is no clean text. It writes a line,
+# two bytes that are not UTF-8, a line of 40000 bytes, then "after", and
+# then waits. vigild must read on through all of it: a reader that stopped
+# would close the pipe, and the service would die of SIGPIPE at its next
+# line and be restarted. (The block scalar keeps the backslashes for
+# printf and tr as they are.)
+services:
+  odd-output:
+    command: >-
+      /bin/sh -c 'echo before; printf "\377\376\n"; head -c 40000 /dev/zero | tr "\000" x; echo; echo after; exec sleep 100'
+    startup: enabled

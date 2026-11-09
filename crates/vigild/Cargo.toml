@@ -50,7 +50,7 @@ name = "vigild"
 path = "src/main.rs"
 
 [dependencies]
-vigil-types        = { path = "../vigil-types" }
+vigil-types        = { path = "../vigil-types", features = ["lines"] }
 vigil-tls          = { workspace = true }
 vigil-files        = { workspace = true, features = ["tokio"] }
 tokio              = { workspace = true }

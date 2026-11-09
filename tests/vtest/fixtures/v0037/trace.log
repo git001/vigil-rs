@@ -1,0 +1,4 @@
+ERROR failed
+java.lang.IllegalStateException: boom
+	at a.B.c(B.java:1)
+INFO next

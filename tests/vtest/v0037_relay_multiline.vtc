@@ -1,0 +1,19 @@
+vtest "vigil-log-relay --multiline java joins the lines of a stack trace from vigild's stream into one record"
+
+# fixtures/v0037: java-app prints "ERROR failed", a two-line trace and
+# "INFO next" every second, one vigild entry per line. The relay reads the
+# ndjson stream over the socket and writes to its stdout, the terminal of
+# p2: a record must hold the whole trace (the "\n" in the JSON message are
+# written as backslash-n), and "INFO next" stays a record of its own.
+process p1 -winsz 200 400 "env TRACE_DIR=${vtestdir}/fixtures/v0037 ${vigild} --layers-dir ${vtestdir}/fixtures/v0037 --socket ${tmpdir}/vigild.sock --path-prefix ${tmpdir}/run" -start
+process p1 -expect-text 0 0 "API listening"
+process p1 -expect-text 0 0 "[java-app] INFO next"
+
+process p2 -winsz 200 400 "${vigil_log_relay} --source-socket ${tmpdir}/vigild.sock --source-path /v1/logs/follow?format=ndjson --stdout-sink --multiline java --multiline-timeout 100ms --healthcheck 127.0.0.1:0" -start
+process p2 -expect-text 0 0 "\"message\":\"ERROR failed\\njava.lang.IllegalStateException: boom\\n\\tat a.B.c(B.java:1)\""
+process p2 -expect-text 0 0 "\"message\":\"INFO next\""
+
+process p2 -kill TERM
+process p2 -wait
+process p1 -kill TERM
+process p1 -wait

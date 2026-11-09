@@ -97,6 +97,7 @@ environment variable shown; boolean variables take `true` or `false`.
 | `--reaper` | `VIGIL_REAPER` | *(auto when PID 1)* | Enable zombie-reaping (init mode) |
 | `--log-format <FORMAT>` | `VIGIL_LOG_FORMAT` | `text` | vigild's own log format: `text` or `json` |
 | `--log-buffer <N>` | `VIGIL_LOG_BUFFER` | `1000` | Per-service log ring-buffer size (lines) |
+| `--log-max-line-bytes <BYTES>` | `VIGIL_LOG_MAX_LINE_BYTES` | `131072` | Longest log entry of a service (1024 to 1048576 bytes); a longer line or joined stack trace is split. See [Logging](logging.md#long-lines) |
 | `--watch-layers <INTERVAL>` | `VIGIL_WATCH_LAYERS` | *(off)* | Reload the layers when the files in the layers dir change, checking every `INTERVAL` (`1s` to `24h`); see [Orchestrators](../operator-guide/orchestrators.md#replan-on-configmap-change) |
 | `--worker-threads <N>` | `VIGIL_WORKER_THREADS` | `2` (1 with a single CPU) | Worker threads of the async runtime; each costs about 2 MiB. Without a limit tokio would start one per CPU of the node |
 | `-h`, `--help` | | | Print help |

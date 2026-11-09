@@ -28,6 +28,10 @@ fn default_conn() -> SourceConnConfig {
         connect_timeout_ms: 500,
         read_timeout_ms: 0,
         idle_timeout_ms: 0,
+        join: crate::join::JoinConfig {
+            max: vigil_types::lines::DEFAULT_MAX_LINE,
+            multiline: None,
+        },
         keepalive: crate::keepalive::Keepalive {
             interval_secs: 0,
             timeout_secs: 0,

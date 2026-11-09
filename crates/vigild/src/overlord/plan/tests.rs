@@ -112,6 +112,49 @@ fn load_err(yaml: &str) -> String {
 }
 
 #[test]
+fn logs_multiline_is_checked_at_load() {
+    let svc = |block: &str| format!("services:\n  app:\n    command: sleep 9\n{block}");
+    let dir = TempDir::new().unwrap();
+    write(
+        &dir,
+        "001.yaml",
+        &svc("    logs-multiline:\n      preset: java\n      timeout: 1s\n"),
+    );
+    let plan = load_plan(dir.path()).unwrap();
+    assert!(plan.services["app"].logs_multiline.is_some());
+
+    for (block, want) in [
+        (
+            "    logs-multiline:\n      preset: java\n      start: x\n",
+            "service \"app\": logs-multiline: set exactly one of preset, start and continue",
+        ),
+        (
+            "    logs-multiline:\n      start: \"(\"\n",
+            "service \"app\": logs-multiline: start: invalid regex",
+        ),
+        (
+            "    logs-multiline:\n      preset: python\n      timeout: 20s\n",
+            "service \"app\": logs-multiline: timeout \"20s\" must be between 10ms and 10s",
+        ),
+        (
+            "    logs-multiline:\n      preset: ruby\n",
+            "unknown variant `ruby`",
+        ),
+        (
+            "    logs-multiline:\n      preset: java\n      pattern: x\n",
+            "unknown field `pattern`",
+        ),
+        (
+            "    logs-forward: passthrough\n    logs-multiline:\n      preset: indent\n",
+            "logs-multiline needs output that vigild reads",
+        ),
+    ] {
+        let err = load_err(&svc(block));
+        assert!(err.contains(want), "{block}: {err}");
+    }
+}
+
+#[test]
 fn command_is_required_after_merging() {
     for svc in ["startup: disabled", "command: \"  \""] {
         let err = load_err(&format!("services:\n  app:\n    {svc}\n"));

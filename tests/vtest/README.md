@@ -81,6 +81,9 @@ tests/vtest/run.sh
 | `v0032_api_request_errors.vtc` | Invalid JSON bodies (415/400/422, also an unknown field) and unknown query parameters (400) get the error envelope, and only after the access check (403 first) |
 | `v0033_vigild_log_output.vtc` | vigild's own log written to a file (as with `podman logs`): no ANSI colours, `pid` as a number, `path` without quotes, in text and JSON |
 | `v0034_load.vtc` | Load: 9 clients at once (lists, logs, metrics, signals, replans, restarts, check runs, a log follower) against 21 services and 22 checks per second; no 5xx, no hang, vigild still answers, at most 19 threads and 96 MB RSS |
+| `v0035_odd_service_output.vtc` | Service output that is not clean text: invalid UTF-8 becomes `�`, a 40000-byte line comes in 3 entries, the service keeps running (no SIGPIPE, one start) |
+| `v0036_logs_multiline.vtc` | `logs-multiline`: a Java and a Python stack trace (with "Caused by", chained tracebacks) are one entry each with their log line; on stdout only the first line has the `[service]` prefix |
+| `v0037_relay_multiline.vtc` | `vigil-log-relay --multiline java` on vigild's ndjson stream: a service without `logs-multiline` prints a trace, the relay writes it as one record with the joined message |
 
 ## How it works
 

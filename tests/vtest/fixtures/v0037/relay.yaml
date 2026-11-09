@@ -1,0 +1,8 @@
+# vtest v0037: java-app prints a short stack trace (trace.log, in TRACE_DIR,
+# passed on from vigild) every second. It has no logs-multiline, so vigild
+# keeps one entry per line; vigil-log-relay --multiline java must join them.
+services:
+  java-app:
+    command: /bin/sh -c 'while true; do cat "$TRACE_DIR/trace.log"; sleep 1; done'
+    startup: enabled
+    pass-env-glob: [TRACE_DIR]

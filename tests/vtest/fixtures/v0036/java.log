@@ -1,0 +1,8 @@
+2026-11-09 10:15:30.123 ERROR 1 --- [nio-8080-exec-1] o.a.c.c.C.[dispatcherServlet] : Servlet.service() threw exception
+java.lang.IllegalStateException: boom
+	at com.example.demo.DemoController.fail(DemoController.java:21)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+Caused by: java.io.IOException: disk full
+	at com.example.demo.Store.write(Store.java:40)
+	... 2 more
+2026-11-09 10:15:30.200  INFO 1 --- [nio-8080-exec-2] c.e.demo.DemoController : next request

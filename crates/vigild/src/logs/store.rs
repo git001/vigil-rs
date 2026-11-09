@@ -11,6 +11,21 @@ use vigil_types::api::LogEntry;
 /// Default per-service ring-buffer capacity (number of log lines kept in memory).
 pub const DEFAULT_BUFFER_CAPACITY: usize = 1_000;
 
+/// Smallest allowed `--log-max-line-bytes`.
+pub const MIN_MAX_LINE: usize = 1024;
+/// Largest allowed `--log-max-line-bytes`: a full buffer of such entries
+/// costs `--log-buffer` times this per service.
+pub const MAX_MAX_LINE: usize = 1024 * 1024;
+
+/// The log settings of vigild (`--log-buffer`, `--log-max-line-bytes`).
+#[derive(Debug, Clone, Copy)]
+pub struct LogOptions {
+    /// Entries kept per service.
+    pub buffer: usize,
+    /// Longest entry in bytes; a longer line is split.
+    pub max_line: usize,
+}
+
 // ---------------------------------------------------------------------------
 // Per-service ring buffer
 // ---------------------------------------------------------------------------
@@ -49,6 +64,7 @@ pub struct LogStore {
     pub(super) buffers: RwLock<HashMap<String, Arc<Buffer>>>,
     pub(super) broadcast: broadcast::Sender<LogEntry>,
     pub(super) buffer_capacity: usize,
+    max_line: usize,
 }
 
 impl LogStore {
@@ -58,12 +74,31 @@ impl LogStore {
     /// * `broadcast_capacity` — broadcast channel depth; slow followers are
     ///   notified via a `Lagged` event and skip ahead rather than blocking.
     pub fn new(buffer_capacity: usize, broadcast_capacity: usize) -> Arc<Self> {
+        Self::with_max_line(
+            buffer_capacity,
+            broadcast_capacity,
+            vigil_types::lines::DEFAULT_MAX_LINE,
+        )
+    }
+
+    /// As [`LogStore::new`], with entries of at most `max_line` bytes.
+    pub fn with_max_line(
+        buffer_capacity: usize,
+        broadcast_capacity: usize,
+        max_line: usize,
+    ) -> Arc<Self> {
         let (broadcast, _) = broadcast::channel(broadcast_capacity);
         Arc::new(LogStore {
             buffers: RwLock::new(HashMap::new()),
             broadcast,
             buffer_capacity,
+            max_line,
         })
+    }
+
+    /// Longest entry in bytes (`--log-max-line-bytes`).
+    pub fn max_line(&self) -> usize {
+        self.max_line
     }
 
     pub(super) async fn buffer_for(&self, service: &str) -> Arc<Buffer> {

@@ -123,7 +123,10 @@ async fn async_main(args: Args, use_reaper: bool) -> anyhow::Result<()> {
         args.layers_dir.clone(),
         http_address,
         https_address,
-        args.log_buffer,
+        vigild::logs::LogOptions {
+            buffer: args.log_buffer,
+            max_line: args.log_max_line_bytes,
+        },
         args.exit_code_mode(),
         path_prefix::notify_dir(&args.path_prefix),
         args.watch_layers,

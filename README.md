@@ -26,6 +26,7 @@ e.g. on OpenShift with a random UID.
 | **on-success / on-failure** | Per-service exit policies: `restart`, `ignore`, `shutdown`, `failure-shutdown`, `success-shutdown` |
 | **Exit-code propagation** | vigild exits with the managed service's actual exit code |
 | **Log streaming** | stdout/stderr captured per service; `vigil logs` and SSE follow (`vigil logs -f`) |
+| **Stack traces** | `logs-multiline` (`java`, `python`, `indent` or a regex) joins a stack trace and its log line into one entry; `vigil-log-relay --multiline` does the same for pod logs and vigild streams |
 | **Log push** | `logs-push-socket` / `logs-push-addr`: vigild streams ndjson to a collector (Filebeat, Fluent Bit, …) |
 | **vigil-log-relay** | Forwards vigild's log stream or Kubernetes pod logs to a TCP sink |
 | **Environment and secrets** | Services get only a minimal environment unless `pass-env*` allows more; minijinja templates (`{{ file() }}`, `{{ mem() }}`, `{{ cpu() }}`) and `env-file` in `command` and `environment` |
@@ -263,7 +264,7 @@ automatic restarts, and programmatic control.
 | HTTP check TLS and proxy (`tls:` / `proxy:`) | ❌ | ✅ custom CAs, client certificate, proxy |
 | Alerting (Alertmanager / CloudEvents / OTLP) | ❌ | ✅ |
 | Runtime API | ❌ (CLI tools `s6-svc`, `s6-rc`) | ✅ REST over Unix socket and HTTPS |
-| Log routing | ✅ `s6-log` per service, rotation to files | log buffer, API stream, ndjson push to collectors, `vigil-log-relay` |
+| Log routing | ✅ `s6-log` per service, rotation to files | log buffer, API stream, ndjson push to collectors, `vigil-log-relay`, stack traces as one entry |
 | Dependency ordering | ✅ (`dependencies.d/`) | ✅ (`after:` / `before:` / `requires:`) |
 | Custom stop signal | ✅ `down-signal` file, `timeout-kill` | ✅ `stop-signal`, `kill-delay` |
 | Used by | linuxserver.io images | - |

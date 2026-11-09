@@ -1,0 +1,21 @@
+2026-11-09 02:31:10,938 ERROR app: during failed
+Traceback (most recent call last):
+  File "/app/pytrace.py", line 13, in during
+    try: load()
+         ~~~~^^
+  File "/app/pytrace.py", line 4, in load
+    def load(): return {}["id"]
+                       ~~^^^^^^
+KeyError: 'id'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/app/pytrace.py", line 6, in case
+    try: f()
+         ~^^
+  File "/app/pytrace.py", line 14, in during
+    except KeyError: int("x")
+                     ~~~^^^^^
+ValueError: invalid literal for int() with base 10: 'x'
+2026-11-09 02:31:10,942 WARNING app: next

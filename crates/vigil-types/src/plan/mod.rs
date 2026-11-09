@@ -27,8 +27,8 @@ pub use self::check::{CheckConfig, CheckLevel, ExecCheck, HttpCheck, TcpCheck};
 pub use self::identity::{BasicConfig, IdentityConfig, IdentityTls};
 pub use self::layer::{Layer, Plan};
 pub use self::service::{
-    FileChangeAction, LogsForward, LogsPushFormat, OnExit, ReadyMode, ServiceConfig, ServiceType,
-    Startup, WatchFiles,
+    FileChangeAction, LogsForward, LogsMultiline, LogsPushFormat, MultilinePreset, OnExit,
+    ReadyMode, ServiceConfig, ServiceType, Startup, WatchFiles,
 };
 pub use self::tls::{ProxyConfig, TlsConfig};
 

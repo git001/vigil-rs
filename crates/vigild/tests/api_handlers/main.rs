@@ -87,7 +87,10 @@ impl TestApp {
             dir.path().to_owned(),
             "test-addr".into(),
             None,
-            100,
+            vigild::logs::LogOptions {
+                buffer: 100,
+                max_line: vigil_types::lines::DEFAULT_MAX_LINE,
+            },
             vigild::service::ExitCodeMode::default(),
             std::env::temp_dir(),
             None,

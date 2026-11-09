@@ -1,0 +1,18 @@
+2026-11-09 10:15:30.123 ERROR 1 --- [main] c.e.Trace : chained failed
+java.lang.RuntimeException: store failed
+	at Trace.wrap(Trace.java:11)
+	at Trace.log(Trace.java:20)
+	at Trace.main(Trace.java:31)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at jdk.compiler/com.sun.tools.javac.launcher.Main.execute(Main.java:484)
+	at jdk.compiler/com.sun.tools.javac.launcher.Main.run(Main.java:208)
+	at jdk.compiler/com.sun.tools.javac.launcher.Main.main(Main.java:135)
+	Suppressed: java.lang.IllegalArgumentException: close failed
+		at Trace.wrap(Trace.java:12)
+		... 7 more
+Caused by: java.io.IOException: disk full
+	at Trace.io(Trace.java:7)
+	at Trace.wrap(Trace.java:9)
+	... 7 more
+2026-11-09 10:15:30.200  INFO 1 --- [main] c.e.Trace : next

@@ -120,6 +120,19 @@ pub(crate) struct Args {
     #[arg(long, env = "VIGIL_LOG_BUFFER", default_value_t = logs::DEFAULT_BUFFER_CAPACITY)]
     pub(crate) log_buffer: usize,
 
+    /// Longest log entry of a service in bytes (1024 to 1048576): a longer
+    /// line, or a multi-line entry (logs-multiline) that would grow past
+    /// it, is split. A full log buffer costs up to --log-buffer times this
+    /// per service.
+    #[arg(
+        long,
+        env = "VIGIL_LOG_MAX_LINE_BYTES",
+        value_name = "BYTES",
+        default_value_t = vigil_types::lines::DEFAULT_MAX_LINE,
+        value_parser = parse_max_line
+    )]
+    pub(crate) log_max_line_bytes: usize,
+
     /// Worker threads of the async runtime. Default: 2, or 1 with a single
     /// CPU. Each costs about 2 MiB; raise it only for very many services
     /// or checks.
@@ -156,9 +169,39 @@ fn parse_octal_mode(s: &str) -> Result<u32, String> {
     Ok(mode)
 }
 
+/// `--log-max-line-bytes`: bytes, within [`logs::MIN_MAX_LINE`] and
+/// [`logs::MAX_MAX_LINE`].
+fn parse_max_line(s: &str) -> Result<usize, String> {
+    let n: usize = s
+        .parse()
+        .map_err(|_| format!("{s:?} is not a number of bytes"))?;
+    if !(logs::MIN_MAX_LINE..=logs::MAX_MAX_LINE).contains(&n) {
+        return Err(format!(
+            "{n} must be between {} and {} bytes",
+            logs::MIN_MAX_LINE,
+            logs::MAX_MAX_LINE
+        ));
+    }
+    Ok(n)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn max_line_is_bounded() {
+        assert_eq!(parse_max_line("1024"), Ok(1024));
+        assert_eq!(parse_max_line("1048576"), Ok(1048576));
+        for s in ["1023", "1048577"] {
+            let e = parse_max_line(s).unwrap_err();
+            assert!(e.ends_with("must be between 1024 and 1048576 bytes"), "{e}");
+        }
+        assert_eq!(
+            parse_max_line("256KiB").unwrap_err(),
+            "\"256KiB\" is not a number of bytes"
+        );
+    }
 
     #[test]
     fn octal_mode_with_and_without_prefix() {

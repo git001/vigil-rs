@@ -11,7 +11,6 @@ use http_body_util::BodyStream;
 use hyper::Uri;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
-use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_util::io::StreamReader;
@@ -60,11 +59,10 @@ pub async fn run(
                     .try_filter_map(|frame| async { Ok(frame.into_data().ok()) })
                     .map_err(std::io::Error::other)
                     .boxed();
-                let lines = BufReader::new(StreamReader::new(byte_stream)).lines();
+                let reader = StreamReader::new(byte_stream);
 
                 let source_label = socket.to_str().unwrap_or("socket");
-                let clean_eof =
-                    stream_loop(lines, &tx, &filter, conn.idle_timeout_ms, source_label).await;
+                let clean_eof = stream_loop(reader, &tx, &filter, &conn, source_label).await;
                 if !clean_eof {
                     failures = bump_failures(failures, cfg.max_retries, source_label)?;
                 }
