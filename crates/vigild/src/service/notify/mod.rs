@@ -32,10 +32,10 @@ use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 mod msg;
+mod path;
 pub use msg::{NotifyMsg, parse};
-
-/// Longest path that fits into `sockaddr_un.sun_path` (108 bytes incl. NUL).
-const SUN_PATH_MAX: usize = 107;
+pub use path::check_dir;
+use path::{RemoveOnDrop, random_suffix, socket_path};
 
 /// Largest datagram we accept; longer messages are truncated and dropped.
 const MAX_DATAGRAM: usize = 4096;
@@ -91,58 +91,6 @@ impl Drop for NotifySocket {
     fn drop(&mut self) {
         self.task.abort();
         let _ = std::fs::remove_file(&self.path);
-    }
-}
-
-struct RemoveOnDrop(Option<PathBuf>);
-
-impl RemoveOnDrop {
-    fn disarm(mut self) -> PathBuf {
-        self.0.take().expect("armed")
-    }
-}
-
-impl Drop for RemoveOnDrop {
-    fn drop(&mut self) {
-        if let Some(p) = self.0.take() {
-            let _ = std::fs::remove_file(p);
-        }
-    }
-}
-
-/// Hex digits of the random part of a socket name.
-const RANDOM_DIGITS: usize = 16;
-
-fn random_suffix() -> String {
-    let n = uuid::Uuid::new_v4().as_u128() as u64;
-    format!("{n:0RANDOM_DIGITS$x}")
-}
-
-/// Whether notify sockets fit into `sun_path` in `dir`: the shortest
-/// name, `<dir>/<16 hex digits>.sock`, must. Checked when the layers are
-/// loaded, so that a too long `--path-prefix` stops the start or the
-/// replan instead of every start of a `ready: notify` service.
-pub fn check_dir(dir: &Path) -> anyhow::Result<()> {
-    let shortest = dir.join(format!("{}.sock", "0".repeat(RANDOM_DIGITS)));
-    let len = shortest.as_os_str().len();
-    let max_dir = SUN_PATH_MAX - (shortest.as_os_str().len() - dir.as_os_str().len());
-    anyhow::ensure!(
-        len <= SUN_PATH_MAX,
-        "notify socket paths in {dir:?} are at least {len} bytes, the limit for Unix sockets \
-         is {SUN_PATH_MAX}: shorten --path-prefix (the notify directory may have at most \
-         {max_dir} bytes)"
-    );
-    Ok(())
-}
-
-/// `<dir>/<service>-<rand>.sock`, or `<dir>/<rand>.sock` if that would not
-/// fit into `sun_path` (long service names).
-fn socket_path(dir: &Path, service: &str, rand: &str) -> PathBuf {
-    let named = dir.join(format!("{service}-{rand}.sock"));
-    if named.as_os_str().len() <= SUN_PATH_MAX {
-        named
-    } else {
-        dir.join(format!("{rand}.sock"))
     }
 }
 
