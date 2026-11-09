@@ -220,6 +220,26 @@ async fn an_entry_never_grows_past_max() {
     assert_eq!(got, ["a\n  bbbb", "  cc"]);
 }
 
+#[test]
+fn the_rest_of_an_entry_past_max_is_a_continued_part() {
+    let line = |text: &str| Line {
+        text: text.to_string(),
+        continued: false,
+    };
+    let now = tokio::time::Instant::now();
+    let mut m = Multiline::new(preset(MultilinePreset::Indent), 10, Duration::from_secs(10));
+    assert_eq!(m.push(line("a"), now), None);
+    assert_eq!(m.push(line("  bbbb"), now), None);
+    // "  cc" belongs to the entry but does not fit: the next part.
+    let first = m.push(line("  cc"), now).unwrap();
+    assert_eq!((first.text.as_str(), first.continued), ("a\n  bbbb", false));
+    // "d" starts a new entry: the part before it is complete.
+    let part = m.push(line("d"), now).unwrap();
+    assert_eq!((part.text.as_str(), part.continued), ("  cc", true));
+    let next = m.flush().unwrap();
+    assert_eq!((next.text.as_str(), next.continued), ("d", false));
+}
+
 #[tokio::test]
 async fn the_parts_of_a_split_line_are_joined_up_to_max() {
     // max 8 for lines, so "abcdefghij" comes as "abcdefgh" + "ij"; the

@@ -681,7 +681,10 @@ one record, with the same rules as vigild's
   indentation from the rules; read vigild with `format=ndjson` (the
   default `--source-path`).
 
-`--include`/`--exclude` apply to the whole record. `--multiline-timeout`
+`--include`/`--exclude` apply to the whole record. A record that comes in
+parts (a line longer than the limit, or a stack trace that would grow past
+`--max-line-bytes`) is forwarded or dropped as a whole: the filter decides
+on its first part. `--multiline-timeout`
 (default `200ms`, `10ms` to `10s`) is how long a record waits for a further
 line. Where vigild runs the service, its own `logs-multiline` is the better
 place: then `vigil logs`, the API and every consumer get the joined entry.

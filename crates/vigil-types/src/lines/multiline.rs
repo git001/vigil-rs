@@ -135,8 +135,11 @@ impl Multiline {
     /// The later parts of a split line ([`Line::continued`]) always belong
     /// to the entry before them, without a newline in between; but an
     /// entry never grows past `max`, so such a part starts its own entry
-    /// unless the limit is not reached yet.
-    pub fn push(&mut self, line: Line, now: Instant) -> Option<Line> {
+    /// unless the limit is not reached yet. A line that belongs to the
+    /// entry but no longer fits starts its next part: an entry with
+    /// [`Line::continued`] set, so a reader treats it like the later part
+    /// of a split line (the relay's filter decides on the first part only).
+    pub fn push(&mut self, mut line: Line, now: Instant) -> Option<Line> {
         self.deadline = Some(now + self.timeout);
         let Some(entry) = &mut self.entry else {
             self.entry = Some(line);
@@ -151,6 +154,7 @@ impl Multiline {
             entry.text.push_str(&line.text);
             return None;
         }
+        line.continued |= joins;
         self.entry.replace(line)
     }
 

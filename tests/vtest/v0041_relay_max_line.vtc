@@ -1,0 +1,41 @@
+vtest "vigil-log-relay --max-line-bytes: a longer line or joined record is forwarded in parts, the filter decision holds for all parts"
+
+# fixtures/v0041/stream.txt (all lines but the frames contain ERROR):
+#   ERROR first           11 bytes
+#   ERROR long-xxx…       12000 bytes
+#   ERROR trace           11 bytes, followed by 20 lines
+#     at frame-NN yyy…    59 bytes each
+#   ERROR last
+# With --max-line-bytes 1024 a text line may be up to 6 * 1024 + 4096 =
+# 10240 bytes (the record limit), a joined record up to 1024 bytes. Both
+# relays run with --include ERROR; the response ends with the connection.
+server s1 -repeat 2 {
+	rxreq
+	txresp -nolen -hdr "Content-Type: text/plain" -bodyfrom ${vtestdir}/fixtures/v0041/stream.txt
+} -start
+
+# Relay A, no multiline: the long line comes in two parts (10240 + 1760
+# bytes) with one warning; the second part has no ERROR but follows the
+# first. The frames are lines of their own without ERROR: dropped.
+shell {
+	${vtestdir}/helpers/relay_until.sh ${vigil_log_relay} ${tmpdir}/a.out "ERROR last" \
+		--source-url http://${s1_sock}/ --source-reconnect-delay 60000 \
+		--max-line-bytes 1024 --include ERROR
+	test "$(awk '{printf "%d ", length($0)}' ${tmpdir}/a.out)" = "11 10240 1760 11 10 "
+	test "$(grep -c 'forwarding a line longer than the limit in parts' ${tmpdir}/a.out.log)" -eq 1
+}
+
+# Relay B, --multiline indent: "ERROR trace" and frames 01 to 16 are one
+# record of 971 bytes, frame 17 would grow it past 1024. Frames 17 to 20
+# are the next part of the same entry: forwarded too, although they have
+# no ERROR.
+shell {
+	${vtestdir}/helpers/relay_until.sh ${vigil_log_relay} ${tmpdir}/b.out "ERROR last" \
+		--source-url http://${s1_sock}/ --source-reconnect-delay 60000 \
+		--max-line-bytes 1024 --include ERROR --multiline indent
+	test "$(awk '{printf "%d ", length($0)}' ${tmpdir}/b.out | cut -d' ' -f1-4)" = "11 10240 1760 11"
+	test "$(grep -c '^  at frame-' ${tmpdir}/b.out)" -eq 20
+	tail -1 ${tmpdir}/b.out | grep -qx "ERROR last"
+}
+
+server s1 -wait
