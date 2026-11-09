@@ -1,0 +1,29 @@
+vtest "vigil-log-relay: --include and --exclude see the whole record joined by --multiline-start"
+
+# A text stream of five entries, each starting with a date. --multiline-start
+# joins the indented lines to the entry before them; the filter decides on
+# the joined record:
+#   INFO start            no ERROR anywhere: dropped by --include
+#   ERROR boom + at a.b   forwarded whole
+#   INFO retry + caused by ERROR-17
+#                         ERROR only in the second line: forwarded whole
+#   ERROR noisy + at ignore.me
+#                         ignore only in the second line: dropped whole
+#   ERROR end             the last record, sent on the end of the stream
+server s1 {
+	rxreq
+	txresp -nolen -hdr "Transfer-Encoding: chunked" -hdr "Content-Type: text/plain"
+	chunked "2026-01-01 INFO start\n"
+	chunked "2026-01-01 ERROR boom\n  at a.b\n"
+	chunked "2026-01-01 INFO retry\n  caused by ERROR-17\n"
+	chunked "2026-01-01 ERROR noisy\n  at ignore.me\n"
+	chunked "2026-01-01 ERROR end\n"
+	chunkedlen 0
+} -start
+
+process p2 -winsz 50 200 "sh -c '${vigil_log_relay} --source-url http://${s1_sock}/ --stdout-sink --healthcheck 127.0.0.1:0 --source-reconnect-delay 60000 --multiline-start ^[0-9]{4}- --include ERROR --exclude ignore 2>${tmpdir}/relay.log'" -start
+process p2 -expect-text 0 0 "ERROR end"
+process p2 -match-text 0 0 "^2026-01-01 ERROR boom *\n  at a.b *\n2026-01-01 INFO retry *\n  caused by ERROR-17 *\n2026-01-01 ERROR end "
+server s1 -wait
+process p2 -kill TERM
+process p2 -wait

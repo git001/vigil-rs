@@ -1,0 +1,31 @@
+vtest "vigil-log-relay: ndjson and SSE framing from a source URL; SSE metadata and comments are dropped, invalid UTF-8 becomes U+FFFD"
+
+# s1 plays the log source: one streamed response that mixes a plain line
+# (ndjson), SSE metadata (event:, id:, retry:), an SSE comment (a
+# keepalive), data: lines with and without a space, an empty line (the end
+# of an SSE event) and a byte that is not UTF-8 (0xff, sent raw in its own
+# chunk of 8 bytes). The relay writes what it forwards to its stdout, the
+# terminal of p2; its own log goes to a file, so the screen holds only
+# forwarded lines. They must be exactly these four, on four consecutive
+# rows: anything forwarded by mistake would stand between them.
+server s1 {
+	rxreq
+	expect req.url == "/stream"
+	txresp -nolen -hdr "Transfer-Encoding: chunked" -hdr "Content-Type: text/event-stream"
+	chunked "line-a\n"
+	chunked "event: log\nid: 5\n: keepalive\n"
+	chunked "data: line-b\n\n"
+	chunked "data:line-c\nretry: 1000\n"
+	send "8\r\n"
+	sendhex "ff"
+	send "-line-d\r\n"
+	chunkedlen 0
+} -start
+
+process p2 -winsz 50 200 "sh -c '${vigil_log_relay} --source-url http://${s1_sock}/stream --stdout-sink --healthcheck 127.0.0.1:0 --source-reconnect-delay 60000 2>${tmpdir}/relay.log'" -start
+process p2 -expect-text 0 0 "-line-d"
+process p2 -match-text 0 0 "^line-a *\nline-b *\nline-c *\n[^\n]-line-d "
+
+server s1 -wait
+process p2 -kill TERM
+process p2 -wait

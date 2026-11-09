@@ -1,0 +1,45 @@
+vtest "vigil-log-relay through an HTTP proxy: --source-proxy, HTTP_PROXY, --source-no-proxy"
+
+# s2 is the proxy: a plain-http request through a proxy carries the whole
+# URL (absolute form), and VTest2 checks it. The source host
+# vigil-source.invalid does not resolve, so a line from s2 proves that the
+# relay did not try to reach it. (HTTPS through a proxy, CONNECT and a man
+# in the middle, is tests/proxy/squid.sh.)
+server s2 -repeat 2 {
+	rxreq
+	expect req.method == "GET"
+	expect req.url == "http://vigil-source.invalid:8080/stream"
+	expect req.http.Host == "vigil-source.invalid:8080"
+	txresp -body "via-proxy\n"
+} -start
+
+# s1 is the source itself, for the host in --source-no-proxy.
+server s1 {
+	rxreq
+	expect req.url == "/stream"
+	txresp -body "direct\n"
+} -start
+
+# Each relay runs until its first line (helpers/relay_until.sh).
+shell {
+	${vtestdir}/helpers/relay_until.sh ${vigil_log_relay} ${tmpdir}/flag.out . \
+		--source-url http://vigil-source.invalid:8080/stream \
+		--source-reconnect-delay 60000 --source-proxy http://${s2_sock}
+	test "$(cat ${tmpdir}/flag.out)" = via-proxy
+}
+shell {
+	HTTP_PROXY=http://${s2_sock} \
+	${vtestdir}/helpers/relay_until.sh ${vigil_log_relay} ${tmpdir}/env.out . \
+		--source-url http://vigil-source.invalid:8080/stream \
+		--source-reconnect-delay 60000
+	test "$(cat ${tmpdir}/env.out)" = via-proxy
+}
+shell {
+	${vtestdir}/helpers/relay_until.sh ${vigil_log_relay} ${tmpdir}/direct.out . \
+		--source-url http://${s1_sock}/stream --source-reconnect-delay 60000 \
+		--source-proxy http://${s2_sock} --source-no-proxy ${s1_addr}
+	test "$(cat ${tmpdir}/direct.out)" = direct
+}
+
+server s2 -wait
+server s1 -wait

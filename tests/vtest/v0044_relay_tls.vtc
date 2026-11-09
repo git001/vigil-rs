@@ -1,0 +1,104 @@
+vtest "vigil-log-relay reads vigild's log stream over TLS: --source-cacert, --source-insecure, client certificate (mTLS)"
+
+# VTest2 has no TLS: the certificates are made with openssl. One CA signs
+# vigild's server certificate (for 127.0.0.1) and the relay's client
+# certificate; the TLS identity relay (read) accepts every client
+# certificate of that CA.
+shell {
+	cd ${tmpdir}
+	openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+		-keyout ca.key -out ca.crt -days 1 -nodes -subj "/CN=test-ca" \
+		-addext "basicConstraints=critical,CA:true" \
+		-addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
+	for who in server client; do
+		openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+			-keyout $who.key -out $who.csr -nodes -subj "/CN=$who" 2>/dev/null
+	done
+	printf "subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth" > server.cnf
+	printf "subjectAltName=DNS:relay\nextendedKeyUsage=clientAuth" > client.cnf
+	for who in server client; do
+		openssl x509 -req -in $who.csr -CA ca.crt -CAkey ca.key \
+			-CAcreateserial -out $who.crt -days 1 -extfile $who.cnf 2>/dev/null
+	done
+}
+
+# fixtures/v0010: log-svc prints relay-test-line-N every 0.2s.
+process p1 -winsz 200 400 "${vigild} --layers-dir ${vtestdir}/fixtures/v0010 --socket ${tmpdir}/vigild.sock --tls-addr 127.0.0.1:0 --cert ${tmpdir}/server.crt --key ${tmpdir}/server.key --tls-client-ca ${tmpdir}/ca.crt" -start
+process p1 -expect-text 0 0 "API listening"
+
+shell {
+	${vigil} --socket ${tmpdir}/vigild.sock system-info \
+		| sed -n 's/^https-address: 127.0.0.1:\([0-9]*\)$/\1/p' > ${tmpdir}/tls_port
+	test -s ${tmpdir}/tls_port
+}
+
+# A local admin keeps the Unix socket working once bootstrap ends; then the
+# TLS identity relay.
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/identities -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-body "{\"identities\":{\"local-admin\":{\"access\":\"admin\",\"local\":{}}}}"
+	rxresp
+	expect resp.status == 200
+} -run
+shell {
+	${vtestdir}/helpers/tls_identity.py relay read ${tmpdir}/ca.crt ${tmpdir}/identity.json
+}
+client c2 -connect ${tmpdir}/vigild.sock {
+	txreq -method POST -url /v1/identities -hdr "Host: localhost" \
+		-hdr "Content-Type: application/json" \
+		-bodyfrom ${tmpdir}/identity.json
+	rxresp
+	expect resp.status == 200
+} -run
+
+# Each relay reads vigild's TLS stream until it forwarded a line
+# (helpers/relay_until.sh); a failure ends it at once with exit code 1
+# (--source-reconnect-retries 1).
+shell {
+	echo "https://127.0.0.1:$(cat ${tmpdir}/tls_port)/v1/logs/follow?format=ndjson" > ${tmpdir}/url
+}
+
+# Server certificate checked against the CA, client certificate: lines.
+shell {
+	${vtestdir}/helpers/relay_until.sh ${vigil_log_relay} ${tmpdir}/ca.out relay-test-line \
+		--source-url $(cat ${tmpdir}/url) --source-reconnect-retries 1 \
+		--source-cacert ${tmpdir}/ca.crt \
+		--source-cert ${tmpdir}/client.crt --source-key ${tmpdir}/client.key
+	grep -q '"service":"log-svc".*relay-test-line' ${tmpdir}/ca.out
+}
+
+# --source-insecure instead of the CA: lines too.
+shell {
+	${vtestdir}/helpers/relay_until.sh ${vigil_log_relay} ${tmpdir}/insecure.out relay-test-line \
+		--source-url $(cat ${tmpdir}/url) --source-reconnect-retries 1 \
+		--source-insecure \
+		--source-cert ${tmpdir}/client.crt --source-key ${tmpdir}/client.key
+	grep -q relay-test-line ${tmpdir}/insecure.out
+}
+
+# Without a client certificate the caller is anonymous (metrics access):
+# logs need an identity, vigild answers 403.
+shell {
+	rc=0
+	${vtestdir}/helpers/relay_until.sh ${vigil_log_relay} ${tmpdir}/anonymous.out relay-test-line \
+		--source-url $(cat ${tmpdir}/url) --source-reconnect-retries 1 \
+		--source-cacert ${tmpdir}/ca.crt || rc=$?
+	test $rc -eq 1
+	test ! -s ${tmpdir}/anonymous.out
+	grep -q "unexpected HTTP status.*status=403" ${tmpdir}/anonymous.out.log
+}
+
+# Without the CA the server certificate is not trusted: no connection.
+shell {
+	rc=0
+	${vtestdir}/helpers/relay_until.sh ${vigil_log_relay} ${tmpdir}/untrusted.out relay-test-line \
+		--source-url $(cat ${tmpdir}/url) --source-reconnect-retries 1 \
+		--source-cert ${tmpdir}/client.crt --source-key ${tmpdir}/client.key || rc=$?
+	test $rc -eq 1
+	test ! -s ${tmpdir}/untrusted.out
+	grep -q "connection failed" ${tmpdir}/untrusted.out.log
+}
+
+process p1 -kill TERM
+process p1 -wait

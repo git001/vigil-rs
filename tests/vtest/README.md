@@ -85,6 +85,12 @@ tests/vtest/run.sh
 | `v0036_logs_multiline.vtc` | `logs-multiline`: a Java and a Python stack trace (with "Caused by", chained tracebacks) are one entry each with their log line; on stdout only the first line has the `[service]` prefix |
 | `v0037_relay_multiline.vtc` | `vigil-log-relay --multiline java` on vigild's ndjson stream: a service without `logs-multiline` prints a trace, the relay writes it as one record with the joined message |
 | `v0038_shutdown_delay.vtc` | `--shutdown-delay`: after SIGTERM `/v1/health` answers 503 (not `level=alive`) while the services keep running; a second SIGTERM stops at once |
+| `v0039_relay_framing.vtc` | `vigil-log-relay --source-url` on a chunked stream mixing plain ndjson-style lines and SSE: `data:` lines are forwarded with and without the space, `event:`/`id:`/`retry:` and `:` comments are dropped, an invalid byte becomes `�` |
+| `v0040_relay_filter_multiline.vtc` | `--include`/`--exclude` with `--multiline-start` on a text stream: the filter decides on the joined record, so a match in a continuation line keeps or drops the whole stack trace |
+| `v0041_relay_max_line.vtc` | `--max-line-bytes 1024`: a 12000-byte line comes in two parts with one warning, a stack trace past 1024 bytes in two records; with `--include` the later parts follow the decision on the first |
+| `v0042_relay_reconnect.vtc` | Reconnects: `--source-user-file` is read again per connection (rotated password), `--source-idle-timeout`, a successful connect resets the failure counter, the third failure in a row ends the relay (`--source-reconnect-retries 3`, exit code 1) |
+| `v0043_relay_proxy.vtc` | Plain HTTP through a proxy: `--source-proxy` and `HTTP_PROXY` send the absolute-form request to the proxy, `--source-no-proxy` connects directly |
+| `v0044_relay_tls.vtc` | The relay on vigild's TLS stream: `--source-cacert` or `--source-insecure` with a client certificate (mTLS identity); without a certificate 403, without the CA no connection |
 
 ## How it works
 
@@ -118,7 +124,9 @@ on its own:
   file and reports its port in a file; `--port` binds a given port again,
   e.g. to test a reconnect; VTest2 cannot check raw TCP content) and
   `helpers/tls_identity.py` (request body for a TLS identity whose CA the
-  test creates at runtime).
+  test creates at runtime) and `helpers/relay_until.sh` (runs
+  vigil-log-relay with `--stdout-sink` until its output has a matching
+  line or it exits, for several relay runs in one test).
 
 Prefer a static file over building configs, bodies or scripts inside a
 `.vtc` (heredocs, inline JSON, `python3 -c`).

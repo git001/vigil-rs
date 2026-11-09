@@ -1,0 +1,49 @@
+vtest "vigil-log-relay reconnects: --source-user-file read anew per connection, idle timeout, failure counter, exit after --source-reconnect-retries"
+
+# The relay reads ${tmpdir}/cred, a symlink to fixtures/v0042/cred-a
+# (alice:secret-a), later to cred-b (bob:pa ss:b: spaces and further
+# colons belong to the password). --source-reconnect-retries 3: the third
+# failure in a row ends the relay with exit code 1. A successful connect
+# sets the counter back to 0.
+shell "ln -s ${vtestdir}/fixtures/v0042/cred-a ${tmpdir}/cred"
+
+# Failure 1: HTTP 503.
+server s1 {
+	rxreq
+	expect req.http.Authorization == "Basic YWxpY2U6c2VjcmV0LWE="
+	txresp -status 503
+} -start
+
+process p2 -winsz 50 200 "sh -c '${vigil_log_relay} --source-url http://${s1_sock}/ --source-user-file ${tmpdir}/cred --stdout-sink --healthcheck 127.0.0.1:0 --source-reconnect-delay 500 --source-reconnect-retries 3 --source-idle-timeout 300 2>${tmpdir}/relay.log'" -expect-exit 1 -start
+
+# The relay waits 500ms before it connects again; the password changes in
+# the meantime (as a rotated Secret would).
+server s1 -wait
+shell "ln -sfn ${vtestdir}/fixtures/v0042/cred-b ${tmpdir}/cred"
+
+# Connected (counter 0), then no data for 300ms: failure 1 again. Then two
+# 503: failures 2 and 3, the relay exits. Without the reset on connect the
+# second 503 would already be failure 3 and the last request would not come.
+server s1 {
+	rxreq
+	expect req.http.Authorization == "Basic Ym9iOnBhIHNzOmI="
+	txresp -nolen -hdr "Transfer-Encoding: chunked"
+	chunked "line-one\n"
+	delay 1
+	accept
+	rxreq
+	txresp -status 503
+	accept
+	rxreq
+	txresp -status 503
+} -start
+
+process p2 -expect-text 0 0 "line-one"
+process p2 -wait
+server s1 -wait
+
+shell {
+	grep -q "idle timeout" ${tmpdir}/relay.log
+	test "$(grep -c 'unexpected HTTP status.*status=503' ${tmpdir}/relay.log)" -eq 3
+	grep -q "exceeded 3 consecutive reconnect failures" ${tmpdir}/relay.log
+}
