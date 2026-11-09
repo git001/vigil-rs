@@ -2,6 +2,7 @@
 // Copyright (C) 2026 vigil-rs contributors
 
 pub mod api;
+pub mod duration;
 pub mod identity;
 pub mod no_proxy;
 pub mod paths;
