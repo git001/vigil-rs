@@ -3185,7 +3185,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vigil"
-version = "3.2.2"
+version = "4.0.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -3214,7 +3214,7 @@ dependencies = [
 
 [[package]]
 name = "vigil-files"
-version = "3.2.2"
+version = "4.0.0"
 dependencies = [
  "anyhow",
  "tempfile",
@@ -3223,7 +3223,7 @@ dependencies = [
 
 [[package]]
 name = "vigil-log-relay"
-version = "3.2.2"
+version = "4.0.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -3258,7 +3258,7 @@ dependencies = [
 
 [[package]]
 name = "vigil-tls"
-version = "3.2.2"
+version = "4.0.0"
 dependencies = [
  "anyhow",
  "rcgen",
@@ -3271,7 +3271,7 @@ dependencies = [
 
 [[package]]
 name = "vigil-types"
-version = "3.2.2"
+version = "4.0.0"
 dependencies = [
  "chrono",
  "indexmap",
@@ -3288,7 +3288,7 @@ dependencies = [
 
 [[package]]
 name = "vigild"
-version = "3.2.2"
+version = "4.0.0"
 dependencies = [
  "anyhow",
  "axum",
