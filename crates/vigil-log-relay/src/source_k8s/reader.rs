@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use chrono::{DateTime, FixedOffset};
 use serde::Serialize;
 use tokio::io::AsyncBufReadExt;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
@@ -81,8 +82,9 @@ pub(super) async fn stream_pod(
 
     // Deduplicate: K8s can deliver the same line twice near stream start when
     // tailLines + follow=true are combined (known K8s quirk). Skip any line
-    // whose timestamp is not strictly greater than the last forwarded one.
-    let mut last_ts = String::new();
+    // whose timestamp is not later than the last forwarded one (see
+    // `is_new`).
+    let mut last: Option<DateTime<FixedOffset>> = None;
 
     loop {
         match lines.next_line().await {
@@ -93,7 +95,7 @@ pub(super) async fn stream_pod(
                     None => (line.as_str(), ""),
                 };
 
-                if ts <= last_ts.as_str() {
+                if !is_new(ts, last) {
                     continue; // duplicate or out-of-order — skip
                 }
 
@@ -115,7 +117,9 @@ pub(super) async fn stream_pod(
                         warn!(pod = %pod, stream = stream_name, "send buffer full — dropping log line");
                     }
                 }
-                last_ts = ts.to_owned();
+                if let Ok(t) = DateTime::parse_from_rfc3339(ts) {
+                    last = Some(t);
+                }
             }
             Ok(None) => {
                 info!(pod = %pod, stream = stream_name, "log stream EOF");
@@ -129,9 +133,34 @@ pub(super) async fn stream_pod(
     }
 }
 
+/// Whether a line with the timestamp `ts` comes after the last forwarded
+/// one. The timestamps are compared as points in time: the kubelet writes
+/// them as RFC 3339 with the trailing zeros of the fraction cut, so
+/// `…46.12345Z` sorts after `…46.123456789Z` as text although it is
+/// earlier. A line whose timestamp cannot be read is forwarded.
+fn is_new(ts: &str, last: Option<DateTime<FixedOffset>>) -> bool {
+    match (DateTime::parse_from_rfc3339(ts), last) {
+        (Ok(t), Some(last)) => t > last,
+        _ => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timestamps_are_compared_as_points_in_time() {
+        let at = |s: &str| Some(DateTime::parse_from_rfc3339(s).unwrap());
+        let a = "2026-11-09T01:52:46.12345Z";
+        let b = "2026-11-09T01:52:46.123456789Z";
+        assert!(is_new(a, None));
+        assert!(is_new(b, at(a)), "{b} is after {a}, not before");
+        assert!(!is_new(a, at(b)));
+        assert!(!is_new(a, at(a)), "the same line again");
+        assert!(is_new("2026-11-09T01:52:47Z", at(b)), "no fraction");
+        assert!(is_new("garbage", at(b)), "unreadable: forwarded");
+    }
 
     fn api_error(code: u16, message: &str) -> kube::Error {
         kube::Error::Api(kube::core::ErrorResponse {
