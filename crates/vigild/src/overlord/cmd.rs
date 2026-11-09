@@ -45,6 +45,10 @@ pub enum Cmd {
     GetSystemInfo {
         reply: oneshot::Sender<SystemInfo>,
     },
+    /// `GET /v1/plan`: the merged plan as one layer, not masked yet.
+    GetPlan {
+        reply: oneshot::Sender<vigil_types::plan::Layer>,
+    },
     ReloadLayers {
         reply: oneshot::Sender<anyhow::Result<()>>,
     },

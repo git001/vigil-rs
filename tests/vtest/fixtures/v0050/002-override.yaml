@@ -1,0 +1,16 @@
+# A later layer: merges into web and adds identities, one of them with an
+# inline password hash. `local: {}` keeps the test's own UID admin.
+services:
+  web:
+    override: merge
+    environment:
+      LOG_LEVEL: debug
+
+identities:
+  me:
+    access: admin
+    local: {}
+  relay:
+    access: read
+    basic:
+      password-hash: $6$s3cret-salt$s3cret-hash

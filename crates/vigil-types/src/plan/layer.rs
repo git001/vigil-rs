@@ -25,7 +25,7 @@ pub struct Layer {
     pub services: IndexMap<String, ServiceConfig>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub checks: IndexMap<String, CheckConfig>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "AlertsBlock::is_empty")]
     pub alerts: AlertsBlock,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub identities: IndexMap<String, IdentityConfig>,
@@ -128,6 +128,35 @@ impl Plan {
             identities,
             alert_queue_depth,
             alert_max_queue_time,
+        }
+    }
+
+    /// The merged plan as one layer (`GET /v1/plan`): read as a layer file,
+    /// it gives the same plan.
+    pub fn to_layer(&self) -> Layer {
+        fn merged<T: Clone>(
+            items: &IndexMap<String, T>,
+            reset: impl Fn(&mut T),
+        ) -> IndexMap<String, T> {
+            items
+                .iter()
+                .map(|(name, item)| {
+                    let mut item = item.clone();
+                    reset(&mut item);
+                    (name.clone(), item)
+                })
+                .collect()
+        }
+        Layer {
+            services: merged(&self.services, |s| s.override_mode = Override::Merge),
+            checks: merged(&self.checks, |c| c.override_mode = Override::Merge),
+            alerts: AlertsBlock {
+                max_queue_depth: self.alert_queue_depth,
+                max_queue_time: self.alert_max_queue_time.clone(),
+                entries: merged(&self.alerts, |a| a.override_mode = Override::Merge),
+            },
+            identities: self.identities.clone(),
+            ..Layer::default()
         }
     }
 }

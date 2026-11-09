@@ -1,0 +1,23 @@
+# The base layer: a service with a secret in its environment, a check with
+# an Authorization header and an alert to a webhook whose path is its
+# secret.
+services:
+  web:
+    command: sleep 60
+    environment:
+      DB_PASSWORD: s3cret-db
+      LOG_LEVEL: info
+
+checks:
+  web-up:
+    http:
+      url: http://localhost:8080/healthz?token=s3cret-query
+      headers:
+        Authorization: Bearer s3cret-bearer
+
+alerts:
+  ops:
+    url: https://hooks.example.com/services/s3cret-webhook
+    on-check: [web-up]
+    labels:
+      team: web

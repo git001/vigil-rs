@@ -96,7 +96,11 @@ pub struct ExecCheck {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct CheckConfig {
     /// `override: merge|replace` in the layer file.
-    #[serde(default, rename = "override")]
+    #[serde(
+        default,
+        rename = "override",
+        skip_serializing_if = "Override::is_merge"
+    )]
     pub override_mode: Override,
     /// `None`: not set in this layer (a merge keeps the earlier value);
     /// read it with [`CheckConfig::level`].

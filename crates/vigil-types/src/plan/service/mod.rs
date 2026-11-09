@@ -21,7 +21,11 @@ pub use watch_files::{FileChangeAction, WatchFiles};
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ServiceConfig {
     /// `override: merge|replace` in the layer file.
-    #[serde(default, rename = "override")]
+    #[serde(
+        default,
+        rename = "override",
+        skip_serializing_if = "Override::is_merge"
+    )]
     pub override_mode: Override,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,

@@ -55,3 +55,10 @@ pub enum Override {
     Merge,
     Replace,
 }
+
+impl Override {
+    /// For `skip_serializing_if`: `merge` is the default and not written.
+    pub fn is_merge(&self) -> bool {
+        *self == Override::Merge
+    }
+}

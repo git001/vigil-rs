@@ -29,7 +29,11 @@ pub enum AlertFormat {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct AlertConfig {
     /// `override: merge|replace` in the layer file.
-    #[serde(default, rename = "override")]
+    #[serde(
+        default,
+        rename = "override",
+        skip_serializing_if = "Override::is_merge"
+    )]
     pub override_mode: Override,
     /// HTTP(S) endpoint to POST alerts to.
     pub url: String,

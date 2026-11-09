@@ -522,3 +522,50 @@ fn alerts_block_errors_name_the_key() {
         .to_string();
     assert!(err.starts_with("hook: unknown field `urll`"), "{err}");
 }
+
+#[test]
+fn to_layer_reads_back_as_the_same_plan() {
+    let parse = |yaml: &str| -> Layer { serde_yaml::from_str(yaml).unwrap() };
+    let plan = Plan::from_layers(vec![
+        parse(
+            "services:\n  web: {command: a, environment: {A: '1'}}\n\
+             checks:\n  up: {tcp: {port: 80}}\n\
+             alerts:\n  max-queue-depth: 10\n  ops: {url: 'https://x', on-check: [up]}\n\
+             identities:\n  me: {access: admin, local: {}}\n",
+        ),
+        parse(
+            "services:\n  web: {override: merge, environment: {B: '2'}}\n  \
+             db: {override: replace, command: b}\n",
+        ),
+    ]);
+    let layer = plan.to_layer();
+    let yaml = serde_yaml::to_string(&layer).unwrap();
+    assert!(!yaml.contains("override"), "{yaml}");
+    let again = Plan::from_layers(vec![parse(&yaml)]);
+    assert_eq!(again.services, plan.services_without_override());
+    assert_eq!(again.checks, plan.checks);
+    assert_eq!(again.alerts, plan.alerts);
+    assert_eq!(again.alert_queue_depth, Some(10));
+    assert_eq!(again.identities["me"].access, plan.identities["me"].access);
+
+    let empty = serde_yaml::to_string(&Plan::from_layers(vec![]).to_layer()).unwrap();
+    assert_eq!(empty, "{}\n");
+}
+
+impl Plan {
+    /// The services with `override` reset, as [`Plan::to_layer`] writes them.
+    fn services_without_override(&self) -> IndexMap<String, ServiceConfig> {
+        self.services
+            .iter()
+            .map(|(n, s)| {
+                (
+                    n.clone(),
+                    ServiceConfig {
+                        override_mode: Override::Merge,
+                        ..s.clone()
+                    },
+                )
+            })
+            .collect()
+    }
+}

@@ -29,6 +29,10 @@ async fn main() -> anyhow::Result<()> {
             lines,
             follow,
         } => cmd::logs::run(&client, &services, lines, follow).await?,
+        Cmd::Plan => {
+            let plan = client.get_plan().await?;
+            print!("{}", serde_yaml::to_string(&plan)?);
+        }
         Cmd::Replan => {
             client.replan().await?;
             println!("Replan completed.");

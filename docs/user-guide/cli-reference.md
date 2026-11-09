@@ -309,6 +309,32 @@ the raw SSE API.
 
 ---
 
+### `plan`
+
+Show the plan merged from all layers as one layer file (YAML), with secrets
+masked as `***` (`GET /v1/plan`, access `read`; the rules are in the
+[REST API reference](../api-reference/rest-api.md#get-v1plan)).
+
+```bash
+vigil plan
+```
+
+```yaml
+services:
+  web:
+    command: /usr/local/bin/web
+    startup: enabled
+    environment:
+      DB_PASSWORD: '***'
+alerts:
+  ops:
+    url: https://hooks.slack.com/***
+    on-check:
+    - '*'
+```
+
+---
+
 ### `replan`
 
 Hot-reload layer YAML files from disk without restarting vigild.

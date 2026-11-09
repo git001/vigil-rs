@@ -37,7 +37,7 @@ e.g. on OpenShift with a random UID.
 | **TLS listener** | Optional HTTPS API (`--tls-addr`); auto-generates self-signed cert |
 | **Identity management** | Named principals with `open`/`metrics`/`read`/`write`/`admin` access levels (Unix UID, HTTP Basic, TLS client certificate); defined in layer files (password hash or CA from a file, e.g. a Kubernetes Secret) or added over the API |
 | **Signal forwarding** | SIGHUP / SIGUSR1 / SIGUSR2 forwarded to all running service process groups; `vigil services signal SIGHUP nginx` for single services |
-| **Replan** | Hot-reload layer YAML files without restarting the daemon; changed services restart; `--watch-layers` reloads by itself (e.g. a mounted ConfigMap) |
+| **Replan** | Hot-reload layer YAML files without restarting the daemon; changed services restart; `--watch-layers` reloads by itself (e.g. a mounted ConfigMap); `vigil plan` shows the merged plan, secrets masked |
 | **Strict configuration** | An unknown key or invalid value in a layer file is an error that names it; nothing is silently ignored |
 | **mimalloc** | High-performance allocator enabled globally |
 

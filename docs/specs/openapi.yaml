@@ -396,6 +396,29 @@ paths:
             application/openmetrics-text; version=1.0.0; charset=utf-8: {}
         '403':
           description: Forbidden.
+  /v1/plan:
+    get:
+      tags:
+      - plan
+      summary: Get the plan
+      description: |-
+        Returns the plan merged from all layers, in the form of one layer file (`services`, `checks`, `alerts`, `identities`; the same keys as in the layer files). Read as a layer file, it gives the same plan.
+
+        Secrets are masked as `***`: every `environment` value; `headers` values other than a reference `env:NAME`; in URLs the user info and the query values, and for alerts also the path (webhooks carry their secret there); `password-hash` of identities. `command`, `body-template`, `labels`, `send-info-fields` and file paths are shown as written.
+
+        **Required access:** `read` or higher.
+      operationId: get_plan
+      responses:
+        '200':
+          description: The merged plan as one layer, secrets masked.
+          content:
+            application/json:
+              schema:
+                type: object
+        '403':
+          description: Forbidden.
+        '500':
+          description: Internal error.
   /v1/replan:
     post:
       tags:
@@ -1088,6 +1111,7 @@ tags:
 - name: checks
 - name: alerts
 - name: logs
+- name: plan
 - name: replan
 - name: identities
 - name: metrics

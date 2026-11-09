@@ -190,6 +190,13 @@ arguments; vigild passes them like the other arguments:
 `command` and the values of `environment` may contain
 [templates](#templates-in-command-and-environment).
 
+> [!WARNING]
+> Do not write a secret into `command` (`--password=…`). Anyone with `read`
+> access sees `command` as written in `GET /v1/plan` and `vigil plan`, and
+> every local user sees the arguments of the process in `/proc`. Pass
+> secrets through `environment` (masked in the plan) with a template such as
+> `{{ file('/run/secrets/db-password') }}`, or with `env-file`.
+
 #### Templates in `command` and `environment`
 
 `command` and the values of `environment` are templates in the
@@ -1551,6 +1558,11 @@ They differ in placement within the payload:
 A [Jinja2](https://jinja.palletsprojects.com/)-compatible template string
 (rendered by [minijinja](https://github.com/mitsuhiko/minijinja)) that replaces
 the default webhook payload when `format: webhook` is configured.
+
+> [!WARNING]
+> `body-template`, `labels` and `send-info-fields` are shown as written in
+> `GET /v1/plan` and `vigil plan` (access `read`). Do not write a secret
+> into them; use `headers` (masked) or an `env:NAME` value.
 
 The rendered string **must be valid JSON**. A template with a syntax error
 makes the layer invalid (checked when the layers load). Errors that only show

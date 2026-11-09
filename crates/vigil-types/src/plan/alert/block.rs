@@ -46,6 +46,13 @@ pub struct AlertsBlock {
 
 const SETTINGS: &[&str] = &["max-queue-depth", "max-queue-time"];
 
+impl AlertsBlock {
+    /// No settings and no alerts (for `skip_serializing_if`).
+    pub fn is_empty(&self) -> bool {
+        self.max_queue_depth.is_none() && self.max_queue_time.is_none() && self.entries.is_empty()
+    }
+}
+
 /// Deserialized by hand: with `#[serde(flatten)]` every unknown key would be
 /// taken as an alert, so a typo like `max-queue-depht: 5` failed with
 /// "expected struct AlertConfig". Here a key that is not a setting must hold

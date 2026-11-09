@@ -1,0 +1,37 @@
+vtest "GET /v1/plan and vigil plan show the merged plan with secrets masked"
+
+# fixtures/v0050: two layers; secrets in an environment value, a header, a
+# query, a webhook path and a password hash, all containing "s3cret".
+process p1 -winsz 100 200 "${vigild} --layers-dir ${vtestdir}/fixtures/v0050 --socket ${tmpdir}/vigild.sock --path-prefix ${tmpdir}/run" -start
+process p1 -expect-text 0 0 "API listening"
+
+client c1 -connect ${tmpdir}/vigild.sock {
+	txreq -url /v1/plan -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	# Merged: LOG_LEVEL from the second layer, masked like every value.
+	expect resp.body ~ "\"environment\":\\{\"DB_PASSWORD\":\"\\*\\*\\*\",\"LOG_LEVEL\":\"\\*\\*\\*\"\\}"
+	expect resp.body ~ "\"command\":\"sleep 60\""
+	expect resp.body ~ "\"url\":\"http://localhost:8080/healthz\\?token=\\*\\*\\*\""
+	expect resp.body ~ "\"Authorization\":\"\\*\\*\\*\""
+	expect resp.body ~ "\"url\":\"https://hooks.example.com/\\*\\*\\*\""
+	expect resp.body ~ "\"team\":\"web\""
+	expect resp.body ~ "\"password-hash\":\"\\*\\*\\*\""
+	expect resp.body !~ "s3cret"
+	expect resp.body !~ "override"
+} -run
+
+# vigil plan prints the same as YAML.
+shell -expect "DB_PASSWORD: '***'" {
+	${vigil} --socket ${tmpdir}/vigild.sock plan
+}
+shell -expect "url: https://hooks.example.com/***" {
+	${vigil} --socket ${tmpdir}/vigild.sock plan
+}
+# grep finds no secret: exit code 1.
+shell -exit 1 {
+	${vigil} --socket ${tmpdir}/vigild.sock plan | grep s3cret
+}
+
+process p1 -kill TERM
+process p1 -wait

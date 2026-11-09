@@ -27,6 +27,7 @@ async fn tls_anonymous_default_metrics_allows_probes_and_metrics_only() {
         "/v1/logs/follow",
         "/v1/alerts",
         "/v1/identities",
+        "/v1/plan",
     ] {
         let resp = app.request_tls(Method::GET, uri, None).await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN, "{uri}");

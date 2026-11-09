@@ -139,6 +139,11 @@ pub(crate) enum Cmd {
         follow: bool,
     },
 
+    /// Show the plan merged from all layers, as one layer file (YAML).
+    /// Secrets are masked as `***`.
+    #[command(name = "plan")]
+    Plan,
+
     /// Reload layers from disk and apply changes.
     #[command(name = "replan")]
     Replan,

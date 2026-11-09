@@ -18,6 +18,7 @@ use crate::overlord::Handle;
 pub(super) mod auth;
 mod error;
 mod handlers;
+mod mask;
 mod openapi;
 
 pub(crate) use error::{ApiError, ApiResult, ok};
@@ -63,6 +64,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/alerts", get(handlers::list_alerts))
         .route("/v1/logs", get(handlers::get_logs))
         .route("/v1/logs/follow", get(handlers::follow_logs))
+        .route("/v1/plan", get(handlers::get_plan))
         .route("/v1/replan", post(handlers::replan))
         .route("/v1/vigild", post(handlers::daemon_action))
         .route(

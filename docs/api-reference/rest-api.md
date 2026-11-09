@@ -23,7 +23,7 @@ above it:
 |-------|-------------|
 | `open` | `GET /v1/system-info`, `GET /v1/checks`, `GET /v1/health`, `/docs`, `/openapi.json` |
 | `metrics` | `GET /v1/metrics` |
-| `read` | `GET /v1/services`, `/v1/changes/{id}`, `/v1/alerts`, `/v1/logs`, `/v1/logs/follow` |
+| `read` | `GET /v1/services`, `/v1/changes/{id}`, `/v1/alerts`, `/v1/logs`, `/v1/logs/follow`, `/v1/plan` |
 | `write` | `POST /v1/services`, `POST /v1/signals`, `POST /v1/checks/refresh`, `POST /v1/replan` |
 | `admin` | `POST /v1/vigild`, all `/v1/identities` endpoints (also `GET`) |
 
@@ -650,6 +650,64 @@ curl -N --unix-socket /run/vigil/vigild.sock \
 # Follow myapp only, as ndjson
 curl -N --unix-socket /run/vigil/vigild.sock \
   "http://localhost/v1/logs/follow?services=myapp&format=ndjson"
+```
+
+---
+
+### `GET /v1/plan`
+
+**Required access level:** `read`
+
+The plan merged from all layers, in the form of one layer file: `services`,
+`checks`, `alerts` and `identities` with the same keys as in the layer
+files. Empty sections and `override: merge` are left out. Read as a layer
+file, it gives the same plan, apart from the masked values. There is no way
+to change the plan over the API; that is what the layer files are for.
+
+**Secrets are masked** as `***`:
+
+| Where | Masked |
+|---|---|
+| `environment` (services, exec checks) | every value; the names stay |
+| `headers` (HTTP checks, alerts) | every value but a reference `env:NAME` |
+| `url` of HTTP checks and `proxy.url` | the user info (`user:***@`, a user name alone becomes `***@`), the query values (`?token=***`) and a fragment |
+| `url` of alerts | the same, and the path (`https://hooks.slack.com/***`), which carries the secret of many webhooks; a reference `env:NAME` stays |
+| `identities` | `password-hash` |
+
+Shown as written: `command`, `body-template`, `labels`, `send-info-fields`,
+`env:NAME` references and file paths (`env-file`, `tls`, `password-hash-file`).
+Do not put secrets there; see the warnings at
+[`command`](../user-guide/configuration.md#command) and
+[`body-template`](../user-guide/configuration.md#body-template).
+Identities added over the API are not part of the plan; see
+[`GET /v1/identities`](#get-v1identities).
+
+**Response** `200 OK`
+
+```json
+{
+  "type": "sync",
+  "status-code": 200,
+  "status": "OK",
+  "result": {
+    "services": {
+      "web": {
+        "command": "/usr/local/bin/web",
+        "startup": "enabled",
+        "environment": { "DB_PASSWORD": "***" }
+      }
+    },
+    "alerts": {
+      "ops": { "url": "https://hooks.slack.com/***", "on-check": ["*"] }
+    }
+  }
+}
+```
+
+**Example:**
+
+```bash
+curl --unix-socket /run/vigil/vigild.sock http://localhost/v1/plan
 ```
 
 ---

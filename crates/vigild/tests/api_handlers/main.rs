@@ -36,6 +36,7 @@ mod identities;
 mod layer_identities;
 mod logs;
 mod misc;
+mod plan;
 mod services;
 mod system;
 mod tls_anonymous;

@@ -96,6 +96,7 @@ tests/vtest/run.sh
 | `v0047_shutdown_order.vtc` | Shutdown in the start order reversed: proxy (after app), then app, then db (required by app), each once the one before has exited (1s each, longer than the old 0.5s to SIGKILL); vigild exits after the last |
 | `v0048_service_actions_wait.vtc` | `POST /v1/services` answers when the action is done: a start once the service is ready (meanwhile `GET /v1/changes/1` shows `doing`), a oneshot start at the end of its run (failed: `error` with the reason, `vigil` exits 1), a stop once the process is gone |
 | `v0049_oneshot_run_timeout.vtc` | `run-timeout` stops a oneshot run that takes too long (SIGTERM ignored: SIGKILL after `kill-delay`); the run fails with `did not finish within 500ms` and counts in `vigil_service_runs_total{result="failure"}`; a run within its limit ends `done` |
+| `v0050_plan.vtc` | `GET /v1/plan` and `vigil plan`: the plan merged from two layers, secrets masked (environment values, a header, a query value, a webhook path, a password hash), `command` and `labels` as written |
 
 ## How it works
 

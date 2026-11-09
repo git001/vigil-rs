@@ -62,6 +62,9 @@ impl Overlord {
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 });
             }
+            Cmd::GetPlan { reply } => {
+                let _ = reply.send(self.plan.to_layer());
+            }
             Cmd::ReloadLayers { reply } => {
                 let _ = reply.send(self.reload_layers().await);
             }

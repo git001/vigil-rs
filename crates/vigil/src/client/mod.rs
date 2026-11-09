@@ -158,6 +158,11 @@ impl VigilClient {
         self.get(&format!("/v1/alerts{}", names_query(names))).await
     }
 
+    /// The merged plan as one layer, secrets masked (`GET /v1/plan`).
+    pub async fn get_plan(&self) -> anyhow::Result<vigil_types::plan::Layer> {
+        self.get("/v1/plan").await
+    }
+
     pub async fn replan(&self) -> anyhow::Result<()> {
         self.post_void("/v1/replan", &serde_json::Value::Null).await
     }
