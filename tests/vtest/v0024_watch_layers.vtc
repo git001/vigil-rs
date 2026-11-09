@@ -25,8 +25,8 @@ shell {ln -s ${vtestdir}/fixtures/v0024/start ${tmpdir}/layers}
 # on one row.
 process p1 -winsz 200 400 "env WEBHOOK_URL=http://${s1_sock}/webhook ${vigild} --layers-dir ${tmpdir}/layers --socket ${tmpdir}/vigild.sock --watch-layers 1s" -start
 # "API listening" comes before the layers are loaded; "watching layers"
-# once they are loaded and the watcher has taken its baseline. A change
-# before that would already be in the first plan.
+# once they are loaded and the watcher knows the state they were loaded
+# in, so every change after it leads to a replan.
 process p1 -expect-text 0 0 "watching layers"
 
 # 1. A new layer is applied without "vigil replan": web shows up and starts.

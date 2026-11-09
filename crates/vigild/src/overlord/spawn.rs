@@ -56,13 +56,36 @@ pub async fn spawn(
     // instead of blocking it.
     let dir = layers_dir.clone();
     let notify = notify_dir.clone();
-    let plan::Loaded {
-        plan: plan_val,
-        alerts,
-        checks: check_clients,
-        identities,
-        files,
-    } = crate::template::off_runtime("layers", move || plan::load(&dir, &notify)).await?;
+    let watch = watch_layers.is_some();
+    let (
+        plan::Loaded {
+            plan: plan_val,
+            alerts,
+            checks: check_clients,
+            identities,
+            files,
+        },
+        baseline,
+    ) = crate::template::off_runtime("layers", move || {
+        // With --watch-layers: hash the layer files right before and after
+        // the load, so a change in between is not taken as the state the
+        // plan was loaded from (the watcher would never replan for it).
+        let before = watch
+            .then(|| watch_layers::layers_hash(&dir, &[]))
+            .flatten();
+        let loaded = plan::load(&dir, &notify)?;
+        let baseline = if watch {
+            watch_layers::Baseline::of_load(
+                before,
+                watch_layers::layers_hash(&dir, &[]),
+                watch_layers::layers_hash(&dir, &loaded.files),
+            )
+        } else {
+            watch_layers::Baseline::Unknown
+        };
+        Ok((loaded, baseline))
+    })
+    .await?;
     let identity_store = IdentityStore::with_layer(identities);
     let watched_files = watch_layers::WatchedFiles::new(files);
 
@@ -103,7 +126,13 @@ pub async fn spawn(
     let task = tokio::spawn(run(ov));
     if let Some(interval) = watch_layers {
         // Ends by itself when the overlord's command channel closes.
-        watch_layers::spawn(layers_dir, watched_files, interval, cmd_tx.clone());
+        watch_layers::spawn(
+            layers_dir,
+            watched_files,
+            interval,
+            baseline,
+            cmd_tx.clone(),
+        );
     }
     Ok(Spawned {
         handle: Handle { tx: cmd_tx },

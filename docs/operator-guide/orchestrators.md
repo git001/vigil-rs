@@ -343,7 +343,9 @@ Deployment automatically on `oc start-build`.
 ### Replan on ConfigMap change
 
 With `--watch-layers` (or `VIGIL_WATCH_LAYERS`) vigild notices changed layer
-files itself and replans, so a ConfigMap update needs no `kubectl exec`:
+files itself and replans, so a ConfigMap update needs no `kubectl exec`.
+A change while vigild starts (a ConfigMap updated during a rollout) is not
+missed: vigild compares against the files as it loaded them.
 
 ```yaml
 spec:

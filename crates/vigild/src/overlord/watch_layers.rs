@@ -56,7 +56,7 @@ impl WatchedFiles {
 /// directory or secret file has its own hash (the next load reports it).
 /// `None`: the directory or a layer file could not be read; the round is
 /// skipped.
-fn layers_hash(dir: &Path, secrets: &[PathBuf]) -> Option<u64> {
+pub(super) fn layers_hash(dir: &Path, secrets: &[PathBuf]) -> Option<u64> {
     let mut h = ContentHasher::default();
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
@@ -92,23 +92,53 @@ fn layers_hash(dir: &Path, secrets: &[PathBuf]) -> Option<u64> {
     Some(h.finish())
 }
 
+/// The state of the layers the running plan was loaded from.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Baseline {
+    /// Not known (the files could not be read): the first poll sets it.
+    #[default]
+    Unknown,
+    /// The hash of the files as they were loaded.
+    Known(u64),
+    /// The layer files changed while they were loaded: the plan may be
+    /// older than the files, the first stable poll replans.
+    Stale,
+}
+
+impl Baseline {
+    /// The baseline of a load: `before` and `after` hash the layer files
+    /// alone, right before and after it; `full` hashes them after it
+    /// together with the files the loaded layers refer to.
+    pub fn of_load(before: Option<u64>, after: Option<u64>, full: Option<u64>) -> Self {
+        match (before, after, full) {
+            (Some(b), Some(a), _) if b != a => Baseline::Stale,
+            (Some(_), Some(_), Some(full)) => Baseline::Known(full),
+            _ => Baseline::Unknown,
+        }
+    }
+}
+
 /// Change detection with debounce, separate from the polling loop so it can
 /// be tested without a runtime clock.
 #[derive(Debug, Default)]
 struct Detector {
-    baseline: Option<u64>,
+    baseline: Baseline,
     pending: Option<u64>,
 }
 
 impl Detector {
     /// Feed the current hash; `true` once a change has been stable for one
-    /// round. The first hash only sets the baseline.
+    /// round. Without a known baseline the first hash only sets it.
     fn update(&mut self, current: u64) -> bool {
-        let Some(baseline) = self.baseline else {
-            self.baseline = Some(current);
-            return false;
+        let changed = match self.baseline {
+            Baseline::Unknown => {
+                self.baseline = Baseline::Known(current);
+                return false;
+            }
+            Baseline::Known(b) => current != b,
+            Baseline::Stale => true,
         };
-        if current == baseline {
+        if !changed {
             self.pending = None;
             return false;
         }
@@ -116,23 +146,32 @@ impl Detector {
             self.pending = Some(current);
             return false;
         }
-        self.baseline = Some(current);
+        self.baseline = Baseline::Known(current);
         self.pending = None;
         true
     }
 }
 
 /// Poll `dir` every `interval` and send a replan to the overlord when the
-/// layers changed. Runs until the overlord is gone.
+/// layers changed since `baseline` (the state they were loaded in). Runs
+/// until the overlord is gone.
 pub fn spawn(
     dir: PathBuf,
     secrets: WatchedFiles,
     interval: Duration,
+    baseline: Baseline,
     tx: mpsc::Sender<Cmd>,
 ) -> JoinHandle<()> {
     let interval = clamp_interval(interval);
     tokio::spawn(async move {
-        let mut detector = Detector::default();
+        let mut detector = Detector {
+            baseline,
+            pending: None,
+        };
+        if baseline != Baseline::Unknown {
+            // Every change since the load is seen.
+            info!(dir = %dir.display(), ?interval, "watching layers");
+        }
         let mut reader = PeriodicRead::default();
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -154,7 +193,7 @@ pub fn spawn(
                 // Unreadable this round, or the last read still hangs.
                 _ => continue,
             };
-            let first = detector.baseline.is_none();
+            let first = detector.baseline == Baseline::Unknown;
             if !detector.update(hash) {
                 if first {
                     // Logged once the baseline is taken: from now on every
@@ -189,6 +228,79 @@ mod tests {
         assert!(!d.update(3), "react only once");
         assert!(!d.update(1), "changed back: wait");
         assert!(!d.update(3), "reverted within a round: nothing");
+    }
+
+    #[test]
+    fn baseline_of_a_load() {
+        use Baseline::*;
+        assert_eq!(Baseline::of_load(Some(1), Some(1), Some(9)), Known(9));
+        assert_eq!(Baseline::of_load(Some(1), Some(2), Some(9)), Stale);
+        assert_eq!(Baseline::of_load(None, Some(1), Some(9)), Unknown);
+        assert_eq!(Baseline::of_load(Some(1), Some(1), None), Unknown);
+    }
+
+    #[test]
+    fn a_known_baseline_sees_a_change_on_the_first_poll() {
+        let mut d = Detector {
+            baseline: Baseline::Known(1),
+            pending: None,
+        };
+        assert!(!d.update(1), "as loaded");
+        assert!(!d.update(2), "changed: wait one round");
+        assert!(d.update(2), "stable: react");
+        let mut d = Detector {
+            baseline: Baseline::Known(1),
+            pending: None,
+        };
+        assert!(
+            !d.update(2),
+            "changed before the first poll: wait one round"
+        );
+        assert!(
+            d.update(2),
+            "and react, instead of taking it as the baseline"
+        );
+    }
+
+    #[test]
+    fn a_stale_baseline_replans_once_stable() {
+        let mut d = Detector {
+            baseline: Baseline::Stale,
+            pending: None,
+        };
+        assert!(!d.update(5), "wait one round");
+        assert!(d.update(5), "replan");
+        assert!(!d.update(5), "only once");
+    }
+
+    /// The layers change after the load but before the watcher's first
+    /// poll: the watcher replans (before, it took the new state as its
+    /// baseline and never did).
+    #[tokio::test]
+    async fn a_change_between_load_and_first_poll_replans() {
+        let dir = tempfile::tempdir().unwrap();
+        let layer = dir.path().join("001-base.yaml");
+        std::fs::write(&layer, "services: {}\n").unwrap();
+        let loaded = layers_hash(dir.path(), &[]).unwrap();
+        std::fs::write(&layer, "services: {a: {command: x}}\n").unwrap();
+
+        let (tx, mut rx) = mpsc::channel(4);
+        let task = spawn(
+            dir.path().to_owned(),
+            WatchedFiles::default(),
+            Duration::from_secs(1),
+            Baseline::Known(loaded),
+            tx,
+        );
+        let cmd = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+            .await
+            .expect("no replan")
+            .expect("channel closed");
+        let Cmd::ReloadLayers { reply } = cmd else {
+            panic!("not a replan");
+        };
+        reply.send(Ok(())).unwrap();
+        task.abort();
     }
 
     #[test]
