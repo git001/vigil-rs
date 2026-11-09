@@ -170,10 +170,14 @@ registry rework.
 Open for v4:
 
 - Ignore statuses recorded before the child was spawned. Otherwise, with PID
-  reuse within 60 s, a stale orphan status could be returned.
+  reuse within 60 s, a stale orphan status could be returned. **Done**
+  (`reaper::wait_child(child, spawned_at)`).
 - The registry rework is now only needed for signals: between the reaper
   collecting a child and the actor processing it, tokio still considers the
-  PID valid, so `kill` could hit a reused PID.
+  PID valid, so `kill` could hit a reused PID. **After v4.0** (decided
+  2026-11-09: the risk needs a full round of PIDs within milliseconds, the
+  rework touches how every service and exec probe waits). Documented as a
+  known limitation in `docs/operator-guide/container-setup.md`.
 
 ### S4 Harden the control socket
 

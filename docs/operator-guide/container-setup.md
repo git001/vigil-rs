@@ -11,6 +11,32 @@ If you run vigild as a non-PID-1 process and still want zombie reaping, pass
 `--reaper` or set `VIGIL_REAPER=true`. vigild will then register itself as a
 subreaper via `prctl(PR_SET_CHILD_SUBREAPER)`.
 
+### Known limitation: a signal in the moment a service exits
+
+With the reaper on (PID 1 or `--reaper`), the reaper can collect a
+service's process before the service's own bookkeeping has seen the exit.
+For that short time, typically milliseconds, vigild still holds the old
+PID. A signal it sends in exactly that moment (a stop, the `SIGKILL` after
+`kill-delay`, a forwarded `SIGHUP`/`SIGUSR1`/`SIGUSR2`, `POST /v1/signals`,
+the `SIGKILL` of an exec check that timed out) goes to that PID and its
+process group. If the kernel has already given the PID to a new process,
+the signal reaches that process instead.
+
+How likely this is: the kernel hands out PIDs in sequence and takes a PID
+again only after the counter has gone round once (`pid_max`: 32768 or
+1024 per CPU by the kernel's default, 4194304 where systemd sets it, as on
+most 64-bit distributions; see `/proc/sys/kernel/pid_max`), and never
+while it is still the process group of a living process. So
+a hit needs a whole round of PIDs within those milliseconds, and the old
+group must be empty. Unlikely, but possible: a known gap.
+
+It goes away when the reaper is the only one that waits for processes and
+hands each service its exit (planned after v4.0). Until then, where it
+matters: without the reaper (vigild not PID 1 and no `--reaper`, e.g.
+with `tini` as PID 1) each service is waited for only by the task that
+also sends its signals, and the gap does not exist; orphaned grandchildren
+are then collected by PID 1, not by vigild.
+
 ## Minimal Dockerfile
 
 ```dockerfile
@@ -170,6 +196,10 @@ process groups:
 | `SIGTERM` | Graceful shutdown: stop all services, then exit (with `--shutdown-delay`, after reporting not ready for that long) |
 | `SIGINT` | Graceful shutdown, as `SIGTERM` |
 | `SIGQUIT` | Graceful shutdown, as `SIGTERM` |
+
+With the reaper on, a signal sent in the moment a service exits can, in
+rare cases, reach a process that got the service's PID again; see
+[Known limitation](#known-limitation-a-signal-in-the-moment-a-service-exits).
 
 Example — trigger a config reload in all nginx instances:
 
