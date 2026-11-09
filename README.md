@@ -6,6 +6,11 @@ restarting, and health-checking them — and exposes a REST API over a Unix
 socket (and optionally HTTPS) for programmatic control. It runs unprivileged,
 e.g. on OpenShift with a random UID.
 
+> [!IMPORTANT]
+> Upgrading from v3? v4 changes defaults (environment, access over TLS,
+> shutdown) and reads layer files strictly. See the
+> [migration guide](docs/user-guide/migration-v3-to-v4.md).
+
 ---
 
 ## Features

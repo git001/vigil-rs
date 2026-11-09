@@ -12,6 +12,7 @@ vigil-rs is a service supervisor and container init daemon written in Rust.
 | [Configuration](user-guide/configuration.md) | Full YAML layer reference |
 | [CLI Reference](user-guide/cli-reference.md) | `vigil` command-line client and `vigil-log-relay` |
 | [Logging](user-guide/logging.md) | Service output, log API, push to collectors, `vigil-log-relay` |
+| [Migrating from v3 to v4](user-guide/migration-v3-to-v4.md) | What changed in v4 and what to do, by topic |
 
 ### Operator Guide
 
